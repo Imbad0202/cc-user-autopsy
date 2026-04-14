@@ -1,6 +1,6 @@
 ---
 name: cc-user-autopsy
-description: Produces a deep, honest peer-review of how someone uses Claude Code by statistically analyzing their local session data (~/.claude/usage-data/ and ~/.claude/projects/). Trigger whenever the user asks to review, analyze, audit, or critique their own Claude Code usage, workflow, habits, or skill level — including phrases like "analyze my cc usage", "review my cc sessions", "peer review my cc workflow", "deeper than /insights", or any ask for an honest audit of their AI workflow. ALSO trigger when the user wants a portfolio/hiring-manager version for AI-job applications (e.g. "portfolio for Anthropic/OpenAI/xAI") — in that case pass --audience hr. Produces an HTML report with 14 charts, 8 rule-based scores, a Claude-written peer review, an at-a-glance profile card, and a "Shipped with Claude" section. Use even if the user doesn't say "autopsy" — any framing about understanding or presenting their own Claude Code behavior qualifies.
+description: Produces a deep, honest peer-review of how someone uses Claude Code by statistically analyzing their local session data (~/.claude/usage-data/ and ~/.claude/projects/). Trigger whenever the user asks to review, analyze, audit, or critique their own Claude Code usage, workflow, habits, or skill level — including phrases like "analyze my cc usage", "review my cc sessions", "peer review my cc workflow", "deeper than /insights", or any ask for an honest audit of their AI workflow. Also covers portfolio/hiring-manager framings (e.g. "portfolio for Anthropic/OpenAI/xAI"), but ALWAYS ask the user in Step 0 which version to build (self / hr / both) before running — never silently produce an HR report, because that version goes to outsiders and needs explicit privacy setup. Produces an HTML report with 14 charts, 8 rule-based scores, a Claude-written peer review, an at-a-glance profile card, and a "Shipped with Claude" section.
 ---
 
 # Claude Code User Autopsy
@@ -28,6 +28,8 @@ A self-contained HTML report at `~/.claude/usage-data/cc-user-autopsy.html` cont
 ## Workflow overview
 
 ```
+Step 0 → ASK the user which version to build (self / hr / both). For HR,
+         collect profile + privacy allowlist BEFORE running anything.
 Step 1 → run scripts/aggregate.py        (reads session-meta + facets, outputs analysis-data.json)
 Step 2 → run scripts/sample_sessions.py  (picks 15-24 representative sessions, reads raw .jsonl)
 Step 3 → you (Claude) read analysis-data.json and write a personalized peer-review block
@@ -36,6 +38,42 @@ Step 5 → open the HTML in browser and tell the user
 ```
 
 Each script is idempotent. If a step fails, re-run it.
+
+## Step 0 — Ask first, build second
+
+Before running anything, **ask the user which version they want**. Never guess from keywords.
+
+> "I can build two versions of this report:
+>   **A. Self audit** — honest diagnostic letter for your eyes only. Shows every project name, session ID, and friction detail.
+>   **B. HR / portfolio** — public-facing summary for recruiters. Hides private projects, redacts session IDs, and leads with a profile card.
+>   **C. Both.**
+> Which one(s)?"
+
+Running `/cc-user-autopsy` without an explicit request is a **self** audit by default. Never silently produce an HR version — that version will be shown to outsiders and the user may not want certain projects visible.
+
+### If the user picks B or C, collect BEFORE Step 1:
+
+1. **Profile** — name, role, location, tagline, contact (email / github / website), extra links. Check memory first so you don't re-ask things already known. Confirm each field before writing `~/.claude/cc-autopsy-profile.json`.
+
+2. **Public-repo allowlist** — ask explicitly:
+   > "The HR report will show project names in charts and shipped-work highlights. Which repos are you comfortable listing by name? Everything else will be anonymised to a generic category label so private/client work doesn't leak."
+   You can offer to check `gh repo list <user> --visibility public --json name,isFork` as a starting point, then confirm with the user which of those they actually want in the report (public ≠ auto-include). Save the final list to `~/.claude/cc-autopsy-public-projects.json`:
+   ```json
+   {
+     "public_projects": ["repo-name-1", "repo-name-2"],
+     "category_overrides": {
+       "internal-repo-a": "Higher-ed QA platform",
+       "client-work-b": "Consumer iOS app"
+     }
+   }
+   ```
+   Default-deny: anything not in `public_projects` is redacted. `category_overrides` gives a human-readable label for redacted projects (optional; falls back to "Private project").
+
+3. **Optional public artifacts** — live URLs the user *wants* to surface (personal site, published skills, open-source work). Save to `~/.claude/cc-autopsy-artifacts.json`.
+
+The HR build MUST run with `--public-projects ~/.claude/cc-autopsy-public-projects.json` whenever that file exists. Without it, HR mode anonymises **every** project — safe default, but the report is thinner.
+
+Self version does not need any of this; it shows raw data to the user themselves.
 
 ## Step 1 — Aggregate quantitative data
 
@@ -114,6 +152,25 @@ Read `/tmp/cc-autopsy/analysis-data.json` and `/tmp/cc-autopsy/samples.json`. Th
 
 Length target: 400-700 words total. Shorter is better if the data is thin.
 
+### HR version needs its own peer-review file
+
+If you're building the HR report, write a **separate** peer review to
+`/tmp/cc-autopsy/peer-review-hr.md`. It should:
+
+- Not cite raw `sid` values or 8-char session IDs (they let a reader reverse-index private transcripts).
+- Not name non-allowlisted projects. Use the category labels from the
+  `--public-projects` file (e.g. "the higher-ed QA platform") or speak in
+  aggregates ("the top project", "cross-project").
+- Drop references to specific clients, domain-sensitive content, or internal
+  stakeholders. The peer review is meant to characterise *how* the user works,
+  not *what* they work on.
+- Keep all the quantitative claims that don't tie to project names (token/commit
+  ratios, hour-of-day friction, tool adoption, interrupt recovery rate).
+
+Then pass the HR-safe version via `--peer-review /tmp/cc-autopsy/peer-review-hr.md`
+when calling `build_html.py --audience hr`. The self audit can still use the
+original `peer-review.md` with full citations.
+
 ## Step 4 — Build the HTML
 
 ### Default (self audit)
@@ -131,8 +188,21 @@ python3 scripts/build_html.py \
 If the user is producing this report to share with AI-company recruiters, add
 `--audience hr`. This re-orders sections to lead with a profile card (at-a-glance
 scale / velocity / parallel-work / tool breadth / self-audit score / focus area),
-then a "Shipped with Claude" section extracted from their fully-achieved essential
-sessions, then optionally a list of public artifacts they want to link.
+then a "Shipped with Claude" section grouped by broad category (not raw repo name
+unless the user allowlisted it), then optionally a list of public artifacts
+they want to link.
+
+**Privacy model in HR mode:**
+
+- Project names are redacted by default. Only those listed in
+  `--public-projects <file>` appear verbatim. Everything else becomes its
+  `category_overrides` label (or `"Private project"` if no override).
+- Session IDs (`sid`) are not shown. The evidence library is hidden in HR mode;
+  it belongs in a self audit, not a public artefact.
+- Per-session LLM-written summaries are replaced with category-level roll-ups in
+  the shipped section. Only allowlisted projects get their verbatim summary.
+- Friction detail, first-prompt text, and facet crosstabs tied to specific
+  projects are aggregated to category buckets.
 
 ```bash
 python3 scripts/build_html.py \
@@ -140,15 +210,28 @@ python3 scripts/build_html.py \
   --samples /tmp/cc-autopsy/samples.json \
   --peer-review /tmp/cc-autopsy/peer-review.md \
   --audience hr \
+  --public-projects ~/.claude/cc-autopsy-public-projects.json \
   --artifacts ~/.claude/cc-autopsy-artifacts.json \
+  --profile ~/.claude/cc-autopsy-profile.json \
   --output ~/.claude/usage-data/cc-user-autopsy-hr.html
 ```
 
-The `--artifacts` flag is optional. Format:
+`--public-projects` file format:
+```json
+{
+  "public_projects": ["my-open-source-lib", "published-skill-xyz"],
+  "category_overrides": {
+    "internal-platform-repo": "Enterprise B2B platform",
+    "client-mobile-app": "Consumer mobile app",
+    "research-prototype-a": "ML research prototype"
+  }
+}
+```
+
+`--artifacts` file format (optional):
 ```json
 [
-  {"name": "Project name", "url": "https://...", "description": "One line."},
-  ...
+  {"name": "Project name", "url": "https://...", "description": "One line."}
 ]
 ```
 
@@ -192,7 +275,10 @@ Pass it to `build_html.py --profile ~/.claude/cc-autopsy-profile.json`.
 
 If the user mentions any of: "portfolio", "job application", "hiring", "HR",
 "recruiter", "show to employer", "AI company", "applying to Anthropic/OpenAI/xAI",
-build BOTH versions and mention the HR one first. Otherwise default to `self`.
+offer the HR option in Step 0 and note that it needs privacy setup. Still ask
+before building — don't silently produce an HR version. If the user confirms
+they want HR, walk through the profile + public-repo allowlist collection
+before running any script.
 
 ### What it does
 
