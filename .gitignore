@@ -17,11 +17,21 @@ venv/
 analysis-data.json
 samples.json
 peer-review.md
+peer-review-hr.md
 cc-user-autopsy.html
+cc-user-autopsy-hr.html
 *.skill
 
-# But DO commit the canned example report (synthetic data)
+# User-specific HR-mode setup (profile, allowlist, artifacts). These live in
+# ~/.claude/ and should never be in this repo — listed here in case someone
+# copies them in by accident.
+cc-autopsy-profile.json
+cc-autopsy-public-projects.json
+cc-autopsy-artifacts.json
+
+# But DO commit the canned example reports (synthetic data)
 !assets/example-output.html
+!assets/example-output-hr.html
 
 # Skill eval workspace (transient)
 cc-user-autopsy-workspace/

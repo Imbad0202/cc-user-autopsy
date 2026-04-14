@@ -100,18 +100,12 @@ If you're producing the report to share with AI-company recruiters, ask:
 
 > "Autopsy my Claude Code usage for a portfolio — I'm applying to AI jobs"
 
-The skill will build both the self-audit and the HR variant. You can supply a
-JSON file of links you want to surface:
+The skill will ask you whether to build the self-audit, the HR variant, or
+both. It will never silently build an HR report — that version goes to
+outsiders and needs explicit privacy setup. Once you confirm HR, the skill
+walks you through three small setup files.
 
-```json
-// ~/.claude/cc-autopsy-artifacts.json
-[
-  {"name": "My AI writing tool", "url": "https://github.com/me/tool", "description": "MIT-licensed skill I published"},
-  {"name": "Personal blog", "url": "https://...", "description": "Technical writing about AI-native workflows"}
-]
-```
-
-And an identity profile so the report isn't anonymous:
+You supply an identity profile so the report isn't anonymous:
 
 ```json
 // ~/.claude/cc-autopsy-profile.json
@@ -128,6 +122,53 @@ And an identity profile so the report isn't anonymous:
   "links": [{"label": "writing", "url": "https://..."}]
 }
 ```
+
+And a public-repo allowlist so private project names don't leak:
+
+```json
+// ~/.claude/cc-autopsy-public-projects.json
+{
+  "public_projects": ["my-open-source-lib", "published-skill-xyz"],
+  "category_overrides": {
+    "internal-platform-repo": "Enterprise B2B platform",
+    "client-mobile-app": "Consumer mobile app"
+  }
+}
+```
+
+Optionally a list of live URLs you want to surface:
+
+```json
+// ~/.claude/cc-autopsy-artifacts.json
+[
+  {"name": "My AI writing tool", "url": "https://github.com/me/tool", "description": "MIT-licensed skill I published"},
+  {"name": "Personal blog", "url": "https://...", "description": "Technical writing about AI-native workflows"}
+]
+```
+
+### Privacy model for HR mode
+
+Default behaviour is redact-first: if a project isn't in your public allowlist,
+it's not shown by name. Specifically:
+
+| Field | Self audit | HR without allowlist | HR with allowlist |
+|---|---|---|---|
+| Project names in charts | Verbatim | All anonymised | Allowlisted verbatim; rest bucketed into category labels |
+| "Shipped with Claude" project name | Verbatim | Anonymised | Allowlisted verbatim; rest shown as category |
+| "Shipped with Claude" LLM summary | Verbatim | Replaced with "Details withheld — private project" | Shown only for allowlisted projects |
+| Evidence library (24 session cards, `sid` + first prompt + friction) | Shown | **Hidden entirely** | **Hidden entirely** |
+| Session IDs / `sid` prefixes | Shown | Hidden | Hidden |
+| Peer review text | Whatever you wrote | Whatever you wrote — see note below | Whatever you wrote |
+
+All three HR setup files live in `~/.claude/`, not in this repo. Nothing
+user-specific gets committed to your own fork.
+
+The peer-review markdown is the one place the skill can't redact automatically
+(Claude writes free text into it). The skill instructs Claude to produce a
+separate `peer-review-hr.md` for HR builds that strips `sid` citations and
+project names, using category labels from your allowlist. If you're handing a
+report to a recruiter, open the HTML and read the peer-review section before
+sending to make sure nothing you care about is in there.
 
 ## How it differs from `/insights`
 

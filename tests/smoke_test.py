@@ -97,26 +97,32 @@ def main() -> None:
     )
 
     output_path = DEMO_ROOT / "smoke.html"
-    run(
-        sys.executable,
-        str(SCRIPTS_DIR / "build_html.py"),
-        "--input",
-        str(analysis_path),
-        "--samples",
-        str(samples_path),
-        "--peer-review",
-        str(peer_review_path),
-        "--audience",
-        "hr",
-        "--profile",
-        str(profile_path),
-        "--artifacts",
-        str(artifacts_path),
-        "--output",
-        str(output_path),
-    )
+    def run_build(audience, output, extra=()):
+        run(
+            sys.executable,
+            str(SCRIPTS_DIR / "build_html.py"),
+            "--input",
+            str(analysis_path),
+            "--samples",
+            str(samples_path),
+            "--peer-review",
+            str(peer_review_path),
+            "--audience",
+            audience,
+            "--profile",
+            str(profile_path),
+            "--artifacts",
+            str(artifacts_path),
+            "--output",
+            str(output),
+            *extra,
+        )
 
-    html = output_path.read_text()
+    # Self audit shows verbatim project labels so XSS escaping is exercised
+    # end-to-end on the hostile payloads injected above.
+    self_output = DEMO_ROOT / "smoke-self.html"
+    run_build("self", self_output)
+    html = self_output.read_text()
     assert "fonts.googleapis.com" not in html
     assert "cdn.jsdelivr.net" not in html
     assert "javascript:alert" not in html
@@ -124,7 +130,17 @@ def main() -> None:
     assert "\\u003cimg src=x onerror=alert(" in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
     assert '&lt;img src=x onerror=alert(&quot;name&quot;)&gt;' in html
-    assert 'href="#"' in html
+
+    # HR build without an allowlist must redact hostile project labels to
+    # the generic placeholder — verify the raw payload doesn't reach HTML,
+    # while artifact sanitisation (javascript: URLs → #) still runs.
+    run_build("hr", output_path)
+    hr_html = output_path.read_text()
+    assert "<img src=x onerror=alert(1)>" not in hr_html
+    assert "\\u003cimg src=x onerror=alert(1)" not in hr_html
+    assert "Private project" in hr_html
+    assert "javascript:alert" not in hr_html
+    assert 'href="#"' in hr_html
 
     node = shutil.which("node")
     if node:

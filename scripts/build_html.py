@@ -13,6 +13,45 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+REDACTED_LABEL = "Private project"
+
+
+def load_json_or_warn(path_arg, label, default):
+    """Load a JSON file if the path resolves. Warn on parse error, return default."""
+    if not path_arg:
+        return default
+    p = Path(path_arg).expanduser()
+    if not p.exists():
+        return default
+    try:
+        return json.loads(p.read_text())
+    except Exception as e:
+        print(f"warn: failed to parse {label} file: {e}", file=sys.stderr)
+        return default
+
+
+def _matches_allowlist(name, public_set):
+    """Match on full label or any path-suffix segment — allowlist entries
+    can be short repo names (`tw-formal-writing`) and still match a
+    two-segment label (`Claude Code Project/tw-formal-writing`)."""
+    if name in public_set:
+        return True
+    tail = name.rsplit("/", 1)[-1]
+    return tail in public_set
+
+
+def _category_for(name, category_map):
+    if name in category_map:
+        return category_map[name]
+    tail = name.rsplit("/", 1)[-1]
+    return category_map.get(tail, REDACTED_LABEL)
+
+
+def display_project(name, redact, public_set, category_map):
+    """Label for a project under the current audience's privacy rules."""
+    if not redact or _matches_allowlist(name, public_set):
+        return name.rsplit("/", 1)[-1] if redact else name
+    return _category_for(name, category_map)
 
 SAFE_URL_SCHEMES = {"http", "https"}
 SAFE_URL_SCHEMES_WITH_MAILTO = SAFE_URL_SCHEMES | {"mailto"}
@@ -1581,6 +1620,12 @@ def main():
     ap.add_argument("--artifacts", default=None,
                     help="Optional JSON file: list of public artifacts. Each entry "
                     "{name, url, description}. Appears in HR layout only.")
+    ap.add_argument("--public-projects", default=None,
+                    help="HR mode only. JSON file with allowlist of project names "
+                    "to show verbatim, plus optional category overrides for "
+                    "redacted projects. Schema: "
+                    "{public_projects: [name,...], category_overrides: {name: label}}. "
+                    "Without this flag, ALL projects are anonymised in HR mode.")
     ap.add_argument("--profile", default=None,
                     help="Optional JSON file with identity info to put in the header. "
                     "Schema: {name, role, location, tagline, contact: {email, github, "
@@ -1597,23 +1642,14 @@ def main():
             pr_md = p.read_text()
     pr_html = md_to_html(pr_md)
 
-    artifacts_list = []
-    if args.artifacts:
-        p = Path(args.artifacts).expanduser()
-        if p.exists():
-            try:
-                artifacts_list = json.loads(p.read_text())
-            except Exception as e:
-                print(f"warn: failed to parse artifacts file: {e}", file=sys.stderr)
-
-    profile_info = {}
-    if args.profile:
-        p = Path(args.profile).expanduser()
-        if p.exists():
-            try:
-                profile_info = json.loads(p.read_text())
-            except Exception as e:
-                print(f"warn: failed to parse profile file: {e}", file=sys.stderr)
+    artifacts_list = load_json_or_warn(args.artifacts, "artifacts", [])
+    profile_info = load_json_or_warn(args.profile, "profile", {})
+    allowlist = load_json_or_warn(args.public_projects, "public-projects", {})
+    public_set = set(allowlist.get("public_projects", []))
+    category_map = allowlist.get("category_overrides", {}) or {}
+    redact = (args.audience == "hr")
+    label_project = lambda name: display_project(name, redact, public_set, category_map)
+    is_public = lambda name: (not redact) or _matches_allowlist(name, public_set)
 
     meta = data["meta"]
     agg = data["aggregates"]
@@ -1639,7 +1675,17 @@ def main():
 
     fric_top = list(agg["friction"]["totals"].items())[:12]
     tool_top = list(agg["tools"]["totals"].items())[:15]
-    proj_items = list(agg["projects"].items())[:12]
+
+    if redact:
+        bucketed = {}
+        for key, v in agg["projects"].items():
+            display = label_project(v.get("label", key))
+            b = bucketed.setdefault(display, {"sessions": 0, "friction": 0, "label": display})
+            b["sessions"] += v.get("sessions", 0)
+            b["friction"] += v.get("friction", 0)
+        proj_items = sorted(bucketed.items(), key=lambda kv: -kv[1]["sessions"])[:12]
+    else:
+        proj_items = list(agg["projects"].items())[:12]
 
     plen_buckets = ["<20", "20-50", "50-100", "100-300", ">=300"]
     plen_good_pct = []
@@ -1705,22 +1751,31 @@ def main():
     for sid, info in samples.items():
         by_tag.setdefault(info["tag"], []).append({"sid": sid, **info})
     evidence_html = ""
-    for tag, label in tag_labels.items():
-        sess_list = by_tag.get(tag, [])
-        if not sess_list:
-            continue
-        evidence_html += f'<div class="evidence-header">{label}</div>\n'
-        for s in sess_list:
-            m = s.get("meta", {})
-            fp = (m.get("first_prompt", "") or "")[:300]
-            fric = json.dumps(m.get("friction_counts") or {}, ensure_ascii=False)
-            summary = m.get("brief_summary", "") or "(no summary)"
-            frictxt = m.get("friction_detail", "") or "(none)"
-            proj = m.get('project', '?')
-            outcome = m.get('outcome', '') or '(no facet)'
-            tok_str = fmt(m.get('total_tokens', 0))
-            dur = m.get('duration_min', 0)
-            evidence_html += f'''<details class="evidence">
+    if args.audience == "hr":
+        # Evidence library leaks sid + project + first-prompt + friction detail.
+        # Not appropriate for a public-facing report. Hidden entirely in HR mode.
+        evidence_html = (
+            '<p class="method">Evidence library with per-session citations is '
+            'available in the self-audit version of this report. It is hidden '
+            'here to protect private project details.</p>'
+        )
+    else:
+        for tag, label in tag_labels.items():
+            sess_list = by_tag.get(tag, [])
+            if not sess_list:
+                continue
+            evidence_html += f'<div class="evidence-header">{label}</div>\n'
+            for s in sess_list:
+                m = s.get("meta", {})
+                fp = (m.get("first_prompt", "") or "")[:300]
+                fric = json.dumps(m.get("friction_counts") or {}, ensure_ascii=False)
+                summary = m.get("brief_summary", "") or "(no summary)"
+                frictxt = m.get("friction_detail", "") or "(none)"
+                proj = m.get('project', '?')
+                outcome = m.get('outcome', '') or '(no facet)'
+                tok_str = fmt(m.get('total_tokens', 0))
+                dur = m.get('duration_min', 0)
+                evidence_html += f'''<details class="evidence">
   <summary>
     <span class="tag {tag}">{esc(tag.replace('_', ' '))}</span>
     <span><span class="sid">{esc(s["sid"][:8])}</span> · <span class="proj">{esc(proj)}</span> · {esc(outcome)}</span>
@@ -1885,26 +1940,48 @@ def main():
   </div>
 </div>'''
 
-        # Shipped artifacts section
+        # Shipped artifacts section — redact non-public projects
         if shipped:
             shipped_items = ""
             for item in shipped[:6]:
+                raw_proj = item["project"]
                 dur_hr = item["project_duration_min"] / 60
+                if is_public(raw_proj):
+                    proj_display = raw_proj
+                    summary_display = item["summary"]
+                else:
+                    proj_display = label_project(raw_proj)
+                    summary_display = (
+                        f"Outcome: fully achieved across {item['project_sessions']} "
+                        f"sessions. Details withheld — {REDACTED_LABEL.lower()}."
+                    )
                 shipped_items += f'''<div class="shipped-item">
   <div>
-    <div class="proj">{esc(item["project"])}</div>
+    <div class="proj">{esc(proj_display)}</div>
     <div class="proj-sub">{item["project_sessions"]} sessions · {dur_hr:.0f}h</div>
   </div>
-  <div class="desc">{esc(item["summary"])}</div>
+  <div class="desc">{esc(summary_display)}</div>
   <div class="stats">
     {item["project_commits"]} commits<br>
     {fmt(item["total_tokens"])} tok / top session
   </div>
 </div>'''
+            privacy_note = ""
+            if public_set:
+                privacy_note = (
+                    ' Allowlisted public projects appear by name; everything else is '
+                    'shown as a generic category label.'
+                )
+            else:
+                privacy_note = (
+                    ' All project names are anonymised — no public-projects allowlist '
+                    'was supplied. Pass <code>--public-projects</code> to show specific '
+                    'repos by name.'
+                )
             shipped_section = f'''<section id="shipped">
   <h2 class="sec" data-num="§ HR-02">Shipped with Claude</h2>
   <h2 class="sec-title">Representative outcomes — fully achieved, essential-tier sessions, grouped by project.</h2>
-  <p class="method">Extracted from session facets where <code>outcome = fully_achieved</code> and <code>helpfulness ∈ (essential, very_helpful)</code>. One representative per project, ranked by total time invested.</p>
+  <p class="method">Extracted from session facets where <code>outcome = fully_achieved</code> and <code>helpfulness ∈ (essential, very_helpful)</code>. One representative per project, ranked by total time invested.{privacy_note}</p>
   <div class="shipped-list">{shipped_items}</div>
 </section>'''
         else:
