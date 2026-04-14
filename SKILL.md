@@ -197,9 +197,9 @@ build BOTH versions and mention the HR one first. Otherwise default to `self`.
 ### What it does
 
 - Loads inputs
-- Renders HTML with Chart.js CDN (14 charts including growth curve)
+- Renders HTML with built-in canvas charts (14 charts including growth curve)
 - Injects peer-review markdown into `<div id="peer-review">`
-- Writes standalone HTML
+- Writes standalone HTML with no remote fonts or CDN scripts
 
 If `--peer-review` is omitted or the file is empty, the HTML still builds — the
 peer review section shows "(no peer review written for this run)".
@@ -230,5 +230,5 @@ Read `references/scoring-rubric.md` for the exact threshold logic if you need to
 - `scripts/aggregate.py` — reads usage-data, writes analysis-data.json
 - `scripts/sample_sessions.py` — picks representative sessions, writes samples.json
 - `scripts/build_html.py` — renders final HTML
+- `tests/smoke_test.py` — end-to-end offline/sanitization smoke test
 - `references/scoring-rubric.md` — the 8 rule-based scoring rules
-- `assets/report-template.html` — the HTML shell (Chart.js included)

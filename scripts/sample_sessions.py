@@ -4,6 +4,8 @@ Reads analysis-data.json, picks up to 24 representative sessions,
 finds each session's transcript (.jsonl) under ~/.claude/projects/,
 writes a compact summary to samples.json.
 """
+from __future__ import annotations
+
 import argparse
 import json
 import sys
@@ -174,7 +176,7 @@ def pick_representatives(sessions, have_facets):
         ess_by_proj = defaultdict(list)
         for s in sessions:
             if s["outcome"] == "fully_achieved" and s["helpfulness"] == "essential":
-                ess_by_proj[s["project"]].append(s)
+                ess_by_proj[s.get("project_key") or s["project"]].append(s)
         for proj in list(ess_by_proj.keys())[:4]:
             best = max(ess_by_proj[proj], key=lambda x: x["total_tokens"])
             add("control_good", best)

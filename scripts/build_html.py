@@ -4,13 +4,18 @@ Editorial-clinical design: paper-tone background, Fraunces serif + JetBrains Mon
 diagnostic-note chrome. Not a dashboard — a typeset diagnostic letter.
 """
 import argparse
+import html
 import json
 import re
 import string
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+SAFE_URL_SCHEMES = {"http", "https"}
+SAFE_URL_SCHEMES_WITH_MAILTO = SAFE_URL_SCHEMES | {"mailto"}
 
 
 def fmt(n):
@@ -27,6 +32,38 @@ def fmt(n):
     if n == int(n):
         return str(int(n))
     return f"{n:.1f}"
+
+
+def esc(value) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def json_for_script(value) -> str:
+    return (
+        json.dumps(value, ensure_ascii=False)
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+    )
+
+
+def sanitize_url(url: str, *, allow_mailto: bool = False) -> str:
+    if not url:
+        return "#"
+    parsed = urlparse(url.strip())
+    allowed = SAFE_URL_SCHEMES_WITH_MAILTO if allow_mailto else SAFE_URL_SCHEMES
+    if parsed.scheme.lower() not in allowed:
+        return "#"
+    return parsed.geturl()
+
+
+def display_url(url: str) -> str:
+    cleaned = url.strip()
+    for prefix in ("https://", "http://", "mailto:"):
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):]
+            break
+    return cleaned.rstrip("/") or url
 
 
 def md_to_html(md: str) -> str:
@@ -51,7 +88,7 @@ def md_to_html(md: str) -> str:
                 out_lines.append(f"</{list_tag}>")
                 in_list = False
             level = len(m.group(1))
-            out_lines.append(f"<h{level+2}>{m.group(2)}</h{level+2}>")
+            out_lines.append(f"<h{level+2}>{inline_md(m.group(2))}</h{level+2}>")
             continue
 
         m = re.match(r"^(\d+)\.\s+(.*)$", line)
@@ -82,9 +119,10 @@ def md_to_html(md: str) -> str:
 
 
 def inline_md(text: str) -> str:
-    text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
-    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
-    return text
+    escaped = html.escape(text, quote=False)
+    escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
+    return escaped
 
 
 def score_band(sc):
@@ -107,11 +145,6 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Claude Code — User Autopsy</title>
 
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,700;1,9..144,400&family=JetBrains+Mono:wght@400;500;700&family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-
 <style>
   :root {
     --paper: #f4efe6;
@@ -126,9 +159,9 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     --forest: #2e5b3e;
     --oxblood: #6b1b1b;
     --plum: #63355c;
-    --serif: "Fraunces", "Iowan Old Style", "Apple Garamond", Georgia, serif;
-    --sans: "Inter Tight", "Söhne", -apple-system, BlinkMacSystemFont, Helvetica, sans-serif;
-    --mono: "JetBrains Mono", "SF Mono", Menlo, monospace;
+    --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+    --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   }
 
   * { box-sizing: border-box; }
@@ -739,6 +772,11 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   }
   .chart-box.tall { height: 420px; }
   .chart-box.short { height: 260px; }
+  .chart-box canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
   .chart-box::after {
     content: attr(data-fig);
     position: absolute;
@@ -1027,215 +1065,504 @@ $peer_review_html
 </main>
 
 <script>
-/* Chart.js — editorial palette, minimal chrome */
-const INK = '#1a1916', INK_SOFT = '#464239', MUTED = '#7a7363', RULE = '#c9bfa8';
-const ACCENT = '#a0431e', OCHRE = '#b28121', FOREST = '#2e5b3e', OXBLOOD = '#6b1b1b', PLUM = '#63355c';
+const INK = '#1a1916';
+const INK_SOFT = '#464239';
+const MUTED = '#7a7363';
+const RULE = '#c9bfa8';
+const PAPER = '#f4efe6';
+const PAPER_DEEP = '#ece5d5';
+const ACCENT = '#a0431e';
+const OCHRE = '#b28121';
+const FOREST = '#2e5b3e';
+const OXBLOOD = '#6b1b1b';
+const PLUM = '#63355c';
 const PAL = [ACCENT, FOREST, OCHRE, OXBLOOD, PLUM, '#516881', '#8a6f45', '#7a4f3e', '#4a6b5b', '#7b5f80', '#a06b45', '#5b6b7a'];
+const FONT_SANS = '12px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+const FONT_MONO = '11px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
+const FONT_MONO_SMALL = '10px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
+const renderers = [];
 
-Chart.defaults.font.family = '"Inter Tight", -apple-system, sans-serif';
-Chart.defaults.font.size = 11;
-Chart.defaults.color = INK_SOFT;
-Chart.defaults.borderColor = RULE;
-
-const commonOpts = {
-  responsive: true, maintainAspectRatio: false,
-  plugins: {
-    legend: {
-      labels: {
-        color: INK_SOFT,
-        font: { family: '"JetBrains Mono", monospace', size: 10 },
-        usePointStyle: true, boxWidth: 8, padding: 14
-      }
-    },
-    tooltip: {
-      backgroundColor: '#1a1916',
-      titleColor: '#f4efe6', bodyColor: '#f4efe6',
-      titleFont: { family: 'JetBrains Mono', size: 11 },
-      bodyFont: { family: 'Inter Tight', size: 12 },
-      padding: 10, cornerRadius: 0,
-      displayColors: false
-    },
-    title: {
-      display: true,
-      color: INK,
-      font: { family: '"Fraunces", serif', size: 13, weight: '500' },
-      padding: { top: 2, bottom: 14 },
-      align: 'start'
-    }
-  },
-  scales: {
-    x: { ticks: { color: MUTED, font: { family: 'JetBrains Mono', size: 10 } },
-         grid: { color: 'rgba(0,0,0,0.04)', drawBorder: false },
-         border: { color: RULE } },
-    y: { ticks: { color: MUTED, font: { family: 'JetBrains Mono', size: 10 } },
-         grid: { color: 'rgba(0,0,0,0.04)', drawBorder: false },
-         border: { color: RULE } }
-  }
-};
-
-/* ---- Overview charts ---- */
-new Chart(document.getElementById('outcomeChart'), {
-  type: 'doughnut',
-  data: {
-    labels: $outcome_labels,
-    datasets: [{ data: $outcome_values, backgroundColor: PAL, borderColor: '#f4efe6', borderWidth: 3 }]
-  },
-  options: { ...commonOpts,
-    plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Outcomes · rated sessions' } },
-    scales: {}, cutout: '62%' }
-});
-new Chart(document.getElementById('stypeChart'), {
-  type: 'doughnut',
-  data: {
-    labels: $stype_labels,
-    datasets: [{ data: $stype_values, backgroundColor: PAL, borderColor: '#f4efe6', borderWidth: 3 }]
-  },
-  options: { ...commonOpts,
-    plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Session types' } },
-    scales: {}, cutout: '62%' }
-});
-
-new Chart(document.getElementById('projChart'), {
-  type: 'bar',
-  data: {
-    labels: $proj_labels,
-    datasets: [
-      { label: 'Sessions', data: $proj_sessions, backgroundColor: INK_SOFT, borderWidth: 0, borderRadius: 0, barPercentage: 0.62, categoryPercentage: 0.9 },
-      { label: 'Friction', data: $proj_friction, backgroundColor: ACCENT, borderWidth: 0, borderRadius: 0, barPercentage: 0.62, categoryPercentage: 0.9 }
-    ]
-  },
-  options: { ...commonOpts, plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Top projects · sessions vs friction' } } }
-});
-
-/* ---- Prompt length ---- */
-new Chart(document.getElementById('plenChart'), {
-  type: 'bar',
-  data: {
-    labels: $plen_buckets,
-    datasets: [
-      { label: 'Good rate % (full+mostly)', data: $plen_good, backgroundColor: FOREST, borderRadius: 0 },
-      { label: 'Session count', data: $plen_n, backgroundColor: INK_SOFT, borderRadius: 0, yAxisID: 'y1' }
-    ]
-  },
-  options: { ...commonOpts,
-    plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Prompt length × outcome' } },
-    scales: {
-      x: commonOpts.scales.x,
-      y: { ...commonOpts.scales.y, position: 'left', title: { display: true, text: '%', color: MUTED, font: { family: 'JetBrains Mono', size: 10 } } },
-      y1: { position: 'right', grid: { display: false }, ticks: { color: MUTED, font: { family: 'JetBrains Mono', size: 10 } }, title: { display: true, text: 'n', color: MUTED, font: { family: 'JetBrains Mono', size: 10 } } }
-    }
-  }
-});
-
-/* ---- Friction ---- */
-new Chart(document.getElementById('fricChart'), {
-  type: 'bar',
-  data: { labels: $fric_labels, datasets: [{ label: 'count', data: $fric_counts, backgroundColor: OXBLOOD, borderRadius: 0 }] },
-  options: { ...commonOpts, indexAxis: 'y', plugins: { ...commonOpts.plugins, legend: { display: false }, title: { ...commonOpts.plugins.title, text: 'Top 12 friction types' } } }
-});
-
-/* ---- Tools ---- */
-new Chart(document.getElementById('toolChart'), {
-  type: 'bar',
-  data: { labels: $tool_labels, datasets: [{ label: 'calls', data: $tool_counts, backgroundColor: INK, borderRadius: 0 }] },
-  options: { ...commonOpts, indexAxis: 'y', plugins: { ...commonOpts.plugins, legend: { display: false }, title: { ...commonOpts.plugins.title, text: 'Top 15 tool calls' } } }
-});
-
-/* ---- Heatmap (scatter proxy) ---- */
-const heatGrid = $heat_grid;
-const heatMax = Math.max(1, ...heatGrid.flat());
-const heatLabels = $heat_labels;
-const heatData = [];
-for (let wd = 0; wd < 7; wd++) for (let hr = 0; hr < 24; hr++) {
-  heatData.push({ x: hr, y: 6 - wd, v: heatGrid[wd][hr] });
+function registerRenderer(fn) {
+  renderers.push(fn);
 }
-new Chart(document.getElementById('heatChart'), {
-  type: 'scatter',
-  data: { datasets: [{
-    data: heatData,
-    backgroundColor: (ctx) => {
-      const v = ctx.raw.v; if (v === 0) return 'rgba(201,191,168,0.25)';
-      const t = v / heatMax;
-      /* blend from paper-deep to accent */
-      const r = Math.round(236 + (160 - 236) * t);
-      const g = Math.round(229 + (67 - 229) * t);
-      const b = Math.round(213 + (30 - 213) * t);
-      return `rgb(${r},${g},${b})`;
-    },
-    pointRadius: 11, pointStyle: 'rectRounded', pointBorderWidth: 0
-  }] },
-  options: { ...commonOpts,
-    plugins: { ...commonOpts.plugins, legend: { display: false },
-      title: { ...commonOpts.plugins.title, text: 'Weekday × hour · session density' },
-      tooltip: { ...commonOpts.plugins.tooltip, callbacks: { label: (ctx) => `${heatLabels[6 - ctx.raw.y]} ${ctx.raw.x}:00 → ${ctx.raw.v} sessions`, title: () => '' } } },
-    scales: {
-      x: { min: -0.5, max: 23.5, ticks: { stepSize: 2, color: MUTED, font: { family: 'JetBrains Mono', size: 10 }, callback: (v) => v + ':00' }, grid: { color: 'rgba(0,0,0,0.04)', drawBorder: false }, border: { color: RULE } },
-      y: { min: -0.5, max: 6.5, ticks: { stepSize: 1, color: MUTED, font: { family: 'JetBrains Mono', size: 10 }, callback: (v) => heatLabels[6 - v] || '' }, grid: { color: 'rgba(0,0,0,0.04)', drawBorder: false }, border: { color: RULE } }
+
+function debounce(fn, wait) {
+  let timer = null;
+  return () => {
+    clearTimeout(timer);
+    timer = setTimeout(fn, wait);
+  };
+}
+
+function setupCanvas(id) {
+  const canvas = document.getElementById(id);
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(280, Math.round(rect.width || canvas.parentElement.clientWidth || 280));
+  const height = Math.max(200, Math.round(rect.height || canvas.parentElement.clientHeight || 200));
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(width * dpr);
+  canvas.height = Math.round(height * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  ctx.textBaseline = 'middle';
+  return { canvas, ctx, width, height };
+}
+
+function drawNoData(ctx, width, height, text = 'No data') {
+  ctx.fillStyle = MUTED;
+  ctx.font = FONT_MONO;
+  ctx.textAlign = 'center';
+  ctx.fillText(text, width / 2, height / 2);
+}
+
+function niceMax(value) {
+  if (!value || value <= 0) return 1;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
+  const normalized = value / magnitude;
+  if (normalized <= 1) return magnitude;
+  if (normalized <= 2) return 2 * magnitude;
+  if (normalized <= 5) return 5 * magnitude;
+  return 10 * magnitude;
+}
+
+function ticksFor(maxValue, count = 4) {
+  const safeMax = niceMax(maxValue);
+  const step = safeMax / count;
+  const ticks = [];
+  for (let i = 0; i <= count; i += 1) ticks.push(step * i);
+  return ticks;
+}
+
+function formatTick(value) {
+  if (value >= 1000000) return (value / 1000000).toFixed(1) + 'M';
+  if (value >= 1000) return (value / 1000).toFixed(1) + 'k';
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(1);
+}
+
+function labelStep(count) {
+  return Math.max(1, Math.ceil(count / 8));
+}
+
+function drawLegend(ctx, items, x, y, width) {
+  let cursorX = x;
+  let cursorY = y;
+  const box = 10;
+  const rowHeight = 18;
+  ctx.font = FONT_MONO_SMALL;
+  ctx.textAlign = 'left';
+  items.forEach((item) => {
+    const textWidth = ctx.measureText(item.label).width;
+    if (cursorX + box + 8 + textWidth > x + width) {
+      cursorX = x;
+      cursorY += rowHeight;
     }
+    ctx.fillStyle = item.color;
+    ctx.fillRect(cursorX, cursorY - box / 2, box, box);
+    ctx.fillStyle = MUTED;
+    ctx.fillText(item.label, cursorX + box + 6, cursorY);
+    cursorX += box + 12 + textWidth;
+  });
+  return cursorY + 8;
+}
+
+function drawPlotFrame(ctx, plot, ticks, formatter, rightTicks = null, rightFormatter = null) {
+  ctx.strokeStyle = RULE;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(plot.left, plot.top);
+  ctx.lineTo(plot.left, plot.top + plot.height);
+  ctx.lineTo(plot.left + plot.width, plot.top + plot.height);
+  ctx.stroke();
+
+  ctx.font = FONT_MONO_SMALL;
+  ctx.textAlign = 'right';
+  ctx.fillStyle = MUTED;
+  ticks.forEach((tick) => {
+    const y = plot.top + plot.height - (tick.value * plot.height);
+    ctx.strokeStyle = 'rgba(0,0,0,0.04)';
+    ctx.beginPath();
+    ctx.moveTo(plot.left, y);
+    ctx.lineTo(plot.left + plot.width, y);
+    ctx.stroke();
+    ctx.fillText(formatter(tick.raw), plot.left - 8, y);
+  });
+
+  if (rightTicks && rightFormatter) {
+    ctx.textAlign = 'left';
+    rightTicks.forEach((tick) => {
+      const y = plot.top + plot.height - (tick.value * plot.height);
+      ctx.fillText(rightFormatter(tick.raw), plot.left + plot.width + 8, y);
+    });
   }
-});
+}
 
-/* ---- Helpfulness ---- */
-new Chart(document.getElementById('helpChart'), {
-  type: 'bar',
-  data: { labels: $help_labels, datasets: [{ label: 'count', data: $help_values, backgroundColor: PAL, borderRadius: 0 }] },
-  options: { ...commonOpts, plugins: { ...commonOpts.plugins, legend: { display: false }, title: { ...commonOpts.plugins.title, text: "Claude's self-rated helpfulness" } } }
-});
+function drawXAxisLabels(ctx, labels, plot) {
+  const step = labelStep(labels.length);
+  const groupWidth = plot.width / Math.max(labels.length, 1);
+  ctx.save();
+  ctx.font = FONT_MONO_SMALL;
+  ctx.fillStyle = MUTED;
+  ctx.textAlign = 'right';
+  for (let i = 0; i < labels.length; i += 1) {
+    if (i % step !== 0 && i !== labels.length - 1) continue;
+    const x = plot.left + groupWidth * (i + 0.5);
+    const y = plot.top + plot.height + 14;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(-Math.PI / 4);
+    ctx.fillText(labels[i], 0, 0);
+    ctx.restore();
+  }
+  ctx.restore();
+}
 
-/* ---- Growth curve ---- */
-new Chart(document.getElementById('growthChart'), {
-  type: 'line',
-  data: { labels: $growth_labels, datasets: [
-    { label: 'Composite score', data: $growth_composite, borderColor: ACCENT, backgroundColor: 'rgba(160,67,30,0.12)', borderWidth: 2, tension: 0.25, fill: true, pointRadius: 3, pointBackgroundColor: ACCENT },
-    { label: 'Good-outcome rate', data: $growth_good, borderColor: FOREST, borderWidth: 1.5, tension: 0.25, pointRadius: 2, borderDash: [3, 3] },
-    { label: 'Task agent adoption', data: $growth_ta, borderColor: PLUM, borderWidth: 1.5, tension: 0.25, pointRadius: 2, borderDash: [3, 3] }
-  ] },
-  options: { ...commonOpts, plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Composite skill curve (0-100)' } },
-    scales: { x: commonOpts.scales.x, y: { ...commonOpts.scales.y, min: 0, max: 100 } } }
-});
+function drawDonutChart(id, labels, values, colors) {
+  registerRenderer(() => {
+    const setup = setupCanvas(id);
+    if (!setup) return;
+    const { ctx, width, height } = setup;
+    const total = values.reduce((sum, value) => sum + value, 0);
+    if (!total) {
+      drawNoData(ctx, width, height);
+      return;
+    }
+    const cx = Math.min(width * 0.36, width - 180);
+    const cy = height / 2;
+    const radius = Math.min(width * 0.18, height * 0.34);
+    const innerRadius = radius * 0.62;
+    let angle = -Math.PI / 2;
+    values.forEach((value, index) => {
+      const next = angle + (Math.PI * 2 * value) / total;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, angle, next);
+      ctx.arc(cx, cy, innerRadius, next, angle, true);
+      ctx.closePath();
+      ctx.fillStyle = colors[index % colors.length];
+      ctx.fill();
+      angle = next;
+    });
+    ctx.fillStyle = INK;
+    ctx.font = '600 22px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(String(total), cx, cy - 6);
+    ctx.fillStyle = MUTED;
+    ctx.font = FONT_MONO;
+    ctx.fillText('rated', cx, cy + 16);
 
-/* ---- Weekly series ---- */
-const wL = $wk_labels;
-new Chart(document.getElementById('wkSessions'), {
-  type: 'line',
-  data: { labels: wL, datasets: [
-    { label: 'Sessions', data: $wk_sessions, borderColor: INK, backgroundColor: 'rgba(26,25,22,0.08)', borderWidth: 1.5, tension: 0.2, fill: true, pointRadius: 2, pointBackgroundColor: INK },
-    { label: 'With Task agent', data: $wk_ta, borderColor: ACCENT, borderWidth: 1.5, tension: 0.2, pointRadius: 2, pointBackgroundColor: ACCENT, borderDash: [4, 3] }
-  ] },
-  options: { ...commonOpts, plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Weekly sessions · Task agent adoption' } } }
-});
-new Chart(document.getElementById('wkTokens'), {
-  type: 'line',
-  data: { labels: wL, datasets: [
-    { label: 'Tokens (M)', data: $wk_tokens_m, borderColor: OCHRE, backgroundColor: 'rgba(178,129,33,0.1)', borderWidth: 1.5, tension: 0.2, fill: true, pointRadius: 2, pointBackgroundColor: OCHRE, yAxisID: 'y' },
-    { label: 'Commits', data: $wk_commits, borderColor: FOREST, borderWidth: 1.5, tension: 0.2, pointRadius: 2, pointBackgroundColor: FOREST, yAxisID: 'y1' }
-  ] },
-  options: { ...commonOpts,
-    plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Weekly tokens × commits' } },
-    scales: { x: commonOpts.scales.x, y: { ...commonOpts.scales.y, position: 'left', title: { display: true, text: 'M tokens', color: MUTED, font: { family: 'JetBrains Mono', size: 10 } } },
-      y1: { position: 'right', grid: { display: false }, ticks: { color: MUTED, font: { family: 'JetBrains Mono', size: 10 } }, title: { display: true, text: 'commits', color: MUTED, font: { family: 'JetBrains Mono', size: 10 } } }
-    } }
-});
-new Chart(document.getElementById('wkGood'), {
-  type: 'line',
-  data: { labels: wL, datasets: [
-    { label: 'Good rate %', data: $wk_goodrate, borderColor: FOREST, backgroundColor: 'rgba(46,91,62,0.12)', borderWidth: 1.5, tension: 0.2, fill: true, pointRadius: 2, pointBackgroundColor: FOREST }
-  ] },
-  options: { ...commonOpts, plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Weekly good-outcome rate %' } },
-    scales: { x: commonOpts.scales.x, y: { ...commonOpts.scales.y, min: 0, max: 100 } } }
-});
-new Chart(document.getElementById('wkFric'), {
-  type: 'bar',
-  data: { labels: wL, datasets: [{ label: 'Friction count', data: $wk_friction, backgroundColor: OXBLOOD, borderRadius: 0 }] },
-  options: { ...commonOpts, plugins: { ...commonOpts.plugins, legend: { display: false }, title: { ...commonOpts.plugins.title, text: 'Weekly friction totals' } } }
-});
-new Chart(document.getElementById('wkPlen'), {
-  type: 'line',
-  data: { labels: wL, datasets: [
-    { label: 'Avg prompt length (chars)', data: $wk_plen, borderColor: PLUM, backgroundColor: 'rgba(99,53,92,0.1)', borderWidth: 1.5, tension: 0.2, fill: true, pointRadius: 2, pointBackgroundColor: PLUM }
-  ] },
-  options: { ...commonOpts, plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Weekly avg prompt length' } } }
-});
+    const legendX = Math.max(cx + radius + 32, width * 0.54);
+    let legendY = Math.max(32, cy - (labels.length * 18) / 2);
+    ctx.textAlign = 'left';
+    ctx.font = FONT_MONO_SMALL;
+    labels.forEach((label, index) => {
+      ctx.fillStyle = colors[index % colors.length];
+      ctx.fillRect(legendX, legendY - 5, 10, 10);
+      ctx.fillStyle = INK_SOFT;
+      ctx.fillText(`${label} (${values[index]})`, legendX + 16, legendY);
+      legendY += 18;
+    });
+  });
+}
+
+function drawGroupedBarChart(id, labels, datasets, colors, legendLabels) {
+  registerRenderer(() => {
+    const setup = setupCanvas(id);
+    if (!setup) return;
+    const { ctx, width, height } = setup;
+    const maxValue = Math.max(0, ...datasets.flat());
+    if (!maxValue) {
+      drawNoData(ctx, width, height);
+      return;
+    }
+    const legendBottom = drawLegend(
+      ctx,
+      legendLabels.map((label, index) => ({ label, color: colors[index % colors.length] })),
+      18,
+      18,
+      width - 36,
+    );
+    const plot = { left: 48, top: legendBottom + 8, width: width - 70, height: height - legendBottom - 72 };
+    const yMax = niceMax(maxValue);
+    const ticks = ticksFor(yMax).map((raw) => ({ raw, value: raw / yMax }));
+    drawPlotFrame(ctx, plot, ticks, formatTick);
+    const groupWidth = plot.width / Math.max(labels.length, 1);
+    const innerWidth = groupWidth * 0.72;
+    const barWidth = (innerWidth / datasets.length) * 0.82;
+    datasets.forEach((dataset, seriesIndex) => {
+      dataset.forEach((value, index) => {
+        const x = plot.left + groupWidth * index + (groupWidth - innerWidth) / 2 + seriesIndex * (innerWidth / datasets.length);
+        const heightValue = (value / yMax) * plot.height;
+        const y = plot.top + plot.height - heightValue;
+        ctx.fillStyle = colors[seriesIndex % colors.length];
+        ctx.fillRect(x, y, barWidth, heightValue);
+      });
+    });
+    drawXAxisLabels(ctx, labels, plot);
+  });
+}
+
+function drawHorizontalBarChart(id, labels, values, color) {
+  registerRenderer(() => {
+    const setup = setupCanvas(id);
+    if (!setup) return;
+    const { ctx, width, height } = setup;
+    const maxValue = Math.max(0, ...values);
+    if (!maxValue) {
+      drawNoData(ctx, width, height);
+      return;
+    }
+    const plot = { left: 170, top: 18, width: width - 196, height: height - 42 };
+    const xMax = niceMax(maxValue);
+    const ticks = ticksFor(xMax);
+    ctx.strokeStyle = RULE;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(plot.left, plot.top);
+    ctx.lineTo(plot.left, plot.top + plot.height);
+    ctx.lineTo(plot.left + plot.width, plot.top + plot.height);
+    ctx.stroke();
+    ctx.font = FONT_MONO_SMALL;
+    ctx.fillStyle = MUTED;
+    ctx.textAlign = 'center';
+    ticks.forEach((raw) => {
+      const x = plot.left + (raw / xMax) * plot.width;
+      ctx.strokeStyle = 'rgba(0,0,0,0.04)';
+      ctx.beginPath();
+      ctx.moveTo(x, plot.top);
+      ctx.lineTo(x, plot.top + plot.height);
+      ctx.stroke();
+      ctx.fillText(formatTick(raw), x, plot.top + plot.height + 12);
+    });
+    const barHeight = (plot.height / labels.length) * 0.62;
+    labels.forEach((label, index) => {
+      const y = plot.top + (plot.height / labels.length) * index + (plot.height / labels.length) / 2;
+      const widthValue = (values[index] / xMax) * plot.width;
+      ctx.fillStyle = color;
+      ctx.fillRect(plot.left, y - barHeight / 2, widthValue, barHeight);
+      ctx.fillStyle = INK_SOFT;
+      ctx.textAlign = 'right';
+      ctx.fillText(label, plot.left - 10, y);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = MUTED;
+      ctx.fillText(formatTick(values[index]), plot.left + widthValue + 6, y);
+    });
+  });
+}
+
+function drawLinePath(ctx, points, color, dashed = false, fill = false) {
+  if (!points.length) return;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.setLineDash(dashed ? [6, 4] : []);
+  if (fill) {
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].baseY);
+    points.forEach((point) => ctx.lineTo(point.x, point.y));
+    ctx.lineTo(points[points.length - 1].x, points[points.length - 1].baseY);
+    ctx.closePath();
+    ctx.fillStyle = color + '22';
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  points.forEach((point) => ctx.lineTo(point.x, point.y));
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = color;
+  points.forEach((point) => {
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+}
+
+function drawLineChart(id, labels, series, options = {}) {
+  registerRenderer(() => {
+    const setup = setupCanvas(id);
+    if (!setup) return;
+    const { ctx, width, height } = setup;
+    const maxValue = options.maxValue !== undefined ? options.maxValue : Math.max(0, ...series.flatMap((item) => item.data));
+    if (!maxValue) {
+      drawNoData(ctx, width, height);
+      return;
+    }
+    const legendBottom = drawLegend(ctx, series.map((item) => ({ label: item.label, color: item.color })), 18, 18, width - 36);
+    const plot = { left: 48, top: legendBottom + 8, width: width - 70, height: height - legendBottom - 72 };
+    const yMax = options.maxValue !== undefined ? options.maxValue : niceMax(maxValue);
+    const ticks = ticksFor(yMax).map((raw) => ({ raw, value: raw / yMax }));
+    drawPlotFrame(ctx, plot, ticks, options.formatter || formatTick);
+    const step = labels.length > 1 ? plot.width / (labels.length - 1) : 0;
+    series.forEach((item) => {
+      const points = item.data.map((value, index) => ({
+        x: plot.left + step * index,
+        y: plot.top + plot.height - (value / yMax) * plot.height,
+        baseY: plot.top + plot.height,
+      }));
+      drawLinePath(ctx, points, item.color, item.dashed, item.fill);
+    });
+    drawXAxisLabels(ctx, labels, plot);
+  });
+}
+
+function drawDualChart(id, labels, bars, line, options = {}) {
+  registerRenderer(() => {
+    const setup = setupCanvas(id);
+    if (!setup) return;
+    const { ctx, width, height } = setup;
+    const leftMax = options.leftMax !== undefined ? options.leftMax : niceMax(Math.max(0, ...line.data));
+    const rightMax = options.rightMax !== undefined ? options.rightMax : niceMax(Math.max(0, ...bars.data));
+    if (!leftMax && !rightMax) {
+      drawNoData(ctx, width, height);
+      return;
+    }
+    const legendBottom = drawLegend(
+      ctx,
+      [{ label: bars.label, color: bars.color }, { label: line.label, color: line.color }],
+      18,
+      18,
+      width - 36,
+    );
+    const plot = { left: 48, top: legendBottom + 8, width: width - 90, height: height - legendBottom - 72 };
+    const leftTicks = ticksFor(leftMax).map((raw) => ({ raw, value: raw / leftMax }));
+    const rightTicks = ticksFor(rightMax).map((raw) => ({ raw, value: raw / rightMax }));
+    drawPlotFrame(ctx, plot, leftTicks, options.leftFormatter || formatTick, rightTicks, options.rightFormatter || formatTick);
+    const groupWidth = plot.width / Math.max(labels.length, 1);
+    const barWidth = groupWidth * 0.42;
+    bars.data.forEach((value, index) => {
+      const x = plot.left + groupWidth * index + (groupWidth - barWidth) / 2;
+      const heightValue = (value / rightMax) * plot.height;
+      ctx.fillStyle = bars.color;
+      ctx.fillRect(x, plot.top + plot.height - heightValue, barWidth, heightValue);
+    });
+    const step = labels.length > 1 ? plot.width / (labels.length - 1) : 0;
+    const points = line.data.map((value, index) => ({
+      x: plot.left + step * index,
+      y: plot.top + plot.height - (value / leftMax) * plot.height,
+      baseY: plot.top + plot.height,
+    }));
+    drawLinePath(ctx, points, line.color, line.dashed, line.fill);
+    drawXAxisLabels(ctx, labels, plot);
+  });
+}
+
+function drawDualLineChart(id, labels, leftSeries, rightSeries, options = {}) {
+  registerRenderer(() => {
+    const setup = setupCanvas(id);
+    if (!setup) return;
+    const { ctx, width, height } = setup;
+    const leftMax = options.leftMax !== undefined ? options.leftMax : niceMax(Math.max(0, ...leftSeries.data));
+    const rightMax = options.rightMax !== undefined ? options.rightMax : niceMax(Math.max(0, ...rightSeries.data));
+    if (!leftMax && !rightMax) {
+      drawNoData(ctx, width, height);
+      return;
+    }
+    const legendBottom = drawLegend(
+      ctx,
+      [{ label: leftSeries.label, color: leftSeries.color }, { label: rightSeries.label, color: rightSeries.color }],
+      18,
+      18,
+      width - 36,
+    );
+    const plot = { left: 48, top: legendBottom + 8, width: width - 90, height: height - legendBottom - 72 };
+    const leftTicks = ticksFor(leftMax).map((raw) => ({ raw, value: raw / leftMax }));
+    const rightTicks = ticksFor(rightMax).map((raw) => ({ raw, value: raw / rightMax }));
+    drawPlotFrame(ctx, plot, leftTicks, options.leftFormatter || formatTick, rightTicks, options.rightFormatter || formatTick);
+    const step = labels.length > 1 ? plot.width / (labels.length - 1) : 0;
+    const leftPoints = leftSeries.data.map((value, index) => ({
+      x: plot.left + step * index,
+      y: plot.top + plot.height - (value / leftMax) * plot.height,
+      baseY: plot.top + plot.height,
+    }));
+    const rightPoints = rightSeries.data.map((value, index) => ({
+      x: plot.left + step * index,
+      y: plot.top + plot.height - (value / rightMax) * plot.height,
+      baseY: plot.top + plot.height,
+    }));
+    drawLinePath(ctx, leftPoints, leftSeries.color, leftSeries.dashed, leftSeries.fill);
+    drawLinePath(ctx, rightPoints, rightSeries.color, rightSeries.dashed, rightSeries.fill);
+    drawXAxisLabels(ctx, labels, plot);
+  });
+}
+
+function heatColor(value, maxValue) {
+  if (!value) return 'rgba(201,191,168,0.25)';
+  const ratio = value / maxValue;
+  const r = Math.round(236 + (160 - 236) * ratio);
+  const g = Math.round(229 + (67 - 229) * ratio);
+  const b = Math.round(213 + (30 - 213) * ratio);
+  return `rgb(${r},${g},${b})`;
+}
+
+function drawHeatmap(id, grid, rowLabels) {
+  registerRenderer(() => {
+    const setup = setupCanvas(id);
+    if (!setup) return;
+    const { ctx, width, height } = setup;
+    const maxValue = Math.max(0, ...grid.flat());
+    if (!maxValue) {
+      drawNoData(ctx, width, height);
+      return;
+    }
+    const plot = { left: 54, top: 18, width: width - 72, height: height - 48 };
+    const cols = 24;
+    const rows = rowLabels.length;
+    const cellWidth = plot.width / cols;
+    const cellHeight = plot.height / rows;
+    ctx.strokeStyle = RULE;
+    ctx.strokeRect(plot.left, plot.top, plot.width, plot.height);
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < cols; col += 1) {
+        ctx.fillStyle = heatColor(grid[row][col], maxValue);
+        ctx.fillRect(plot.left + col * cellWidth, plot.top + row * cellHeight, cellWidth - 1, cellHeight - 1);
+      }
+    }
+    ctx.font = FONT_MONO_SMALL;
+    ctx.fillStyle = MUTED;
+    ctx.textAlign = 'right';
+    rowLabels.forEach((label, index) => {
+      const y = plot.top + cellHeight * index + cellHeight / 2;
+      ctx.fillText(label, plot.left - 8, y);
+    });
+    ctx.textAlign = 'center';
+    for (let hour = 0; hour < cols; hour += 2) {
+      const x = plot.left + cellWidth * hour + cellWidth / 2;
+      ctx.fillText(`${hour}:00`, x, plot.top + plot.height + 12);
+    }
+  });
+}
+
+drawDonutChart('outcomeChart', $outcome_labels, $outcome_values, PAL);
+drawDonutChart('stypeChart', $stype_labels, $stype_values, PAL);
+drawGroupedBarChart('projChart', $proj_labels, [$proj_sessions, $proj_friction], [INK_SOFT, ACCENT], ['Sessions', 'Friction']);
+drawDualChart('plenChart', $plen_buckets, { label: 'Session count', data: $plen_n, color: INK_SOFT }, { label: 'Good rate %', data: $plen_good, color: FOREST, fill: false }, { leftMax: 100, leftFormatter: (value) => `${value}%` });
+drawHorizontalBarChart('fricChart', $fric_labels, $fric_counts, OXBLOOD);
+drawHorizontalBarChart('toolChart', $tool_labels, $tool_counts, INK);
+drawHeatmap('heatChart', $heat_grid, $heat_labels);
+drawGroupedBarChart('helpChart', $help_labels, [$help_values], PAL, ['Count']);
+drawLineChart('growthChart', $growth_labels, [
+  { label: 'Composite score', data: $growth_composite, color: ACCENT, fill: true },
+  { label: 'Good-outcome rate', data: $growth_good, color: FOREST, dashed: true },
+  { label: 'Task agent adoption', data: $growth_ta, color: PLUM, dashed: true },
+], { maxValue: 100, formatter: (value) => `${value}%` });
+drawLineChart('wkSessions', $wk_labels, [
+  { label: 'Sessions', data: $wk_sessions, color: INK, fill: true },
+  { label: 'With Task agent', data: $wk_ta, color: ACCENT, dashed: true },
+]);
+drawDualLineChart('wkTokens', $wk_labels, { label: 'Tokens (M)', data: $wk_tokens_m, color: OCHRE, fill: true }, { label: 'Commits', data: $wk_commits, color: FOREST }, { leftFormatter: (value) => value.toFixed(1), rightFormatter: formatTick });
+drawLineChart('wkGood', $wk_labels, [{ label: 'Good rate %', data: $wk_goodrate, color: FOREST, fill: true }], { maxValue: 100, formatter: (value) => `${value}%` });
+drawGroupedBarChart('wkFric', $wk_labels, [$wk_friction], [OXBLOOD], ['Friction']);
+drawLineChart('wkPlen', $wk_labels, [{ label: 'Avg prompt length', data: $wk_plen, color: PLUM, fill: true }]);
+
+function renderAll() {
+  renderers.forEach((fn) => fn());
+}
+
+window.addEventListener('load', renderAll);
+window.addEventListener('resize', debounce(renderAll, 120));
 </script>
 </body>
 </html>
@@ -1344,10 +1671,10 @@ def main():
         dim_label = f"{key.split('_', 1)[0]} · {key.split('_', 1)[1].replace('_', ' ')}"
         reason = s.get("explanation") or s.get("reason", "")
         score_rows += f'''<div class="score-row {band}">
-  <div class="dim">{dim_label}</div>
+  <div class="dim">{esc(dim_label)}</div>
   <div class="body">
-    <div class="h">{title}</div>
-    <p class="exp">{reason}</p>
+    <div class="h">{esc(title)}</div>
+    <p class="exp">{esc(reason)}</p>
   </div>
   <div class="score">{display}</div>
 </div>
@@ -1395,14 +1722,14 @@ def main():
             dur = m.get('duration_min', 0)
             evidence_html += f'''<details class="evidence">
   <summary>
-    <span class="tag {tag}">{tag.replace('_', ' ')}</span>
-    <span><span class="sid">{s["sid"][:8]}</span> · <span class="proj">{proj}</span> · {outcome}</span>
-    <span class="right">{tok_str} tok · {dur}m</span>
+    <span class="tag {tag}">{esc(tag.replace('_', ' '))}</span>
+    <span><span class="sid">{esc(s["sid"][:8])}</span> · <span class="proj">{esc(proj)}</span> · {esc(outcome)}</span>
+    <span class="right">{esc(tok_str)} tok · {esc(dur)}m</span>
   </summary>
-  <p><strong>Summary</strong> · {summary}</p>
-  <p><strong>Friction detail</strong> · {frictxt}</p>
-  <p><strong>First prompt</strong> · <code>{fp}</code></p>
-  <p><strong>Friction counts</strong> · <code>{fric}</code></p>
+  <p><strong>Summary</strong> · {esc(summary)}</p>
+  <p><strong>Friction detail</strong> · {esc(frictxt)}</p>
+  <p><strong>First prompt</strong> · <code>{esc(fp)}</code></p>
+  <p><strong>Friction counts</strong> · <code>{esc(fric)}</code></p>
 </details>
 '''
 
@@ -1425,32 +1752,32 @@ def main():
             # full letterhead
             contact_lines = []
             if contact.get("email"):
-                contact_lines.append(f'<a href="mailto:{contact["email"]}">{contact["email"]}</a>')
+                email = str(contact["email"]).strip()
+                contact_lines.append(f'<a rel="noopener noreferrer" href="{esc(sanitize_url(f"mailto:{email}", allow_mailto=True))}">{esc(email)}</a>')
             if contact.get("github"):
-                gh = contact["github"].lstrip("@")
-                contact_lines.append(f'<a href="https://github.com/{gh}">github.com/{gh}</a>')
+                gh = str(contact["github"]).strip().lstrip("@")
+                contact_lines.append(f'<a rel="noopener noreferrer" href="{esc(sanitize_url(f"https://github.com/{gh}"))}">github.com/{esc(gh)}</a>')
             if contact.get("twitter"):
-                tw = contact["twitter"].lstrip("@")
-                contact_lines.append(f'<a href="https://twitter.com/{tw}">@{tw}</a>')
+                tw = str(contact["twitter"]).strip().lstrip("@")
+                contact_lines.append(f'<a rel="noopener noreferrer" href="{esc(sanitize_url(f"https://twitter.com/{tw}"))}">@{esc(tw)}</a>')
             if contact.get("website"):
-                w = contact["website"]
-                display_w = w.replace("https://", "").replace("http://", "").rstrip("/")
-                contact_lines.append(f'<a href="{w}">{display_w}</a>')
+                w = sanitize_url(str(contact["website"]).strip())
+                contact_lines.append(f'<a rel="noopener noreferrer" href="{esc(w)}">{esc(display_url(w))}</a>')
             for ln in links:
-                lbl = ln.get("label", "")
-                url = ln.get("url", "")
-                contact_lines.append(f'<a href="{url}">{lbl}</a>')
+                lbl = str(ln.get("label", "")).strip()
+                url = sanitize_url(str(ln.get("url", "")).strip())
+                contact_lines.append(f'<a rel="noopener noreferrer" href="{esc(url)}">{esc(lbl)}</a>')
             contact_html = "<br>".join(contact_lines) if contact_lines else ""
 
             parts = []
             if name:
-                parts.append(f'<div class="name">{name}</div>')
+                parts.append(f'<div class="name">{esc(name)}</div>')
             if role:
-                parts.append(f'<div class="role">{role}</div>')
+                parts.append(f'<div class="role">{esc(role)}</div>')
             if location:
-                parts.append(f'<div class="loc">{location}</div>')
+                parts.append(f'<div class="loc">{esc(location)}</div>')
             if tagline:
-                parts.append(f'<div class="tagline">"{tagline}"</div>')
+                parts.append(f'<div class="tagline">"{esc(tagline)}"</div>')
 
             identity_block = f'''<header class="identity-header">
   <div>
@@ -1465,11 +1792,11 @@ def main():
             # self version — subtle single-line signature
             sig_parts = []
             if name:
-                sig_parts.append(f"<b>{name}</b>")
+                sig_parts.append(f"<b>{esc(name)}</b>")
             if role:
-                sig_parts.append(role)
+                sig_parts.append(esc(role))
             if location:
-                sig_parts.append(location)
+                sig_parts.append(esc(location))
             identity_block = f'<div class="identity-sig">Report subject &nbsp;·&nbsp; {" &nbsp;·&nbsp; ".join(sig_parts)}</div>'
 
     # -------- HR-facing blocks --------
@@ -1506,10 +1833,10 @@ def main():
         if weakest and weakest[1] < 6:
             weakest_title = weakest[0].split("_", 1)[1].replace("_", " ")
             lede_parts.append(
-                f" Honest weakest area: <em>{weakest_title}</em> ({weakest[1]}/10)."
+                f" Honest weakest area: <em>{esc(weakest_title)}</em> ({weakest[1]}/10)."
             )
         if profile["specialty"]:
-            lede_parts.append(f" Specialty: {profile['specialty']}.")
+            lede_parts.append(f" Specialty: {esc(profile['specialty'])}.")
         profile_lede_html = "".join(lede_parts)
     else:
         profile_lede_html = ""
@@ -1552,7 +1879,7 @@ def main():
     </div>
     <div class="profile-cell">
       <div class="k">Focus</div>
-      <div class="v" style="font-size:14.5px;line-height:1.3;">{profile.get("specialty", "—")}</div>
+      <div class="v" style="font-size:14.5px;line-height:1.3;">{esc(profile.get("specialty", "—"))}</div>
       <div class="sub">{profile.get("top_project_share_pct", 0):.0f}% on top project</div>
     </div>
   </div>
@@ -1565,10 +1892,10 @@ def main():
                 dur_hr = item["project_duration_min"] / 60
                 shipped_items += f'''<div class="shipped-item">
   <div>
-    <div class="proj">{item["project"]}</div>
+    <div class="proj">{esc(item["project"])}</div>
     <div class="proj-sub">{item["project_sessions"]} sessions · {dur_hr:.0f}h</div>
   </div>
-  <div class="desc">{item["summary"]}</div>
+  <div class="desc">{esc(item["summary"])}</div>
   <div class="stats">
     {item["project_commits"]} commits<br>
     {fmt(item["total_tokens"])} tok / top session
@@ -1587,12 +1914,13 @@ def main():
         if artifacts_list:
             artifact_rows = ""
             for a in artifacts_list:
+                safe_url = sanitize_url(str(a.get("url", "")).strip())
                 artifact_rows += f'''<div class="artifact-row">
   <div>
-    <div class="name">{a.get("name", "(unnamed)")}</div>
-    <div class="desc">{a.get("description", "")}</div>
+    <div class="name">{esc(a.get("name", "(unnamed)"))}</div>
+    <div class="desc">{esc(a.get("description", ""))}</div>
   </div>
-  <div class="link"><a href="{a.get("url", "#")}">{a.get("url", "").replace("https://", "")}</a></div>
+  <div class="link"><a rel="noopener noreferrer" href="{esc(safe_url)}">{esc(display_url(safe_url))}</a></div>
 </div>'''
             artifacts_section = f'''<section id="artifacts">
   <h2 class="sec" data-num="§ HR-03">Public artifacts</h2>
@@ -1664,10 +1992,10 @@ def main():
 
     # Growth curve chart section (both audiences but different placement)
     growth = agg.get("growth_curve", [])
-    growth_labels = json.dumps([g["week"] for g in growth])
-    growth_composite = json.dumps([g["composite_score"] for g in growth])
-    growth_ta = json.dumps([g["ta_rate"] for g in growth])
-    growth_good = json.dumps([g["good_rate"] for g in growth])
+    growth_labels = json_for_script([g["week"] for g in growth])
+    growth_composite = json_for_script([g["composite_score"] for g in growth])
+    growth_ta = json_for_script([g["ta_rate"] for g in growth])
+    growth_good = json_for_script([g["good_rate"] for g in growth])
 
     # Assemble via string.Template to avoid CSS brace escaping
     subs = {
@@ -1699,32 +2027,32 @@ def main():
         "weekly_count": len(weekly),
         "evidence_html": evidence_html,
         # Chart data
-        "outcome_labels": json.dumps(list(agg["outcomes"].keys())),
-        "outcome_values": json.dumps(list(agg["outcomes"].values())),
-        "stype_labels": json.dumps(list(agg["session_types"].keys())),
-        "stype_values": json.dumps(list(agg["session_types"].values())),
-        "proj_labels": json.dumps([p[0][:25] for p in proj_items]),
-        "proj_sessions": json.dumps([p[1]["sessions"] for p in proj_items]),
-        "proj_friction": json.dumps([p[1]["friction"] for p in proj_items]),
-        "plen_buckets": json.dumps(plen_buckets),
-        "plen_good": json.dumps(plen_good_pct),
-        "plen_n": json.dumps(plen_n),
-        "fric_labels": json.dumps([f[0] for f in fric_top]),
-        "fric_counts": json.dumps([f[1] for f in fric_top]),
-        "tool_labels": json.dumps([re.sub(r"mcp__[^_]+__", "", t[0])[:28] for t in tool_top]),
-        "tool_counts": json.dumps([t[1] for t in tool_top]),
-        "heat_grid": json.dumps(grid),
-        "heat_labels": json.dumps(WEEKDAY_LABELS),
-        "help_labels": json.dumps(list(agg["helpfulness"].keys())),
-        "help_values": json.dumps(list(agg["helpfulness"].values())),
-        "wk_labels": json.dumps(w_labels),
-        "wk_sessions": json.dumps([w["sessions"] for w in weekly]),
-        "wk_tokens_m": json.dumps([round(w["tokens"] / 1e6, 3) for w in weekly]),
-        "wk_commits": json.dumps([w["commits"] for w in weekly]),
-        "wk_goodrate": json.dumps([w["good_rate_pct"] for w in weekly]),
-        "wk_friction": json.dumps([w["friction"] for w in weekly]),
-        "wk_plen": json.dumps([w["avg_prompt_len"] for w in weekly]),
-        "wk_ta": json.dumps([w["uses_task_agent"] for w in weekly]),
+        "outcome_labels": json_for_script(list(agg["outcomes"].keys())),
+        "outcome_values": json_for_script(list(agg["outcomes"].values())),
+        "stype_labels": json_for_script(list(agg["session_types"].keys())),
+        "stype_values": json_for_script(list(agg["session_types"].values())),
+        "proj_labels": json_for_script([p[1].get("label", p[0])[:25] for p in proj_items]),
+        "proj_sessions": json_for_script([p[1]["sessions"] for p in proj_items]),
+        "proj_friction": json_for_script([p[1]["friction"] for p in proj_items]),
+        "plen_buckets": json_for_script(plen_buckets),
+        "plen_good": json_for_script(plen_good_pct),
+        "plen_n": json_for_script(plen_n),
+        "fric_labels": json_for_script([f[0] for f in fric_top]),
+        "fric_counts": json_for_script([f[1] for f in fric_top]),
+        "tool_labels": json_for_script([re.sub(r"mcp__[^_]+__", "", t[0])[:28] for t in tool_top]),
+        "tool_counts": json_for_script([t[1] for t in tool_top]),
+        "heat_grid": json_for_script(grid),
+        "heat_labels": json_for_script(WEEKDAY_LABELS),
+        "help_labels": json_for_script(list(agg["helpfulness"].keys())),
+        "help_values": json_for_script(list(agg["helpfulness"].values())),
+        "wk_labels": json_for_script(w_labels),
+        "wk_sessions": json_for_script([w["sessions"] for w in weekly]),
+        "wk_tokens_m": json_for_script([round(w["tokens"] / 1e6, 3) for w in weekly]),
+        "wk_commits": json_for_script([w["commits"] for w in weekly]),
+        "wk_goodrate": json_for_script([w["good_rate_pct"] for w in weekly]),
+        "wk_friction": json_for_script([w["friction"] for w in weekly]),
+        "wk_plen": json_for_script([w["avg_prompt_len"] for w in weekly]),
+        "wk_ta": json_for_script([w["uses_task_agent"] for w in weekly]),
     }
 
     # string.Template allows $var and ${var}; literal $ needs $$
