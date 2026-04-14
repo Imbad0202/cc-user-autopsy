@@ -112,48 +112,63 @@ def md_to_html(md: str) -> str:
     out_lines = []
     in_list = False
     list_tag = "ol"
+    pending_blanks = 0
+
+    def close_list():
+        nonlocal in_list
+        if in_list:
+            out_lines.append(f"</{list_tag}>")
+            in_list = False
+
     for raw in md.splitlines():
         line = raw.rstrip()
         if not line:
-            if in_list:
-                out_lines.append(f"</{list_tag}>")
-                in_list = False
-            out_lines.append("")
+            # Blank lines inside a list are part of the list (CommonMark "loose
+            # list"): only close the list when we see the next non-blank line
+            # that isn't a list item.
+            pending_blanks += 1
             continue
 
         m = re.match(r"^(#{1,6})\s+(.*)$", line)
         if m:
-            if in_list:
-                out_lines.append(f"</{list_tag}>")
-                in_list = False
+            close_list()
+            out_lines.extend([""] * pending_blanks)
+            pending_blanks = 0
             level = len(m.group(1))
             out_lines.append(f"<h{level+2}>{inline_md(m.group(2))}</h{level+2}>")
             continue
 
         m = re.match(r"^(\d+)\.\s+(.*)$", line)
         if m:
+            if in_list and list_tag != "ol":
+                close_list()
             if not in_list:
+                out_lines.extend([""] * pending_blanks)
                 out_lines.append("<ol>")
                 in_list = True
                 list_tag = "ol"
+            pending_blanks = 0
             out_lines.append(f"<li>{inline_md(m.group(2))}</li>")
             continue
 
         if line.startswith("- ") or line.startswith("* "):
+            if in_list and list_tag != "ul":
+                close_list()
             if not in_list:
+                out_lines.extend([""] * pending_blanks)
                 out_lines.append("<ul>")
                 in_list = True
                 list_tag = "ul"
+            pending_blanks = 0
             out_lines.append(f"<li>{inline_md(line[2:])}</li>")
             continue
 
-        if in_list:
-            out_lines.append(f"</{list_tag}>")
-            in_list = False
+        close_list()
+        out_lines.extend([""] * pending_blanks)
+        pending_blanks = 0
         out_lines.append(f"<p>{inline_md(line)}</p>")
 
-    if in_list:
-        out_lines.append(f"</{list_tag}>")
+    close_list()
     return "\n".join(out_lines)
 
 
