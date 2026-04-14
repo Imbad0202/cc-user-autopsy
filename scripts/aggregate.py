@@ -5,7 +5,6 @@ Outputs analysis-data.json.
 """
 import argparse
 import json
-import os
 import statistics
 import sys
 from collections import Counter, defaultdict
@@ -26,10 +25,21 @@ def parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
-def project_name(path: str) -> str:
+def normalize_project_path(path: str) -> str:
     if not path:
         return "(unknown)"
-    return path.rstrip("/").split("/")[-1]
+    normalized = path.replace("\\", "/").rstrip("/")
+    return normalized or "(unknown)"
+
+
+def project_name(path: str) -> str:
+    normalized = normalize_project_path(path)
+    if normalized == "(unknown)":
+        return normalized
+    parts = [p for p in normalized.split("/") if p]
+    if len(parts) >= 2:
+        return "/".join(parts[-2:])
+    return parts[-1]
 
 
 def bucket_prompt_len(n: int) -> str:
@@ -84,11 +94,13 @@ def build_sessions(metas, facets, tz):
         except Exception:
             continue
         local = start.astimezone(tz)
+        project_path = normalize_project_path(m.get("project_path", ""))
         row = {
             "sid": sid,
             "sid8": sid[:8],
-            "project": project_name(m.get("project_path", "")),
-            "project_path": m.get("project_path", ""),
+            "project": project_name(project_path),
+            "project_key": project_path,
+            "project_path": project_path,
             "start": m.get("start_time", ""),
             "week": f"{local.isocalendar().year}-W{local.isocalendar().week:02d}",
             "hour": local.hour,
@@ -255,7 +267,7 @@ def score_d4_context_mgmt(sessions):
     enc_pct = (100 * len(over20_zero_commit) / len(over20)) if over20 else 0
 
     # per-project otl
-    proj_otl = Counter(s["project"] for s in otl)
+    proj_otl = Counter(s["project_key"] for s in otl)
     max_proj_otl = max(proj_otl.values()) if proj_otl else 0
 
     score = 10
@@ -459,11 +471,19 @@ def compute_aggregates(sessions, rated, facets_coverage):
 
     # projects
     proj_detail = defaultdict(lambda: {
-        "sessions": 0, "tokens": 0, "commits": 0, "friction": 0,
-        "duration_min": 0, "outcomes": Counter(),
+        "label": "(unknown)",
+        "path": "(unknown)",
+        "sessions": 0,
+        "tokens": 0,
+        "commits": 0,
+        "friction": 0,
+        "duration_min": 0,
+        "outcomes": Counter(),
     })
     for s in sessions:
-        p = s["project"]
+        p = s["project_key"]
+        proj_detail[p]["label"] = s["project"]
+        proj_detail[p]["path"] = s["project_path"]
         proj_detail[p]["sessions"] += 1
         proj_detail[p]["tokens"] += s["total_tokens"]
         proj_detail[p]["commits"] += s["git_commits"]
@@ -473,9 +493,14 @@ def compute_aggregates(sessions, rated, facets_coverage):
             proj_detail[p]["outcomes"][s["outcome"]] += 1
     result["projects"] = {
         p: {
-            "sessions": d["sessions"], "tokens": d["tokens"],
-            "commits": d["commits"], "friction": d["friction"],
-            "duration_min": d["duration_min"], "outcomes": dict(d["outcomes"]),
+            "label": d["label"],
+            "path": d["path"],
+            "sessions": d["sessions"],
+            "tokens": d["tokens"],
+            "commits": d["commits"],
+            "friction": d["friction"],
+            "duration_min": d["duration_min"],
+            "outcomes": dict(d["outcomes"]),
         }
         for p, d in sorted(proj_detail.items(), key=lambda x: -x[1]["sessions"])
     }
@@ -549,7 +574,10 @@ def compute_aggregates(sessions, rated, facets_coverage):
     def top_by(key, n=10, reverse=True):
         rows = sorted(sessions, key=lambda x: x.get(key, 0), reverse=reverse)
         return [{
-            "sid": r["sid"], "sid8": r["sid8"], "project": r["project"],
+            "sid": r["sid"],
+            "sid8": r["sid8"],
+            "project": r["project"],
+            "project_key": r["project_key"],
             "value": r.get(key), "outcome": r["outcome"],
             "brief_summary": r["brief_summary"][:150] if r["brief_summary"] else "",
         } for r in rows[:n]]
@@ -562,12 +590,12 @@ def compute_aggregates(sessions, rated, facets_coverage):
         "top_interrupts": top_by("interrupts"),
         "top_duration": top_by("duration_min"),
         "highest_friction": [{
-            "sid": s["sid"], "sid8": s["sid8"], "project": s["project"],
+            "sid": s["sid"], "sid8": s["sid8"], "project": s["project"], "project_key": s["project_key"],
             "outcome": s["outcome"], "friction_counts": s["friction_counts"],
             "brief_summary": s["brief_summary"][:200],
         } for s in highest_fric],
         "outcome_not_achieved": [{
-            "sid": s["sid"], "sid8": s["sid8"], "project": s["project"],
+            "sid": s["sid"], "sid8": s["sid8"], "project": s["project"], "project_key": s["project_key"],
             "outcome": s["outcome"], "friction_counts": s["friction_counts"],
             "brief_summary": s["brief_summary"][:200],
         } for s in rated if s["outcome"] == "not_achieved"][:10],
@@ -614,14 +642,15 @@ def compute_aggregates(sessions, rated, facets_coverage):
     for s in rated:
         if s["outcome"] == "fully_achieved" and s["helpfulness"] in ("essential", "very_helpful"):
             if s["brief_summary"]:
-                shipped_by_proj[s["project"]].append(s)
+                shipped_by_proj[s["project_key"]].append(s)
     shipped = []
     for proj, sess_list in shipped_by_proj.items():
         # pick the session with the longest summary (most context) per project
         best = max(sess_list, key=lambda x: len(x["brief_summary"]))
         proj_stats = proj_detail[proj]
         shipped.append({
-            "project": proj,
+            "project": proj_stats["label"],
+            "project_path": proj_stats["path"],
             "summary": best["brief_summary"],
             "sid8": best["sid8"],
             "total_tokens": best["total_tokens"],
@@ -711,6 +740,7 @@ def compute_aggregates(sessions, rated, facets_coverage):
         "total_sessions": len(sessions),
         "project_count_active": project_count,
         "top_project_share_pct": round(top_project_share, 1),
+        "top_project_label": top_project[1]["label"] if top_project else "(unknown)",
         "ta_pct": round(ta_pct, 1),
         "mcp_pct": round(mcp_pct, 1),
         "specialty": specialty_str,
@@ -783,8 +813,13 @@ def main():
         "aggregates": aggregates,
         "scores": scores,
         "_sessions": [{
-            "sid": s["sid"], "sid8": s["sid8"], "project": s["project"],
-            "project_path": s["project_path"], "start": s["start"], "week": s["week"],
+            "sid": s["sid"],
+            "sid8": s["sid8"],
+            "project": s["project"],
+            "project_key": s["project_key"],
+            "project_path": s["project_path"],
+            "start": s["start"],
+            "week": s["week"],
             "duration_min": s["duration_min"], "total_tokens": s["total_tokens"],
             "interrupts": s["interrupts"], "git_commits": s["git_commits"],
             "outcome": s["outcome"], "session_type": s["session_type"],

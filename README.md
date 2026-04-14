@@ -54,7 +54,7 @@ A standalone HTML file at `~/.claude/usage-data/cc-user-autopsy.html` with:
   8. Time-of-day management
 - **Personalized peer review** — 3 strengths + 3 specific improvements + 1
   neutral observation, written by Claude after reading your aggregate data
-- **13 charts** (Chart.js CDN) — prompt-length × outcome, friction distribution,
+- **14 charts** (inline canvas renderer; no remote JS) — prompt-length × outcome, friction distribution,
   tool usage, weekly trends, weekday×hour heatmap, project breakdown
 - **Evidence library** — up to 24 representative sessions, each expandable with
   traceable session IDs
@@ -75,8 +75,7 @@ Or use the packaged `.skill` file:
 /skill install cc-user-autopsy.skill
 ```
 
-Requires Python 3.10+ (uses `Path | None` type hints). No Python dependencies
-beyond the standard library.
+Requires Python 3.9+ and only the Python standard library.
 
 ## Usage
 
@@ -139,7 +138,7 @@ And an identity profile so the report isn't anonymous:
 | Evidence traceability | Occasional | Every claim cites session ID or metric |
 | Regenerate without LLM | Yes | Yes (rule-based part) |
 | Personalized | Partially | Yes (Claude writes review after reading your data) |
-| HTML output | Shareable report | Self-contained diagnostic dashboard |
+| HTML output | Shareable report | Self-contained, offline-safe diagnostic dashboard |
 
 The skill reuses `~/.claude/usage-data/facets/` (produced by `/insights`) if
 present. Without facets, outcome/friction rates can't be computed but
@@ -184,6 +183,14 @@ python3 scripts/build_html.py \
   --peer-review /tmp/peer-review.md \
   --output ~/.claude/usage-data/cc-user-autopsy.html
 open ~/.claude/usage-data/cc-user-autopsy.html
+```
+
+## Smoke test
+
+Run the end-to-end pipeline and verify the generated HTML stays offline-safe and escapes hostile input:
+
+```bash
+python3 tests/smoke_test.py
 ```
 
 ## Limitations
