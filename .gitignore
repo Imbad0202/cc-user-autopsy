@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Virtualenv
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Output artifacts (user-generated, never commit these specific filenames)
+analysis-data.json
+samples.json
+peer-review.md
+cc-user-autopsy.html
+*.skill
+
+# But DO commit the canned example report (synthetic data)
+!assets/example-output.html
+
+# Skill eval workspace (transient)
+cc-user-autopsy-workspace/
+
+# Anything under evals/results/
+evals/results/
+evals/iteration-*/
+
+# Never commit anyone's personal usage data
+session-meta/
+facets/
+usage-data/

@@ -1,0 +1,1458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Code — User Autopsy</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,700;1,9..144,400&family=JetBrains+Mono:wght@400;500;700&family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<style>
+  :root {
+    --paper: #f4efe6;
+    --paper-deep: #ece5d5;
+    --ink: #1a1916;
+    --ink-soft: #464239;
+    --ink-muted: #7a7363;
+    --rule: #c9bfa8;
+    --rule-soft: #ddd3bc;
+    --accent: #a0431e;        /* burnt sienna */
+    --ochre: #b28121;
+    --forest: #2e5b3e;
+    --oxblood: #6b1b1b;
+    --plum: #63355c;
+    --serif: "Fraunces", "Iowan Old Style", "Apple Garamond", Georgia, serif;
+    --sans: "Inter Tight", "Söhne", -apple-system, BlinkMacSystemFont, Helvetica, sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--paper);
+    color: var(--ink);
+  }
+
+  body {
+    font-family: var(--serif);
+    font-optical-sizing: auto;
+    font-variation-settings: "opsz" 14;
+    font-size: 17px;
+    line-height: 1.58;
+    letter-spacing: -0.005em;
+    background-image:
+      radial-gradient(rgba(0,0,0,0.035) 1px, transparent 1px),
+      linear-gradient(180deg, rgba(255,250,240,0.4), rgba(0,0,0,0) 40%);
+    background-size: 3px 3px, 100% 100%;
+  }
+
+  .page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 70px 56px 120px 56px;
+  }
+
+  @media (max-width: 720px) {
+    .page { padding: 40px 22px 80px 22px; }
+    body { font-size: 16px; }
+  }
+
+  /* Letterhead */
+  .letterhead {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 28px;
+    margin-bottom: 44px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 40px;
+  }
+  .mark {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+  }
+  .letterhead .right {
+    text-align: right;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--ink-muted);
+  }
+  .letterhead .right b { color: var(--ink); font-weight: 500; }
+
+  h1.title {
+    font-family: var(--serif);
+    font-variation-settings: "opsz" 144, "wght" 300;
+    font-weight: 300;
+    font-size: clamp(38px, 6vw, 64px);
+    line-height: 1.02;
+    letter-spacing: -0.03em;
+    margin: 14px 0 12px 0;
+  }
+  h1.title em {
+    font-style: italic;
+    font-variation-settings: "opsz" 144, "wght" 400;
+    color: var(--accent);
+  }
+
+  .dek {
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--ink-soft);
+    max-width: 56ch;
+    margin: 0 0 30px 0;
+  }
+
+  .intro-card {
+    border: 1px solid var(--rule);
+    background: rgba(255,250,240,0.5);
+    padding: 22px 26px;
+    margin: 0 0 60px 0;
+    font-size: 15.5px;
+    line-height: 1.6;
+    position: relative;
+  }
+  .intro-card::before {
+    content: "NOTE";
+    position: absolute;
+    top: -9px; left: 22px;
+    background: var(--paper);
+    padding: 0 8px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    color: var(--accent);
+  }
+
+  .preliminary {
+    background: #fbe9d8;
+    border: 1px dashed var(--accent);
+    color: var(--accent);
+    padding: 12px 18px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    margin: 18px 0 0 0;
+  }
+
+  /* Section headers */
+  section { margin: 80px 0 0 0; }
+  h2.sec {
+    font-family: var(--serif);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 6px 0;
+    padding-bottom: 0;
+    border: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+  h2.sec::before {
+    content: attr(data-num);
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-muted);
+    letter-spacing: 0.08em;
+  }
+  h2.sec-title {
+    font-family: var(--serif);
+    font-variation-settings: "opsz" 72, "wght" 400;
+    font-weight: 400;
+    font-size: clamp(26px, 3.4vw, 36px);
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+    margin: 0 0 32px 0;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  h3 {
+    font-family: var(--serif);
+    font-variation-settings: "opsz" 24, "wght" 500;
+    font-weight: 500;
+    font-size: 20px;
+    line-height: 1.35;
+    letter-spacing: -0.01em;
+    margin: 38px 0 14px 0;
+  }
+  h4 {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--ink-muted);
+    margin: 24px 0 10px 0;
+  }
+
+  p { margin: 0 0 14px 0; }
+  p.muted { color: var(--ink-muted); }
+  a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+  a:hover { color: var(--oxblood); }
+  strong { font-weight: 600; color: var(--ink); }
+  code {
+    font-family: var(--mono);
+    font-size: 0.82em;
+    background: rgba(160, 67, 30, 0.07);
+    padding: 1px 6px;
+    border-radius: 2px;
+    color: var(--oxblood);
+  }
+
+  /* TOC */
+  .toc {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.85;
+    letter-spacing: 0.02em;
+    margin: 22px 0 0 0;
+    counter-reset: toc;
+    columns: 2;
+    column-gap: 40px;
+  }
+  .toc a {
+    display: block;
+    color: var(--ink-soft);
+    text-decoration: none;
+    padding: 3px 0;
+    border-bottom: 1px dotted transparent;
+  }
+  .toc a::before {
+    counter-increment: toc;
+    content: counter(toc, decimal-leading-zero) "  ";
+    color: var(--accent);
+  }
+  .toc a:hover { color: var(--accent); border-bottom-color: var(--rule); }
+
+  /* Metric cards grid */
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    margin: 30px 0 20px 0;
+    border-top: 1px solid var(--rule);
+    border-left: 1px solid var(--rule);
+  }
+  .metrics > .metric {
+    border-right: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    padding: 16px 18px 18px 18px;
+    background: rgba(255,250,240,0.35);
+  }
+  @media (max-width: 640px) {
+    .metrics { grid-template-columns: repeat(2, 1fr); }
+  }
+  .metric .n {
+    font-family: var(--serif);
+    font-variation-settings: "opsz" 72, "wght" 400;
+    font-size: 32px;
+    line-height: 1;
+    letter-spacing: -0.025em;
+    color: var(--ink);
+  }
+  .metric .lbl {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    margin-top: 8px;
+  }
+
+  /* Score rows — like rubric scores on a form */
+  .score-table {
+    margin: 32px 0 0 0;
+    border-top: 2px solid var(--ink);
+  }
+  .score-row {
+    display: grid;
+    grid-template-columns: 80px 1fr 70px;
+    gap: 24px;
+    padding: 22px 0;
+    border-bottom: 1px solid var(--rule);
+    align-items: start;
+  }
+  .score-row .dim {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    padding-top: 6px;
+  }
+  .score-row .body { }
+  .score-row .body .h {
+    font-family: var(--serif);
+    font-variation-settings: "opsz" 24, "wght" 500;
+    font-size: 20px;
+    line-height: 1.25;
+    margin: 0 0 6px 0;
+  }
+  .score-row .body .exp {
+    font-family: var(--sans);
+    font-size: 14.5px;
+    line-height: 1.55;
+    color: var(--ink-soft);
+    margin: 0;
+  }
+  .score-row .score {
+    font-family: var(--serif);
+    font-variation-settings: "opsz" 144, "wght" 300;
+    font-size: 44px;
+    line-height: 1;
+    text-align: right;
+    letter-spacing: -0.03em;
+    color: var(--ink);
+    position: relative;
+  }
+  .score-row .score .out {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--ink-muted);
+    display: block;
+    margin-top: 4px;
+  }
+  .score-row.strong .score { color: var(--forest); }
+  .score-row.mixed .score { color: var(--ochre); }
+  .score-row.weak .score { color: var(--oxblood); }
+  .score-row.na .score { color: var(--ink-muted); font-size: 22px; padding-top: 12px; }
+
+  /* ---- Identity header ---- */
+  .identity-header {
+    margin: 0 0 48px 0;
+    padding: 0 0 24px 0;
+    border-bottom: 1px solid var(--rule);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 30px;
+    align-items: end;
+  }
+  @media (max-width: 640px) { .identity-header { grid-template-columns: 1fr; } }
+  .identity-header .name {
+    font-family: var(--serif);
+    font-variation-settings: "opsz" 72, "wght" 500;
+    font-size: clamp(32px, 4.8vw, 44px);
+    line-height: 1.02;
+    letter-spacing: -0.022em;
+    margin: 0 0 6px 0;
+    color: var(--ink);
+  }
+  .identity-header .role {
+    font-family: var(--sans);
+    font-size: 15px;
+    color: var(--ink-soft);
+    margin: 0 0 3px 0;
+  }
+  .identity-header .loc {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.08em;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+  }
+  .identity-header .tagline {
+    font-family: var(--serif);
+    font-style: italic;
+    font-variation-settings: "opsz" 24, "wght" 400;
+    font-size: 15.5px;
+    color: var(--ink-soft);
+    margin: 8px 0 0 0;
+    max-width: 50ch;
+  }
+  .identity-header .contact {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.85;
+    letter-spacing: 0.02em;
+    color: var(--ink-soft);
+    text-align: right;
+  }
+  @media (max-width: 640px) { .identity-header .contact { text-align: left; } }
+  .identity-header .contact a { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+  .identity-header .contact b { font-family: var(--serif); font-style: normal; font-weight: 500; color: var(--accent); font-size: 10px; letter-spacing: 0.2em; display: block; margin-bottom: 4px; text-transform: uppercase; }
+
+  .identity-sig {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    margin: 0 0 22px 0;
+    padding: 0 0 16px 0;
+    border-bottom: 1px dotted var(--rule);
+  }
+  .identity-sig b { color: var(--ink); font-family: var(--serif); font-size: 13px; letter-spacing: -0.01em; text-transform: none; font-weight: 500; }
+
+  /* ---- HR-facing additions ---- */
+  .profile-card {
+    margin: 24px 0 48px 0;
+    padding: 30px 34px 34px 34px;
+    background: linear-gradient(135deg, rgba(255,250,240,0.8) 0%, rgba(236,229,213,0.4) 100%);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--accent);
+    position: relative;
+  }
+  .profile-card::before {
+    content: "AT A GLANCE";
+    position: absolute;
+    top: -10px; left: 30px;
+    background: var(--paper);
+    padding: 0 10px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.26em;
+    color: var(--accent);
+  }
+  .profile-lede {
+    font-family: var(--serif);
+    font-variation-settings: "opsz" 36, "wght" 400;
+    font-size: 22px;
+    line-height: 1.42;
+    letter-spacing: -0.012em;
+    color: var(--ink);
+    margin: 0 0 22px 0;
+  }
+  .profile-lede em {
+    color: var(--accent);
+    font-style: italic;
+    font-weight: 500;
+  }
+  .profile-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    margin-top: 20px;
+    border-top: 1px solid var(--rule);
+    border-left: 1px solid var(--rule);
+  }
+  @media (max-width: 640px) { .profile-grid { grid-template-columns: repeat(2, 1fr); } }
+  .profile-cell {
+    border-right: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    padding: 14px 16px 16px 16px;
+  }
+  .profile-cell .k {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    margin-bottom: 6px;
+  }
+  .profile-cell .v {
+    font-family: var(--serif);
+    font-variation-settings: "opsz" 72, "wght" 400;
+    font-size: 24px;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+  }
+  .profile-cell .sub {
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--ink-muted);
+    margin-top: 3px;
+  }
+
+  /* How to read */
+  details.how-to-read {
+    margin: 0 0 40px 0;
+    border: 1px dashed var(--rule);
+    padding: 12px 18px;
+    background: transparent;
+  }
+  details.how-to-read summary {
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    list-style: none;
+  }
+  details.how-to-read summary::-webkit-details-marker { display: none; }
+  details.how-to-read summary::before {
+    content: "+ ";
+    color: var(--accent);
+  }
+  details.how-to-read[open] summary::before { content: "− "; }
+  details.how-to-read[open] { padding-bottom: 18px; }
+  details.how-to-read .how-body {
+    margin-top: 14px;
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--ink-soft);
+  }
+  details.how-to-read dl { margin: 10px 0; }
+  details.how-to-read dt {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    margin-top: 10px;
+  }
+  details.how-to-read dd { margin: 2px 0 0 0; }
+
+  /* Shipped artifacts */
+  .shipped-list { margin: 24px 0 0 0; border-top: 2px solid var(--ink); }
+  .shipped-item {
+    padding: 22px 0;
+    border-bottom: 1px solid var(--rule);
+    display: grid;
+    grid-template-columns: 160px 1fr 120px;
+    gap: 24px;
+    align-items: start;
+  }
+  @media (max-width: 720px) {
+    .shipped-item { grid-template-columns: 1fr; gap: 8px; }
+  }
+  .shipped-item .proj {
+    font-family: var(--serif);
+    font-variation-settings: "opsz" 24, "wght" 500;
+    font-size: 17px;
+    color: var(--ink);
+    line-height: 1.3;
+  }
+  .shipped-item .proj-sub {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    color: var(--ink-muted);
+    margin-top: 4px;
+    text-transform: uppercase;
+  }
+  .shipped-item .desc {
+    font-family: var(--sans);
+    font-size: 14.5px;
+    line-height: 1.55;
+    color: var(--ink-soft);
+  }
+  .shipped-item .stats {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    color: var(--ink-muted);
+    text-align: right;
+    line-height: 1.7;
+  }
+  @media (max-width: 720px) {
+    .shipped-item .stats { text-align: left; }
+  }
+
+  /* Public artifacts */
+  .artifact-row {
+    padding: 14px 0;
+    border-bottom: 1px solid var(--rule);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 20px;
+    align-items: baseline;
+  }
+  .artifact-row:first-of-type { border-top: 2px solid var(--ink); }
+  .artifact-row .name {
+    font-family: var(--serif);
+    font-size: 17px;
+    font-variation-settings: "opsz" 24, "wght" 500;
+  }
+  .artifact-row .desc {
+    font-family: var(--sans);
+    font-size: 14px;
+    color: var(--ink-soft);
+    margin-top: 3px;
+  }
+  .artifact-row .link {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.04em;
+  }
+
+  .overall-strip {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    color: var(--ink-soft);
+    padding: 18px 0 28px 0;
+    border-bottom: 2px solid var(--ink);
+    text-transform: uppercase;
+  }
+  .overall-strip b {
+    font-family: var(--serif);
+    font-size: 22px;
+    color: var(--ink);
+    letter-spacing: -0.02em;
+    text-transform: none;
+  }
+
+  /* Peer review block */
+  #peer-review {
+    background: rgba(255,250,240,0.55);
+    border-left: 2px solid var(--accent);
+    padding: 28px 34px 30px 34px;
+    margin: 24px 0 0 0;
+    font-size: 17px;
+    line-height: 1.65;
+  }
+  #peer-review h3 {
+    font-family: var(--serif);
+    font-variation-settings: "opsz" 24, "wght" 500;
+    font-size: 17px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--accent);
+    margin: 28px 0 14px 0;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  #peer-review h3:first-child { margin-top: 0; }
+  #peer-review ol { padding-left: 20px; margin: 0; }
+  #peer-review ol li {
+    margin: 14px 0;
+    padding-left: 6px;
+  }
+  #peer-review ol li::marker { color: var(--accent); font-family: var(--mono); font-size: 0.85em; }
+
+  /* Charts */
+  .chart-box {
+    background: rgba(255,250,240,0.4);
+    border: 1px solid var(--rule);
+    padding: 18px 20px 14px 20px;
+    margin: 20px 0;
+    height: 340px;
+    position: relative;
+  }
+  .chart-box.tall { height: 420px; }
+  .chart-box.short { height: 260px; }
+  .chart-box::after {
+    content: attr(data-fig);
+    position: absolute;
+    top: -8px; right: 18px;
+    background: var(--paper);
+    padding: 0 8px;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.2em;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+  }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* Evidence library */
+  details.evidence {
+    border-top: 1px solid var(--rule);
+    padding: 14px 0;
+    margin: 0;
+  }
+  details.evidence:last-of-type { border-bottom: 1px solid var(--rule); }
+  details.evidence summary {
+    cursor: pointer;
+    list-style: none;
+    font-family: var(--sans);
+    font-size: 14.5px;
+    line-height: 1.4;
+    color: var(--ink);
+    display: grid;
+    grid-template-columns: 90px 1fr 80px;
+    gap: 16px;
+    align-items: center;
+  }
+  details.evidence summary::-webkit-details-marker { display: none; }
+  details.evidence summary .tag {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    padding: 3px 8px;
+    border: 1px solid var(--rule);
+    text-align: center;
+    border-radius: 1px;
+  }
+  details.evidence summary .tag.high_friction,
+  details.evidence summary .tag.not_achieved { color: var(--oxblood); border-color: var(--oxblood); }
+  details.evidence summary .tag.control_good { color: var(--forest); border-color: var(--forest); }
+  details.evidence summary .tag.top_interrupt { color: var(--ochre); border-color: var(--ochre); }
+  details.evidence summary .tag.top_token { color: var(--plum); border-color: var(--plum); }
+  details.evidence summary .sid {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+  details.evidence summary .proj { color: var(--ink); }
+  details.evidence summary .right {
+    text-align: right;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-muted);
+  }
+  details.evidence[open] summary { margin-bottom: 14px; }
+  details.evidence[open] summary .sid { color: var(--accent); }
+  details.evidence p {
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.55;
+    margin: 6px 0;
+    padding-left: 106px;
+  }
+  details.evidence p code {
+    font-size: 0.85em;
+    background: rgba(0,0,0,0.04);
+    color: var(--ink-soft);
+    word-break: break-all;
+  }
+
+  .evidence-header {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 34px 0 8px 0;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  /* Footer */
+  footer {
+    margin-top: 80px;
+    padding-top: 30px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: var(--ink-muted);
+    text-align: center;
+  }
+  footer a { color: var(--accent); }
+
+  /* Methodology */
+  .method {
+    font-family: var(--sans);
+    font-size: 14.5px;
+    line-height: 1.6;
+  }
+  .method ul { padding-left: 20px; margin: 8px 0 14px 0; }
+  .method li { margin: 4px 0; }
+  .caveat {
+    background: rgba(160, 67, 30, 0.06);
+    border: 1px solid rgba(160, 67, 30, 0.2);
+    border-left: 3px solid var(--accent);
+    padding: 14px 20px;
+    margin: 16px 0;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* print */
+  @media print {
+    body { font-size: 11pt; }
+    .page { padding: 0; max-width: none; }
+    .chart-box { break-inside: avoid; }
+    details.evidence { break-inside: avoid; }
+    details.evidence[open] { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<main class="page">
+
+<div class="letterhead">
+  <div>
+    <div class="mark">CC · User Autopsy · v1</div>
+  </div>
+  <div class="right">
+    <b>280</b> sessions analyzed<br>
+    2026-01-01 → 2026-04-09<br>
+    Facet coverage <b>55.0%</b>
+  </div>
+</div>
+
+<div class="identity-sig">Report subject &nbsp;·&nbsp; <b>Alex Chen</b> &nbsp;·&nbsp; Engineer · writes code alongside Claude Code as primary interface &nbsp;·&nbsp; Remote · UTC+0</div>
+
+<h1 class="title">A diagnostic letter<br>on <em>your</em> Claude Code practice</h1>
+<p class="dek">
+  This report is the output of a skill that reads your local usage data and gives you
+  a direct, evidence-backed peer review of your workflow. Eight rule-based scores,
+  thirteen figures, twenty-four session citations. No sandwiching.
+</p>
+<div class="intro-card">
+  The built-in <code>/insights</code> report is helpful but tends to celebrate. This one tries
+  to be honest. Every score below has a threshold you can audit, and every claim in
+  the peer review cites a number from your own data. If a dimension lacks data, it says so.
+  
+</div>
+
+
+
+
+
+
+
+
+
+<nav class="toc">
+  <a href="#overview">Overview</a><a href="#scores">Rule-based Scores</a><a href="#peer-review-section">Personalized Peer Review</a><a href="#patterns">Pattern Mining</a><a href="#trends">Weekly Trends</a><a href="#evidence">Evidence Library</a><a href="#method">Methodology</a>
+</nav>
+
+<section id="overview">
+  <h2 class="sec" data-num="§ 01">Overview</h2>
+  <h2 class="sec-title">The raw numbers, before interpretation.</h2>
+
+  <div class="metrics">
+    <div class="metric"><div class="n">280</div><div class="lbl">Sessions</div></div>
+    <div class="metric"><div class="n">5.1M</div><div class="lbl">Total tokens</div></div>
+    <div class="metric"><div class="n">247</div><div class="lbl">Git commits</div></div>
+    <div class="metric"><div class="n">240h</div><div class="lbl">Interactive time</div></div>
+    <div class="metric"><div class="n">95%</div><div class="lbl">Used Task agent</div></div>
+    <div class="metric"><div class="n">17%</div><div class="lbl">Used MCP</div></div>
+    <div class="metric"><div class="n">55.0%</div><div class="lbl">Facet coverage</div></div>
+    <div class="metric"><div class="n">79s</div><div class="lbl">Median think time</div></div>
+  </div>
+
+  <div class="two-col">
+    <div class="chart-box" data-fig="Fig. 01"><canvas id="outcomeChart"></canvas></div>
+    <div class="chart-box" data-fig="Fig. 02"><canvas id="stypeChart"></canvas></div>
+  </div>
+  <div class="chart-box tall" data-fig="Fig. 03"><canvas id="projChart"></canvas></div>
+</section>
+
+<section id="scores">
+  <h2 class="sec" data-num="§ 02">Scoring</h2>
+  <h2 class="sec-title">Eight dimensions, each with its own rubric.</h2>
+  <p class="method">
+    Scores are derived from explicit thresholds (see
+    <code>references/scoring-rubric.md</code>). A high or low score is not a judgment;
+    it is a pointer. Compare against the explanation to decide if the threshold is fair.
+  </p>
+
+  <div class="overall-strip">Overall &nbsp;·&nbsp; <b>6.5 / 10</b> &nbsp;·&nbsp; 8 of 8 dimensions scored</div>
+
+  <div class="score-table">
+    <div class="score-row strong">
+  <div class="dim">D1 · delegation</div>
+  <div class="body">
+    <div class="h">Delegation (Task agent usage)</div>
+    <p class="exp">95% of sessions used Task agent; good-outcome rate with Task agent was 64%.</p>
+  </div>
+  <div class="score"><span class="num">7</span><span class="out">/ 10</span></div>
+</div>
+<div class="score-row mixed">
+  <div class="dim">D2 · root cause</div>
+  <div class="body">
+    <div class="h">Root-cause debugging</div>
+    <p class="exp">18 sessions (12%) were iterative_refinement with buggy_code friction — a marker for symptom-level patching.</p>
+  </div>
+  <div class="score"><span class="num">6</span><span class="out">/ 10</span></div>
+</div>
+<div class="score-row mixed">
+  <div class="dim">D3 · prompt quality</div>
+  <div class="body">
+    <div class="h">Prompt quality</div>
+    <p class="exp">16% of sessions used prompts ≥ 100 chars. Most efficient prompt-length bucket for tokens/commit: 100-300.</p>
+  </div>
+  <div class="score"><span class="num">5</span><span class="out">/ 10</span></div>
+</div>
+<div class="score-row mixed">
+  <div class="dim">D4 · context mgmt</div>
+  <div class="body">
+    <div class="h">Context management</div>
+    <p class="exp">9 sessions hit output-token-limit. 57% of >20min sessions had 0 commits. Long-session interrupt rate: 42%.</p>
+  </div>
+  <div class="score"><span class="num">5</span><span class="out">/ 10</span></div>
+</div>
+<div class="score-row strong">
+  <div class="dim">D5 · interrupt judgment</div>
+  <div class="body">
+    <div class="h">Interrupt judgment</div>
+    <p class="exp">58% of interrupted sessions still reached good outcome (21/36).</p>
+  </div>
+  <div class="score"><span class="num">9</span><span class="out">/ 10</span></div>
+</div>
+<div class="score-row strong">
+  <div class="dim">D6 · tool breadth</div>
+  <div class="body">
+    <div class="h">Tool breadth</div>
+    <p class="exp">17% of sessions used any MCP tool; top-3 tools (Bash/Read/Edit) consume 65% of all calls.</p>
+  </div>
+  <div class="score"><span class="num">7</span><span class="out">/ 10</span></div>
+</div>
+<div class="score-row strong">
+  <div class="dim">D7 · writing consistency</div>
+  <div class="body">
+    <div class="h">Writing consistency</div>
+    <p class="exp">Across 58 writing-related sessions, avg misunderstood_request per session is 0.24.</p>
+  </div>
+  <div class="score"><span class="num">8</span><span class="out">/ 10</span></div>
+</div>
+<div class="score-row mixed">
+  <div class="dim">D8 · time mgmt</div>
+  <div class="body">
+    <div class="h">Time-of-day management</div>
+    <p class="exp">Worst hour (02:00) has 3.5x the friction rate of best hour (20:00).</p>
+  </div>
+  <div class="score"><span class="num">5</span><span class="out">/ 10</span></div>
+</div>
+
+  </div>
+</section>
+
+<section id="peer-review-section">
+  <h2 class="sec" data-num="§ 03">Peer review</h2>
+  <h2 class="sec-title">Written by Claude after reading your data.</h2>
+  <p class="method">
+    Scores above are mechanical. This section is interpretive — an attempt to identify
+    three things you do well, three specific improvements, and one neutral observation.
+    Every claim is meant to cite a number from your aggregate data or a specific session ID.
+  </p>
+  <div id="peer-review">
+<h5>Three things you are doing well</h5>
+
+<ol>
+<li><strong>Strong Task agent adoption (~52% of sessions)</strong> — you're reliably fanning out work to subagents instead of doing everything in the main context. This is rare in general CC usage and shows up clearly in your data: session good-rate with Task agent (71%) is a touch higher than without (66%), and your heavy-tool sessions (>10 tool calls) are disproportionately the ones that ship commits.</li>
+<li><strong>Your interrupt judgment is sharp</strong> — 47% of interrupted sessions still reach a good outcome. Interrupts aren't noise; they're you correctly pulling Claude back when it drifts (see session <code>c0c9e8c3</code>, which recovered to mostly_achieved after an early redirect).</li>
+<li><strong>Median think-time of 78s shows deliberate prompting, not rushed</strong> — your 100-300 char prompts ship at median 14k tokens/commit vs 22k for <50 char prompts. You already use the "longer prompt pays off" lever consistently; keep it.</li>
+</ol>
+
+<h5>Three specific improvements</h5>
+
+<ol>
+<li><strong>Root-cause debugging</strong> (priority: high) — 12% of your rated sessions are iterative_refinement with buggy_code friction. That's the "v3, v4, v5…" patching pattern showing up in acme-dashboard especially. <strong>Actionable fix</strong>: add a CLAUDE.md rule — "when the same file has been edited 3+ times in one session without the error going away, stop and print a data-flow map before the next edit". This shifts you from symptom chasing to structural fixes.</li>
+<li><strong>Tool breadth</strong> (priority: medium) — MCP usage rate is 8%, Bash/Read/Edit consume 62% of calls. You haven't pulled in tooling that exists: Playwright MCP for visual QA, Supabase MCP for schema work. <strong>Actionable fix</strong>: pick the one you'd use most and install it this week — even using it once unlocks it mentally.</li>
+<li><strong>Afternoon friction</strong> (priority: low) — hour 15:00 has 2.8× the friction rate of 19:00 (your best hour). You produce in the afternoon but lose quality. <strong>Actionable fix</strong>: move novel problem-solving to mornings or evenings; batch routine work (docs, reviews, memory updates) to 14-16:00 when bugs are 3× likelier.</li>
+</ol>
+
+<h5>One neutral observation</h5>
+
+<p>Your sessions cluster in one project (acme-dashboard, ~38% of all sessions) — not a bad thing, but notice that 4 of your 5 output-token-limit hits happened there too. When a project eats half your effort, its context-hygiene overhead compounds. Worth checking whether its CLAUDE.md / directory structure is actively helping you or just incidentally carrying three months of conventions.</p>
+  </div>
+</section>
+
+<section id="patterns">
+  <h2 class="sec" data-num="§ 04">Pattern mining</h2>
+  <h2 class="sec-title">What the aggregate hides; what the shape reveals.</h2>
+
+  <h3>4.1 Prompt length × outcome</h3>
+  <div class="chart-box short" data-fig="Fig. 04"><canvas id="plenChart"></canvas></div>
+
+  <h3>4.2 Friction categories</h3>
+  <div class="chart-box" data-fig="Fig. 05"><canvas id="fricChart"></canvas></div>
+
+  <h3>4.3 Tool usage</h3>
+  <div class="chart-box tall" data-fig="Fig. 06"><canvas id="toolChart"></canvas></div>
+
+  <h3>4.4 Weekday × hour heatmap</h3>
+  <div class="chart-box tall" data-fig="Fig. 07"><canvas id="heatChart"></canvas></div>
+
+  <h3>4.5 Helpfulness self-rating</h3>
+  <p class="method">From <code>facets/</code> — Claude's own rating of how helpful it was per session.</p>
+  <div class="chart-box short" data-fig="Fig. 08"><canvas id="helpChart"></canvas></div>
+</section>
+
+<section id="trends">
+  <h2 class="sec" data-num="§ 05">Weekly trends</h2>
+  <h2 class="sec-title">15 weeks on the record.</h2>
+
+  <h3>Growth curve — composite skill score over time</h3>
+  <p class="method">Composite blends good-outcome rate (0.4), Task agent adoption (0.3), and inverse friction rate (0.3) per week. Rising trend suggests the user is improving; flat or falling trend suggests plateau.</p>
+  <div class="chart-box" data-fig="Fig. 09"><canvas id="growthChart"></canvas></div>
+
+  <h3>Volume &amp; adoption</h3>
+  <div class="chart-box" data-fig="Fig. 10"><canvas id="wkSessions"></canvas></div>
+  <div class="chart-box" data-fig="Fig. 11"><canvas id="wkTokens"></canvas></div>
+  <div class="chart-box" data-fig="Fig. 12"><canvas id="wkGood"></canvas></div>
+  <div class="chart-box" data-fig="Fig. 13"><canvas id="wkFric"></canvas></div>
+  <div class="chart-box" data-fig="Fig. 14"><canvas id="wkPlen"></canvas></div>
+</section>
+
+<section id="evidence">
+  <h2 class="sec" data-num="§ 06">Evidence library</h2>
+  <h2 class="sec-title">The sessions that shaped every number above.</h2>
+  <p class="method">
+    Up to 24 sessions sampled across seven buckets. Expand any row to see the raw
+    context the scoring and peer review were built from.
+  </p>
+  <div class="evidence-header">Highest friction</div>
+<details class="evidence">
+  <summary>
+    <span class="tag high_friction">high friction</span>
+    <span><span class="sid">bea7b078</span> · <span class="proj">spark-mobile</span> · partially_achieved</span>
+    <span class="right">23.7k tok · 56m</span>
+  </summary>
+  <p><strong>Summary</strong> · User interrupted — Claude was exploring files instead of running the migration requested.</p>
+  <p><strong>Friction detail</strong> · Attempted to solve the drift by patching the view layer; the real issue was in the query.</p>
+  <p><strong>First prompt</strong> · <code>generate screenshots for the app store listing, must follow the new brand guidelines</code></p>
+  <p><strong>Friction counts</strong> · <code>{"wrong_approach": 5, "tool_limitation": 3, "excessive_changes": 2, "buggy_code": 3}</code></p>
+</details>
+<details class="evidence">
+  <summary>
+    <span class="tag high_friction">high friction</span>
+    <span><span class="sid">85296f46</span> · <span class="proj">prod-monitor</span> · partially_achieved</span>
+    <span class="right">18.8k tok · 41m</span>
+  </summary>
+  <p><strong>Summary</strong> · Claude repeatedly broke the chart rendering across versions v10-v14; user had to roll back twice.</p>
+  <p><strong>Friction detail</strong> · Attempted to solve the drift by patching the view layer; the real issue was in the query.</p>
+  <p><strong>First prompt</strong> · <code>the registration flow breaks when the user has a plus sign in their email, please fix</code></p>
+  <p><strong>Friction counts</strong> · <code>{"wrong_approach": 6, "excessive_changes": 3, "misunderstood_request": 2}</code></p>
+</details>
+<details class="evidence">
+  <summary>
+    <span class="tag high_friction">high friction</span>
+    <span><span class="sid">b8bca5f3</span> · <span class="proj">spark-mobile</span> · not_achieved</span>
+    <span class="right">16.6k tok · 102m</span>
+  </summary>
+  <p><strong>Summary</strong> · User interrupted — Claude was exploring files instead of running the migration requested.</p>
+  <p><strong>Friction detail</strong> · Introduced a subtle regression in the chart rendering that only surfaced in mobile layouts after three passes.</p>
+  <p><strong>First prompt</strong> · <code>Add an env-toggle so the staging deploy uses the mock data source instead of hitting production.</code></p>
+  <p><strong>Friction counts</strong> · <code>{"buggy_code": 4, "misunderstood_request": 3, "output_token_limit_exceeded": 3, "excessive_changes": 1}</code></p>
+</details>
+<details class="evidence">
+  <summary>
+    <span class="tag high_friction">high friction</span>
+    <span><span class="sid">e58c1cfa</span> · <span class="proj">design-lab</span> · partially_achieved</span>
+    <span class="right">19.0k tok · 44m</span>
+  </summary>
+  <p><strong>Summary</strong> · Claude repeatedly broke the chart rendering across versions v10-v14; user had to roll back twice.</p>
+  <p><strong>Friction detail</strong> · User asked to deploy; Claude spent the session reading files and writing a plan.</p>
+  <p><strong>First prompt</strong> · <code>There's a bug where the chart tooltip shows wrong percentages — can you trace the data flow and fix it</code></p>
+  <p><strong>Friction counts</strong> · <code>{"output_token_limit_exceeded": 1, "external_api_error": 2, "misunderstood_request": 3, "buggy_code": 2, "wrong_approach": 3}</code></p>
+</details>
+<details class="evidence">
+  <summary>
+    <span class="tag high_friction">high friction</span>
+    <span><span class="sid">b5e0d0bb</span> · <span class="proj">acme-dashboard</span> · partially_achieved</span>
+    <span class="right">23.2k tok · 54m</span>
+  </summary>
+  <p><strong>Summary</strong> · User interrupted — Claude was exploring files instead of running the migration requested.</p>
+  <p><strong>Friction detail</strong> · Introduced a subtle regression in the chart rendering that only surfaced in mobile layouts after three passes.</p>
+  <p><strong>First prompt</strong> · <code>explore this codebase and summarize the test setup — are we using vitest or jest</code></p>
+  <p><strong>Friction counts</strong> · <code>{"buggy_code": 5, "misunderstood_request": 1, "wrong_approach": 5}</code></p>
+</details>
+<div class="evidence-header">Highest token count</div>
+<details class="evidence">
+  <summary>
+    <span class="tag top_token">top token</span>
+    <span><span class="sid">09ec177a</span> · <span class="proj">acme-dashboard</span> · mostly_achieved</span>
+    <span class="right">156.8k tok · 43m</span>
+  </summary>
+  <p><strong>Summary</strong> · User partially converted the export module but auth migration left for next sprint.</p>
+  <p><strong>Friction detail</strong> · (none)</p>
+  <p><strong>First prompt</strong> · <code>quick one — how many open PRs do we have right now</code></p>
+  <p><strong>Friction counts</strong> · <code>{}</code></p>
+</details>
+<details class="evidence">
+  <summary>
+    <span class="tag top_token">top token</span>
+    <span><span class="sid">311b8079</span> · <span class="proj">design-lab</span> · (no facet)</span>
+    <span class="right">155.2k tok · 33m</span>
+  </summary>
+  <p><strong>Summary</strong> · (no summary)</p>
+  <p><strong>Friction detail</strong> · (none)</p>
+  <p><strong>First prompt</strong> · <code>generate screenshots for the app store listing, must follow the new brand guidelines</code></p>
+  <p><strong>Friction counts</strong> · <code>{}</code></p>
+</details>
+<details class="evidence">
+  <summary>
+    <span class="tag top_token">top token</span>
+    <span><span class="sid">50801d1d</span> · <span class="proj">ci-scripts</span> · partially_achieved</span>
+    <span class="right">150.2k tok · 39m</span>
+  </summary>
+  <p><strong>Summary</strong> · Claude hit output-token-limit twice; session ended without deploying.</p>
+  <p><strong>Friction detail</strong> · Introduced a subtle regression in the chart rendering that only surfaced in mobile layouts after three passes.</p>
+  <p><strong>First prompt</strong> · <code>generate screenshots for the app store listing, must follow the new brand guidelines</code></p>
+  <p><strong>Friction counts</strong> · <code>{"buggy_code": 3, "output_token_limit_exceeded": 2}</code></p>
+</details>
+<details class="evidence">
+  <summary>
+    <span class="tag top_token">top token</span>
+    <span><span class="sid">c27c4285</span> · <span class="proj">acme-dashboard</span> · mostly_achieved</span>
+    <span class="right">129.7k tok · 87m</span>
+  </summary>
+  <p><strong>Summary</strong> · User iterated on dashboard layout through v7; still unsatisfied with mobile spacing.</p>
+  <p><strong>Friction detail</strong> · (none)</p>
+  <p><strong>First prompt</strong> · <code>Review the pull request #182 and leave constructive comments on the architecture</code></p>
+  <p><strong>Friction counts</strong> · <code>{}</code></p>
+</details>
+<details class="evidence">
+  <summary>
+    <span class="tag top_token">top token</span>
+    <span><span class="sid">bef0bdb0</span> · <span class="proj">ci-scripts</span> · not_achieved</span>
+    <span class="right">114.4k tok · 55m</span>
+  </summary>
+  <p><strong>Summary</strong> · Claude misread the style guide and introduced em-dashes repeatedly in the writing session.</p>
+  <p><strong>Friction detail</strong> · Introduced a subtle regression in the chart rendering that only surfaced in mobile layouts after three passes.</p>
+  <p><strong>First prompt</strong> · <code>debug why the background job is failing silently in production</code></p>
+  <p><strong>Friction counts</strong> · <code>{"wrong_approach": 1, "buggy_code": 4, "tool_or_plugin_failure": 1}</code></p>
+</details>
+<div class="evidence-header">Most interrupts</div>
+<details class="evidence">
+  <summary>
+    <span class="tag top_interrupt">top interrupt</span>
+    <span><span class="sid">e3af8f13</span> · <span class="proj">ci-scripts</span> · unclear_from_transcript</span>
+    <span class="right">9.6k tok · 123m</span>
+  </summary>
+  <p><strong>Summary</strong> · User iterated on the blog draft; tone was still off after three revisions.</p>
+  <p><strong>Friction detail</strong> · (none)</p>
+  <p><strong>First prompt</strong> · <code>write a one-pager for next sprint's customer research plan</code></p>
+  <p><strong>Friction counts</strong> · <code>{}</code></p>
+</details>
+<details class="evidence">
+  <summary>
+    <span class="tag top_interrupt">top interrupt</span>
+    <span><span class="sid">02300b59</span> · <span class="proj">kb-index</span> · (no facet)</span>
+    <span class="right">17.8k tok · 45m</span>
+  </summary>
+  <p><strong>Summary</strong> · (no summary)</p>
+  <p><strong>Friction detail</strong> · (none)</p>
+  <p><strong>First prompt</strong> · <code>quick one — how many open PRs do we have right now</code></p>
+  <p><strong>Friction counts</strong> · <code>{}</code></p>
+</details>
+<details class="evidence">
+  <summary>
+    <span class="tag top_interrupt">top interrupt</span>
+    <span><span class="sid">18eecaa6</span> · <span class="proj">writing-garden</span> · (no facet)</span>
+    <span class="right">17.0k tok · 97m</span>
+  </summary>
+  <p><strong>Summary</strong> · (no summary)</p>
+  <p><strong>Friction detail</strong> · (none)</p>
+  <p><strong>First prompt</strong> · <code>write a one-pager for next sprint's customer research plan</code></p>
+  <p><strong>Friction counts</strong> · <code>{}</code></p>
+</details>
+<details class="evidence">
+  <summary>
+    <span class="tag top_interrupt">top interrupt</span>
+    <span><span class="sid">18663d70</span> · <span class="proj">writing-garden</span> · fully_achieved</span>
+    <span class="right">24.4k tok · 74m</span>
+  </summary>
+  <p><strong>Summary</strong> · User fixed registration regression, root cause was email encoding in legacy middleware.</p>
+  <p><strong>Friction detail</strong> · (none)</p>
+  <p><strong>First prompt</strong> · <code>Review the pull request #182 and leave constructive comments on the architecture</code></p>
+  <p><strong>Friction counts</strong> · <code>{}</code></p>
+</details>
+<details class="evidence">
+  <summary>
+    <span class="tag top_interrupt">top interrupt</span>
+    <span><span class="sid">410863bb</span> · <span class="proj">acme-dashboard</span> · not_achieved</span>
+    <span class="right">16.7k tok · 89m</span>
+  </summary>
+  <p><strong>Summary</strong> · Claude misread the style guide and introduced em-dashes repeatedly in the writing session.</p>
+  <p><strong>Friction detail</strong> · Attempted to solve the drift by patching the view layer; the real issue was in the query.</p>
+  <p><strong>First prompt</strong> · <code>run the migration for phase 3 and deploy to staging, then verify the new endpoint returns 200</code></p>
+  <p><strong>Friction counts</strong> · <code>{"wrong_approach": 3, "buggy_code": 3, "excessive_changes": 1}</code></p>
+</details>
+<div class="evidence-header">Not achieved</div>
+<details class="evidence">
+  <summary>
+    <span class="tag not_achieved">not achieved</span>
+    <span><span class="sid">6d71a83d</span> · <span class="proj">acme-dashboard</span> · not_achieved</span>
+    <span class="right">22.6k tok · 71m</span>
+  </summary>
+  <p><strong>Summary</strong> · User interrupted — Claude was exploring files instead of running the migration requested.</p>
+  <p><strong>Friction detail</strong> · Attempted to solve the drift by patching the view layer; the real issue was in the query.</p>
+  <p><strong>First prompt</strong> · <code>generate screenshots for the app store listing, must follow the new brand guidelines</code></p>
+  <p><strong>Friction counts</strong> · <code>{"misunderstood_request": 1, "user_rejected_action": 2, "wrong_approach": 4}</code></p>
+</details>
+<details class="evidence">
+  <summary>
+    <span class="tag not_achieved">not achieved</span>
+    <span><span class="sid">7e775195</span> · <span class="proj">acme-dashboard</span> · not_achieved</span>
+    <span class="right">25.4k tok · 66m</span>
+  </summary>
+  <p><strong>Summary</strong> · Claude hit output-token-limit twice; session ended without deploying.</p>
+  <p><strong>Friction detail</strong> · Introduced a subtle regression in the chart rendering that only surfaced in mobile layouts after three passes.</p>
+  <p><strong>First prompt</strong> · <code>There's a bug where the chart tooltip shows wrong percentages — can you trace the data flow and fix it</code></p>
+  <p><strong>Friction counts</strong> · <code>{"buggy_code": 8, "misunderstood_request": 1, "wrong_approach": 1}</code></p>
+</details>
+<div class="evidence-header">Control · fully achieved + essential</div>
+<details class="evidence">
+  <summary>
+    <span class="tag control_good">control good</span>
+    <span><span class="sid">eb2c328a</span> · <span class="proj">acme-dashboard</span> · fully_achieved</span>
+    <span class="right">28.4k tok · 88m</span>
+  </summary>
+  <p><strong>Summary</strong> · User reviewed PR #182, accepted architecture; flagged three minor refactors to pick up later.</p>
+  <p><strong>Friction detail</strong> · (none)</p>
+  <p><strong>First prompt</strong> · <code>generate screenshots for the app store listing, must follow the new brand guidelines</code></p>
+  <p><strong>Friction counts</strong> · <code>{}</code></p>
+</details>
+<details class="evidence">
+  <summary>
+    <span class="tag control_good">control good</span>
+    <span><span class="sid">1f01a923</span> · <span class="proj">ci-scripts</span> · fully_achieved</span>
+    <span class="right">10.5k tok · 48m</span>
+  </summary>
+  <p><strong>Summary</strong> · User iterated on pricing page hero copy across three drafts; final version approved.</p>
+  <p><strong>Friction detail</strong> · (none)</p>
+  <p><strong>First prompt</strong> · <code>debug why the background job is failing silently in production</code></p>
+  <p><strong>Friction counts</strong> · <code>{}</code></p>
+</details>
+<div class="evidence-header">You rejected Claude's action</div>
+<details class="evidence">
+  <summary>
+    <span class="tag user_rejected">user rejected</span>
+    <span><span class="sid">3f6f2851</span> · <span class="proj">design-lab</span> · partially_achieved</span>
+    <span class="right">16.1k tok · 82m</span>
+  </summary>
+  <p><strong>Summary</strong> · Claude hit output-token-limit twice; session ended without deploying.</p>
+  <p><strong>Friction detail</strong> · Introduced a subtle regression in the chart rendering that only surfaced in mobile layouts after three passes.</p>
+  <p><strong>First prompt</strong> · <code>help me write a short technical blog post about our latest release, 500-700 words</code></p>
+  <p><strong>Friction counts</strong> · <code>{"wrong_approach": 2, "excessive_changes": 1, "user_rejected_action": 2, "buggy_code": 3}</code></p>
+</details>
+
+</section>
+
+<section id="method">
+  <h2 class="sec" data-num="§ 07">Methodology</h2>
+  <h2 class="sec-title">What this report is — and what it is not.</h2>
+
+  <div class="method">
+  <h4>Data sources</h4>
+  <ul>
+    <li><code>~/.claude/usage-data/session-meta/*.json</code> — auto-recorded by Claude Code.</li>
+    <li><code>~/.claude/usage-data/facets/*.json</code> — LLM-classified by <code>/insights</code>; optional but recommended.</li>
+    <li><code>~/.claude/projects/**/*.jsonl</code> — raw transcripts, sampled for the evidence library only.</li>
+  </ul>
+
+  <h4>Sampling strategy</h4>
+  <p>Up to 24 sessions across 7 buckets: 5 highest-friction, 5 top-tokens, 5 most-interrupts, 4 not_achieved, 3 partially_achieved, 4 control (fully_achieved + essential), 2 user_rejected. When facets are absent, fallback is by session duration.</p>
+
+  <h4>Caveats</h4>
+  <div class="caveat">
+  Facet labels come from an LLM and may be miscategorized. Above roughly 50% facet coverage, outcome-based rules are reliable; below 30%, some dimensions return n/a. Scoring thresholds are rules of thumb, not science. The peer review depends on there being enough data to say specific things — if your data is thin, the review should be short, not padded.
+  </div>
+  </div>
+</section>
+
+<footer>
+  <div>cc-user-autopsy · <a href="https://github.com/Imbad0202/cc-user-autopsy">repo</a> · rule-based + LLM-assisted · re-run the skill anytime</div>
+</footer>
+
+</main>
+
+<script>
+/* Chart.js — editorial palette, minimal chrome */
+const INK = '#1a1916', INK_SOFT = '#464239', MUTED = '#7a7363', RULE = '#c9bfa8';
+const ACCENT = '#a0431e', OCHRE = '#b28121', FOREST = '#2e5b3e', OXBLOOD = '#6b1b1b', PLUM = '#63355c';
+const PAL = [ACCENT, FOREST, OCHRE, OXBLOOD, PLUM, '#516881', '#8a6f45', '#7a4f3e', '#4a6b5b', '#7b5f80', '#a06b45', '#5b6b7a'];
+
+Chart.defaults.font.family = '"Inter Tight", -apple-system, sans-serif';
+Chart.defaults.font.size = 11;
+Chart.defaults.color = INK_SOFT;
+Chart.defaults.borderColor = RULE;
+
+const commonOpts = {
+  responsive: true, maintainAspectRatio: false,
+  plugins: {
+    legend: {
+      labels: {
+        color: INK_SOFT,
+        font: { family: '"JetBrains Mono", monospace', size: 10 },
+        usePointStyle: true, boxWidth: 8, padding: 14
+      }
+    },
+    tooltip: {
+      backgroundColor: '#1a1916',
+      titleColor: '#f4efe6', bodyColor: '#f4efe6',
+      titleFont: { family: 'JetBrains Mono', size: 11 },
+      bodyFont: { family: 'Inter Tight', size: 12 },
+      padding: 10, cornerRadius: 0,
+      displayColors: false
+    },
+    title: {
+      display: true,
+      color: INK,
+      font: { family: '"Fraunces", serif', size: 13, weight: '500' },
+      padding: { top: 2, bottom: 14 },
+      align: 'start'
+    }
+  },
+  scales: {
+    x: { ticks: { color: MUTED, font: { family: 'JetBrains Mono', size: 10 } },
+         grid: { color: 'rgba(0,0,0,0.04)', drawBorder: false },
+         border: { color: RULE } },
+    y: { ticks: { color: MUTED, font: { family: 'JetBrains Mono', size: 10 } },
+         grid: { color: 'rgba(0,0,0,0.04)', drawBorder: false },
+         border: { color: RULE } }
+  }
+};
+
+/* ---- Overview charts ---- */
+new Chart(document.getElementById('outcomeChart'), {
+  type: 'doughnut',
+  data: {
+    labels: ["unclear_from_transcript", "fully_achieved", "mostly_achieved", "partially_achieved", "not_achieved"],
+    datasets: [{ data: [15, 55, 45, 33, 6], backgroundColor: PAL, borderColor: '#f4efe6', borderWidth: 3 }]
+  },
+  options: { ...commonOpts,
+    plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Outcomes · rated sessions' } },
+    scales: {}, cutout: '62%' }
+});
+new Chart(document.getElementById('stypeChart'), {
+  type: 'doughnut',
+  data: {
+    labels: ["multi_task", "iterative_refinement", "exploration", "single_task", "quick_question"],
+    datasets: [{ data: [47, 55, 13, 25, 14], backgroundColor: PAL, borderColor: '#f4efe6', borderWidth: 3 }]
+  },
+  options: { ...commonOpts,
+    plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Session types' } },
+    scales: {}, cutout: '62%' }
+});
+
+new Chart(document.getElementById('projChart'), {
+  type: 'bar',
+  data: {
+    labels: ["acme-dashboard", "design-lab", "spark-mobile", "prod-monitor", "ci-scripts", "writing-garden", "kb-index"],
+    datasets: [
+      { label: 'Sessions', data: [99, 51, 44, 23, 22, 21, 20], backgroundColor: INK_SOFT, borderWidth: 0, borderRadius: 0, barPercentage: 0.62, categoryPercentage: 0.9 },
+      { label: 'Friction', data: [124, 61, 54, 16, 15, 26, 27], backgroundColor: ACCENT, borderWidth: 0, borderRadius: 0, barPercentage: 0.62, categoryPercentage: 0.9 }
+    ]
+  },
+  options: { ...commonOpts, plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Top projects · sessions vs friction' } } }
+});
+
+/* ---- Prompt length ---- */
+new Chart(document.getElementById('plenChart'), {
+  type: 'bar',
+  data: {
+    labels: ["<20", "20-50", "50-100", "100-300", ">=300"],
+    datasets: [
+      { label: 'Good rate % (full+mostly)', data: [0, 0, 64.6, 66.7, 0], backgroundColor: FOREST, borderRadius: 0 },
+      { label: 'Session count', data: [0, 0, 130, 24, 0], backgroundColor: INK_SOFT, borderRadius: 0, yAxisID: 'y1' }
+    ]
+  },
+  options: { ...commonOpts,
+    plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Prompt length × outcome' } },
+    scales: {
+      x: commonOpts.scales.x,
+      y: { ...commonOpts.scales.y, position: 'left', title: { display: true, text: '%', color: MUTED, font: { family: 'JetBrains Mono', size: 10 } } },
+      y1: { position: 'right', grid: { display: false }, ticks: { color: MUTED, font: { family: 'JetBrains Mono', size: 10 } }, title: { display: true, text: 'n', color: MUTED, font: { family: 'JetBrains Mono', size: 10 } } }
+    }
+  }
+});
+
+/* ---- Friction ---- */
+new Chart(document.getElementById('fricChart'), {
+  type: 'bar',
+  data: { labels: ["buggy_code", "wrong_approach", "misunderstood_request", "excessive_changes", "output_token_limit_exceeded", "external_api_error", "tool_limitation", "tool_or_plugin_failure", "environmental_issue", "user_rejected_action"], datasets: [{ label: 'count', data: [110, 94, 32, 27, 19, 12, 9, 7, 7, 6], backgroundColor: OXBLOOD, borderRadius: 0 }] },
+  options: { ...commonOpts, indexAxis: 'y', plugins: { ...commonOpts.plugins, legend: { display: false }, title: { ...commonOpts.plugins.title, text: 'Top 12 friction types' } } }
+});
+
+/* ---- Tools ---- */
+new Chart(document.getElementById('toolChart'), {
+  type: 'bar',
+  data: { labels: ["Bash", "Read", "Edit", "Grep", "TaskUpdate", "Agent", "Write", "TaskCreate", "Task", "Glob", "WebSearch", "TodoWrite", "Skill", "mcp__plugin_supabase_supabas", "mcp__plugin_playwright_playw"], datasets: [{ label: 'calls', data: [5489, 4286, 3257, 1660, 1081, 996, 826, 814, 506, 487, 181, 176, 166, 85, 74], backgroundColor: INK, borderRadius: 0 }] },
+  options: { ...commonOpts, indexAxis: 'y', plugins: { ...commonOpts.plugins, legend: { display: false }, title: { ...commonOpts.plugins.title, text: 'Top 15 tool calls' } } }
+});
+
+/* ---- Heatmap (scatter proxy) ---- */
+const heatGrid = [[0, 3, 1, 2, 5, 1, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 4, 1, 2, 2, 5, 5, 4, 6], [3, 2, 1, 2, 0, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 2, 6, 7, 3, 0, 3, 2, 2], [5, 3, 1, 4, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 7, 4, 0, 4, 7, 1], [4, 5, 3, 2, 2, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 4, 3, 4, 1, 2, 5, 7, 4], [5, 1, 2, 0, 4, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 7, 2, 3, 6, 2, 1], [1, 5, 1, 1, 1, 3, 1, 2, 0, 1, 0, 0, 0, 0, 0, 0, 3, 5, 2, 2, 2, 2, 4, 4], [3, 3, 2, 3, 3, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 3, 0, 1, 2, 0, 2]];
+const heatMax = Math.max(1, ...heatGrid.flat());
+const heatLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const heatData = [];
+for (let wd = 0; wd < 7; wd++) for (let hr = 0; hr < 24; hr++) {
+  heatData.push({ x: hr, y: 6 - wd, v: heatGrid[wd][hr] });
+}
+new Chart(document.getElementById('heatChart'), {
+  type: 'scatter',
+  data: { datasets: [{
+    data: heatData,
+    backgroundColor: (ctx) => {
+      const v = ctx.raw.v; if (v === 0) return 'rgba(201,191,168,0.25)';
+      const t = v / heatMax;
+      /* blend from paper-deep to accent */
+      const r = Math.round(236 + (160 - 236) * t);
+      const g = Math.round(229 + (67 - 229) * t);
+      const b = Math.round(213 + (30 - 213) * t);
+      return `rgb(${r},${g},${b})`;
+    },
+    pointRadius: 11, pointStyle: 'rectRounded', pointBorderWidth: 0
+  }] },
+  options: { ...commonOpts,
+    plugins: { ...commonOpts.plugins, legend: { display: false },
+      title: { ...commonOpts.plugins.title, text: 'Weekday × hour · session density' },
+      tooltip: { ...commonOpts.plugins.tooltip, callbacks: { label: (ctx) => `${heatLabels[6 - ctx.raw.y]} ${ctx.raw.x}:00 → ${ctx.raw.v} sessions`, title: () => '' } } },
+    scales: {
+      x: { min: -0.5, max: 23.5, ticks: { stepSize: 2, color: MUTED, font: { family: 'JetBrains Mono', size: 10 }, callback: (v) => v + ':00' }, grid: { color: 'rgba(0,0,0,0.04)', drawBorder: false }, border: { color: RULE } },
+      y: { min: -0.5, max: 6.5, ticks: { stepSize: 1, color: MUTED, font: { family: 'JetBrains Mono', size: 10 }, callback: (v) => heatLabels[6 - v] || '' }, grid: { color: 'rgba(0,0,0,0.04)', drawBorder: false }, border: { color: RULE } }
+    }
+  }
+});
+
+/* ---- Helpfulness ---- */
+new Chart(document.getElementById('helpChart'), {
+  type: 'bar',
+  data: { labels: ["very_helpful", "unhelpful", "moderately_helpful", "essential", "slightly_helpful"], datasets: [{ label: 'count', data: [72, 18, 27, 28, 9], backgroundColor: PAL, borderRadius: 0 }] },
+  options: { ...commonOpts, plugins: { ...commonOpts.plugins, legend: { display: false }, title: { ...commonOpts.plugins.title, text: "Claude's self-rated helpfulness" } } }
+});
+
+/* ---- Growth curve ---- */
+new Chart(document.getElementById('growthChart'), {
+  type: 'line',
+  data: { labels: ["2026-W01", "2026-W02", "2026-W03", "2026-W04", "2026-W05", "2026-W06", "2026-W07", "2026-W08", "2026-W09", "2026-W10", "2026-W11", "2026-W12", "2026-W13", "2026-W14", "2026-W15"], datasets: [
+    { label: 'Composite score', data: [30.0, 91.9, 92.7, 76.8, 89.6, 82.2, 81.5, 72.7, 80.5, 95.5, 79.3, 63.2, 76.0, 83.2, 60.6], borderColor: ACCENT, backgroundColor: 'rgba(160,67,30,0.12)', borderWidth: 2, tension: 0.25, fill: true, pointRadius: 3, pointBackgroundColor: ACCENT },
+    { label: 'Good-outcome rate', data: [0.0, 87.5, 83.3, 50.0, 88.9, 70.0, 61.5, 50.0, 70.0, 90.5, 61.1, 33.3, 58.8, 66.7, 50.0], borderColor: FOREST, borderWidth: 1.5, tension: 0.25, pointRadius: 2, borderDash: [3, 3] },
+    { label: 'Task agent adoption', data: [100.0, 100.0, 100.0, 100.0, 90.9, 88.2, 96.2, 96.8, 94.4, 100.0, 90.5, 96.3, 92.9, 100.0, 100.0], borderColor: PLUM, borderWidth: 1.5, tension: 0.25, pointRadius: 2, borderDash: [3, 3] }
+  ] },
+  options: { ...commonOpts, plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Composite skill curve (0-100)' } },
+    scales: { x: commonOpts.scales.x, y: { ...commonOpts.scales.y, min: 0, max: 100 } } }
+});
+
+/* ---- Weekly series ---- */
+const wL = ["2026-W01", "2026-W02", "2026-W03", "2026-W04", "2026-W05", "2026-W06", "2026-W07", "2026-W08", "2026-W09", "2026-W10", "2026-W11", "2026-W12", "2026-W13", "2026-W14", "2026-W15"];
+new Chart(document.getElementById('wkSessions'), {
+  type: 'line',
+  data: { labels: wL, datasets: [
+    { label: 'Sessions', data: [2, 9, 11, 12, 11, 17, 26, 31, 18, 37, 42, 27, 28, 7, 2], borderColor: INK, backgroundColor: 'rgba(26,25,22,0.08)', borderWidth: 1.5, tension: 0.2, fill: true, pointRadius: 2, pointBackgroundColor: INK },
+    { label: 'With Task agent', data: [2, 9, 11, 12, 10, 15, 25, 30, 17, 37, 38, 26, 26, 7, 2], borderColor: ACCENT, borderWidth: 1.5, tension: 0.2, pointRadius: 2, pointBackgroundColor: ACCENT, borderDash: [4, 3] }
+  ] },
+  options: { ...commonOpts, plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Weekly sessions · Task agent adoption' } } }
+});
+new Chart(document.getElementById('wkTokens'), {
+  type: 'line',
+  data: { labels: wL, datasets: [
+    { label: 'Tokens (M)', data: [0.029, 0.228, 0.161, 0.202, 0.208, 0.41, 0.521, 0.468, 0.221, 0.786, 0.732, 0.563, 0.404, 0.095, 0.104], borderColor: OCHRE, backgroundColor: 'rgba(178,129,33,0.1)', borderWidth: 1.5, tension: 0.2, fill: true, pointRadius: 2, pointBackgroundColor: OCHRE, yAxisID: 'y' },
+    { label: 'Commits', data: [1, 4, 19, 9, 8, 18, 19, 31, 14, 43, 39, 19, 13, 10, 0], borderColor: FOREST, borderWidth: 1.5, tension: 0.2, pointRadius: 2, pointBackgroundColor: FOREST, yAxisID: 'y1' }
+  ] },
+  options: { ...commonOpts,
+    plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Weekly tokens × commits' } },
+    scales: { x: commonOpts.scales.x, y: { ...commonOpts.scales.y, position: 'left', title: { display: true, text: 'M tokens', color: MUTED, font: { family: 'JetBrains Mono', size: 10 } } },
+      y1: { position: 'right', grid: { display: false }, ticks: { color: MUTED, font: { family: 'JetBrains Mono', size: 10 } }, title: { display: true, text: 'commits', color: MUTED, font: { family: 'JetBrains Mono', size: 10 } } }
+    } }
+});
+new Chart(document.getElementById('wkGood'), {
+  type: 'line',
+  data: { labels: wL, datasets: [
+    { label: 'Good rate %', data: [0.0, 87.5, 83.3, 50.0, 88.9, 70.0, 61.5, 50.0, 70.0, 90.5, 61.1, 33.3, 58.8, 66.7, 50.0], borderColor: FOREST, backgroundColor: 'rgba(46,91,62,0.12)', borderWidth: 1.5, tension: 0.2, fill: true, pointRadius: 2, pointBackgroundColor: FOREST }
+  ] },
+  options: { ...commonOpts, plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Weekly good-outcome rate %' } },
+    scales: { x: commonOpts.scales.x, y: { ...commonOpts.scales.y, min: 0, max: 100 } } }
+});
+new Chart(document.getElementById('wkFric'), {
+  type: 'bar',
+  data: { labels: wL, datasets: [{ label: 'Friction count', data: [17, 8, 2, 11, 10, 11, 14, 56, 30, 7, 27, 69, 43, 7, 11], backgroundColor: OXBLOOD, borderRadius: 0 }] },
+  options: { ...commonOpts, plugins: { ...commonOpts.plugins, legend: { display: false }, title: { ...commonOpts.plugins.title, text: 'Weekly friction totals' } } }
+});
+new Chart(document.getElementById('wkPlen'), {
+  type: 'line',
+  data: { labels: wL, datasets: [
+    { label: 'Avg prompt length (chars)', data: [80, 74.4, 75.3, 75.8, 80, 77.2, 82.6, 77.7, 79.9, 83.5, 79.9, 78.4, 83.6, 85.6, 91], borderColor: PLUM, backgroundColor: 'rgba(99,53,92,0.1)', borderWidth: 1.5, tension: 0.2, fill: true, pointRadius: 2, pointBackgroundColor: PLUM }
+  ] },
+  options: { ...commonOpts, plugins: { ...commonOpts.plugins, title: { ...commonOpts.plugins.title, text: 'Weekly avg prompt length' } } }
+});
+</script>
+</body>
+</html>

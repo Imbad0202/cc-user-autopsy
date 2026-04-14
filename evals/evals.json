@@ -1,0 +1,61 @@
+{
+  "skill_name": "cc-user-autopsy",
+  "evals": [
+    {
+      "id": 1,
+      "name": "explicit-autopsy-request",
+      "prompt": "Can you do a deep autopsy of how I've been using claude code? I've been at it heavily for the past few months and the built-in /insights feels too surface level. I want actual scores on where I'm strong and where I'm weak, backed by numbers from my own sessions. HTML report is fine.",
+      "expected_output": "Skill runs all 4 phases, produces HTML at ~/.claude/usage-data/cc-user-autopsy.html containing 8 rule-based scores, a personalized peer review with session-ID evidence, and 14 charts. Final message names the top improvement area and points to the HTML path.",
+      "files": [],
+      "assertions": [
+        {"name": "skill-invoked", "text": "The agent invoked the cc-user-autopsy skill (visible by running aggregate/sample/build_html scripts or mentioning phases)."},
+        {"name": "html-file-exists", "text": "The file ~/.claude/usage-data/cc-user-autopsy.html was written and is >= 20000 bytes.", "check_file": "~/.claude/usage-data/cc-user-autopsy.html", "check_min_size": 20000},
+        {"name": "peer-review-has-three-strengths-three-improvements", "text": "The HTML contains both 'Three things you are doing well' and 'Three specific improvements' headings.", "check_file_contains_all": ["Three things you are doing well", "Three specific improvements"]},
+        {"name": "eight-dimensions-present", "text": "The HTML shows all 8 scoring dimensions (D1-D8).", "check_file_contains_all": ["D1 ·", "D2 ·", "D3 ·", "D4 ·", "D5 ·", "D6 ·", "D7 ·", "D8 ·"]},
+        {"name": "charts-rendered-14", "text": "The HTML contains exactly 14 <canvas> elements and 14 Chart.js instantiations (growth curve + 13 others).", "check_file_count": {"<canvas": 14, "new Chart(": 14}},
+        {"name": "final-message-points-to-report", "text": "The final message to the user mentions the HTML file path so they can open it."},
+        {"name": "does-not-dump-full-report-inline", "text": "The final message does not paste the full HTML or full peer review into the conversation — just a short summary."}
+      ]
+    },
+    {
+      "id": 2,
+      "name": "implicit-workflow-audit",
+      "prompt": "I feel like I've been grinding on claude code but not sure what I'm actually doing well. Is there a way to look at my session data and tell me if there are bad habits I've picked up?",
+      "expected_output": "Skill is triggered even though the user didn't explicitly say 'autopsy' or 'insights'. HTML report is produced and the agent highlights bad habits backed by specific numbers.",
+      "files": [],
+      "assertions": [
+        {"name": "skill-triggered-on-implicit-phrasing", "text": "The agent recognized this as a workflow-audit request and invoked the cc-user-autopsy skill (rather than doing ad-hoc greps)."},
+        {"name": "html-file-exists", "text": "The file ~/.claude/usage-data/cc-user-autopsy.html was written and is >= 20000 bytes.", "check_file": "~/.claude/usage-data/cc-user-autopsy.html", "check_min_size": 20000},
+        {"name": "improvement-has-actionable-fix", "text": "At least one improvement in the peer review contains 'Actionable fix' pointing to a specific daily action.", "check_file_contains_all": ["Actionable fix"]},
+        {"name": "response-mentions-bad-habits", "text": "The final message explicitly names at least one habit the user should change."}
+      ]
+    },
+    {
+      "id": 3,
+      "name": "hr-portfolio-request",
+      "prompt": "I'm planning to apply to AI companies like Anthropic, OpenAI, and xAI. Can you build me an honest portfolio report of my Claude Code usage that a hiring manager would actually read? I want it to show what I've shipped and where I'm genuinely strong — not a marketing pitch.",
+      "expected_output": "Skill invoked with --audience hr. HTML contains the at-a-glance profile card, shipped-with-claude section, how-to-read primer, and growth curve. The agent explicitly acknowledges the portfolio framing.",
+      "files": [],
+      "assertions": [
+        {"name": "hr-flag-used", "text": "The agent ran build_html.py with --audience hr.", "check_bash_history_contains": "--audience hr"},
+        {"name": "hr-html-exists", "text": "An HR-variant HTML file was produced (name may vary).", "check_file_any": ["~/.claude/usage-data/cc-user-autopsy-hr.html", "~/.claude/usage-data/cc-user-autopsy.html"], "check_min_size": 25000},
+        {"name": "profile-card-rendered", "text": "HTML contains the at-a-glance profile card.", "check_file_contains_all": ["AT A GLANCE", "profile-card", "Shipped with Claude"]},
+        {"name": "how-to-read-primer-present", "text": "The 30-second primer is embedded.", "check_file_contains_all": ["How to read this report"]},
+        {"name": "growth-curve-chart", "text": "The composite growth curve chart is rendered.", "check_file_contains_all": ["growthChart", "Composite skill"]},
+        {"name": "response-acknowledges-hr-framing", "text": "The agent mentions the portfolio / hiring manager framing in its response (not just dumps the report)."}
+      ]
+    },
+    {
+      "id": 4,
+      "name": "specific-stat-query-should-not-over-trigger",
+      "prompt": "Quick question: how many claude code sessions have I run in the last 30 days? Just the number.",
+      "expected_output": "Skill should NOT trigger — this is a one-stat question that can be answered with a single grep/ls, not a holistic review.",
+      "files": [],
+      "assertions": [
+        {"name": "skill-not-triggered", "text": "The cc-user-autopsy skill was NOT invoked (no aggregate.py / sample_sessions.py / build_html.py calls)."},
+        {"name": "no-html-generated", "text": "No new cc-user-autopsy.html was written.", "check_file_not_written": "~/.claude/usage-data/cc-user-autopsy.html"},
+        {"name": "answer-is-concise", "text": "The answer is a single number or a short sentence, not a multi-section report."}
+      ]
+    }
+  ]
+}
