@@ -1296,10 +1296,9 @@ def main():
     total_tok = agg["tokens"]["total"]
     commits_total = sum(p["commits"] for p in agg["projects"].values())
     duration_hr = int(sum(p["duration_min"] for p in agg["projects"].values()) / 60)
-    ta_count = agg["tools"]["sessions_using_task_agent"]
-    mcp_count = agg["tools"]["sessions_using_mcp"]
-    ta_rate = int(100 * ta_count / total) if total else 0
-    mcp_rate = int(100 * mcp_count / total) if total else 0
+    profile_for_rates = agg.get("profile_summary", {})
+    ta_rate = int(round(profile_for_rates.get("ta_pct", 0)))
+    mcp_rate = int(round(profile_for_rates.get("mcp_pct", 0)))
 
     # Chart series
     weekly = agg["weekly"]
