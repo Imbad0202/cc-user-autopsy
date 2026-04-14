@@ -7,15 +7,11 @@ description: Produces a deep, honest peer-review of how someone uses Claude Code
 
 Produces an honest, evidence-traceable peer-review of a user's Claude Code workflow.
 
-## When to use
+## When NOT to use
 
-Trigger when the user asks for any of:
-- A deeper or more honest version of `/insights`
-- An audit/review/critique of their own Claude Code habits, workflow, or skill level
-- A statistical breakdown of how they use Claude Code
-- Help identifying what they do well / badly in Claude Code sessions
+The frontmatter above describes when to trigger this skill. One case to skip:
 
-Skip if the user only wants one narrow statistic they can get with a single grep — this skill is for holistic reviews, not ad-hoc queries.
+**If the user only wants one narrow statistic** that a single grep / ls / wc can answer (e.g. "how many sessions did I run this week") — just answer directly. This skill is for holistic peer review, not ad-hoc lookups.
 
 ## What this skill produces
 

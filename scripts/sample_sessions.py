@@ -8,28 +8,56 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, deque
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude/projects"
 
+HEAD_KEEP = 10
+TAIL_KEEP = 10
 
-def find_jsonl(sid: str, projects_dir: Path) -> Path | None:
-    """Find the .jsonl containing this session's transcript."""
-    for f in projects_dir.rglob(f"{sid}.jsonl"):
-        return f
+
+import re as _re
+_SID_RE = _re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
+
+
+def build_jsonl_index(projects_dir: Path) -> dict[str, Path]:
+    """Build a sid → path index by scanning transcripts once.
+
+    Two passes: first by filename stem (covers most transcripts in Claude Code's
+    native layout), then a head scan of remaining files for embedded sid
+    substrings. Total I/O stays O(jsonl count) rather than O(picks × jsonl).
+    """
+    index: dict[str, Path] = {}
+    unresolved: list[Path] = []
+
     for f in projects_dir.rglob("*.jsonl"):
+        stem = f.stem
+        if _SID_RE.fullmatch(stem):
+            index.setdefault(stem, f)
+        else:
+            unresolved.append(f)
+
+    for f in unresolved:
         try:
             with open(f, "r") as fp:
                 head = "".join(fp.readline() for _ in range(3))
-            if sid in head:
-                return f
         except Exception:
             continue
-    return None
+        for match in _SID_RE.findall(head):
+            index.setdefault(match, f)
+
+    return index
 
 
-def extract_turns(jsonl_path: Path):
-    turns = []
+def stream_summary(jsonl_path: Path):
+    """Stream the transcript once, producing (summarized_turns, total_turns).
+
+    Keeps only the first HEAD_KEEP meaningful summaries plus a rolling deque
+    of the last TAIL_KEEP — never loads the whole file into memory.
+    """
+    head: list[dict] = []
+    tail: deque = deque(maxlen=TAIL_KEEP)
+    total = 0
     try:
         with open(jsonl_path, "r") as fp:
             for line in fp:
@@ -37,67 +65,78 @@ def extract_turns(jsonl_path: Path):
                 if not line:
                     continue
                 try:
-                    turns.append(json.loads(line))
+                    rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                total += 1
+                turn = _summarize_one(rec)
+                if turn is None:
+                    continue
+                if len(head) < HEAD_KEEP:
+                    head.append(turn)
+                else:
+                    tail.append(turn)
     except Exception as e:
-        return None, str(e)
-    return turns, None
+        return None, total, str(e)
+
+    out = list(head)
+    if tail and total > HEAD_KEEP + TAIL_KEEP:
+        skipped = total - len(head) - len(tail)
+        if skipped > 0:
+            out.append({"role": "_skip", "n_skipped": skipped})
+    out.extend(tail)
+    return out, total, None
 
 
-def summarize_turns(turns):
-    """Compact summary: user text + assistant text/tool names only.
-    Keeps first 10 + last 10 meaningful turns if more than 25 total."""
-    out = []
-    for t in turns:
-        msg = t.get("message") or {}
-        role = msg.get("role")
-        content = msg.get("content", "")
+def _summarize_one(rec) -> dict | None:
+    """Reduce one raw JSONL record to the compact turn format, or None to skip."""
+    msg = rec.get("message") or {}
+    role = msg.get("role")
+    content = msg.get("content", "")
 
-        if role == "user":
-            text = ""
-            if isinstance(content, str):
-                text = content
-            elif isinstance(content, list):
-                parts = []
-                for blk in content:
-                    if not isinstance(blk, dict):
-                        continue
-                    if blk.get("type") == "text":
-                        parts.append(blk.get("text", ""))
-                    elif blk.get("type") == "tool_result":
-                        c = blk.get("content", "")
-                        if isinstance(c, list):
-                            c = " ".join(
-                                b.get("text", "")[:120] for b in c
-                                if isinstance(b, dict)
-                            )
-                        parts.append(f"[tool_result: {str(c)[:120]}]")
-                text = "\n".join(parts)
-            if text.strip() and not text.startswith("[tool_result"):
-                out.append({"role": "user", "text": text[:700]})
-        elif role == "assistant":
-            text_parts = []
-            tool_names = []
-            if isinstance(content, list):
-                for blk in content:
-                    if not isinstance(blk, dict):
-                        continue
-                    if blk.get("type") == "text":
-                        text_parts.append(blk.get("text", ""))
-                    elif blk.get("type") == "tool_use":
-                        tool_names.append(blk.get("name", ""))
-            text = " ".join(text_parts)
-            if text.strip() or tool_names:
-                out.append({
-                    "role": "assistant",
-                    "text": text[:350],
-                    "tools": tool_names[:10],
-                })
+    if role == "user":
+        text = ""
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            parts = []
+            for blk in content:
+                if not isinstance(blk, dict):
+                    continue
+                if blk.get("type") == "text":
+                    parts.append(blk.get("text", ""))
+                elif blk.get("type") == "tool_result":
+                    c = blk.get("content", "")
+                    if isinstance(c, list):
+                        c = " ".join(
+                            b.get("text", "")[:120] for b in c
+                            if isinstance(b, dict)
+                        )
+                    parts.append(f"[tool_result: {str(c)[:120]}]")
+            text = "\n".join(parts)
+        if text.strip() and not text.startswith("[tool_result"):
+            return {"role": "user", "text": text[:700]}
+        return None
 
-    if len(out) > 25:
-        return out[:10] + [{"role": "_skip", "n_skipped": len(out) - 20}] + out[-10:]
-    return out
+    if role == "assistant":
+        text_parts = []
+        tool_names = []
+        if isinstance(content, list):
+            for blk in content:
+                if not isinstance(blk, dict):
+                    continue
+                if blk.get("type") == "text":
+                    text_parts.append(blk.get("text", ""))
+                elif blk.get("type") == "tool_use":
+                    tool_names.append(blk.get("name", ""))
+        text = " ".join(text_parts)
+        if text.strip() or tool_names:
+            return {
+                "role": "assistant",
+                "text": text[:350],
+                "tools": tool_names[:10],
+            }
+    return None
 
 
 def pick_representatives(sessions, have_facets):
@@ -173,23 +212,26 @@ def main():
     picks = pick_representatives(sessions, have_facets)
     print(f"picked {len(picks)} representative sessions", file=sys.stderr)
 
+    index = build_jsonl_index(projects_dir)
+    print(f"indexed {len(index)} transcripts", file=sys.stderr)
+
     samples = {}
     for sid, (tag, s) in picks.items():
-        jsonl = find_jsonl(sid, projects_dir)
+        jsonl = index.get(sid)
         entry = {"tag": tag, "meta": s}
         if not jsonl:
             entry["error"] = "jsonl not found"
             samples[sid] = entry
             continue
-        turns, err = extract_turns(jsonl)
+        compact, total, err = stream_summary(jsonl)
         if err:
             entry["error"] = err
             entry["jsonl_path"] = str(jsonl)
             samples[sid] = entry
             continue
         entry["jsonl_path"] = str(jsonl)
-        entry["total_turns"] = len(turns)
-        entry["compact_turns"] = summarize_turns(turns)
+        entry["total_turns"] = total
+        entry["compact_turns"] = compact
         samples[sid] = entry
 
     out = Path(args.output).expanduser()

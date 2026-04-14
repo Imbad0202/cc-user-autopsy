@@ -202,7 +202,6 @@ def score_d3_prompt_quality(sessions):
     rate_100 = 100 * plen_ge_100 / len(sessions)
     rate_lt_20 = 100 * plen_lt_20 / len(sessions)
 
-    # Compute efficiency by bucket
     buckets = defaultdict(list)
     for s in sessions:
         if s["git_commits"] > 0:
@@ -547,7 +546,6 @@ def compute_aggregates(sessions, rated, facets_coverage):
         })
     result["weekly"] = wk
 
-    # extremes
     def top_by(key, n=10, reverse=True):
         rows = sorted(sessions, key=lambda x: x.get(key, 0), reverse=reverse)
         return [{
@@ -777,6 +775,9 @@ def main():
     aggregates = compute_aggregates(sessions, rated, facets_coverage)
     scores = compute_scores(sessions, rated, facets_coverage)
 
+    # _sessions is the per-session row schema consumed by sample_sessions.py
+    # and build_html.py. Keys listed below are the contract — removing or
+    # renaming one will silently break downstream scripts.
     final = {
         "meta": meta,
         "aggregates": aggregates,
