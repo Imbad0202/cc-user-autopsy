@@ -69,12 +69,13 @@ def detect_tz() -> timezone:
 
 def load_all(meta_dir: Path, facets_dir: Path):
     metas, facets = {}, {}
-    for f in meta_dir.glob("*.json"):
-        try:
-            d = json.loads(f.read_text())
-            metas[d["session_id"]] = d
-        except Exception as e:
-            print(f"warn: meta load err {f.name}: {e}", file=sys.stderr)
+    if meta_dir.exists():
+        for f in meta_dir.glob("*.json"):
+            try:
+                d = json.loads(f.read_text())
+                metas[d["session_id"]] = d
+            except Exception as e:
+                print(f"warn: meta load err {f.name}: {e}", file=sys.stderr)
     if facets_dir.exists():
         for f in facets_dir.glob("*.json"):
             try:
@@ -83,6 +84,96 @@ def load_all(meta_dir: Path, facets_dir: Path):
             except Exception as e:
                 print(f"warn: facet load err {f.name}: {e}", file=sys.stderr)
     return metas, facets
+
+
+# Fields a redacted row carries on the meta side. Must stay in sync with
+# _scripts/dump-redacted-sessions.py in claude-memory-sync.
+# Last 4 fields (assistant_message_count, cache_*_tokens, model_counts) are only
+# present when the dump was produced from scan_transcripts.py output; legacy
+# dumps from session-meta don't have them and their absence is handled by
+# .get() defaults.
+_REDACTED_META_KEYS = {
+    "session_id", "start_time", "project_path", "duration_minutes",
+    "input_tokens", "output_tokens", "tool_counts", "user_message_count",
+    "git_commits", "git_pushes", "user_interruptions", "tool_errors",
+    "uses_task_agent", "uses_mcp", "uses_web_search", "uses_web_fetch",
+    "lines_added", "lines_removed", "files_modified",
+    "user_response_times", "message_hours",
+    "assistant_message_count",
+    "cache_creation_input_tokens", "cache_read_input_tokens",
+    "model_counts",
+}
+_REDACTED_FACETS_KEYS = {
+    "session_id", "outcome", "claude_helpfulness", "session_type",
+    "friction_counts", "primary_success", "goal_categories",
+}
+
+
+def load_transcript_rows(path: Path):
+    """Read a scan_transcripts.py output jsonl, return meta-shaped dicts.
+
+    Each line is a full (non-redacted) session row. Used when aggregate.py
+    is run as --transcript-rows to bypass the partial session-meta dir.
+    """
+    metas, facets = {}, {}
+    if not path.exists():
+        return metas, facets
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+        except Exception as e:
+            print(f"warn: transcript-row parse err: {e}", file=sys.stderr)
+            continue
+        sid = r.get("session_id")
+        if not sid:
+            continue
+        metas[sid] = r
+    return metas, facets
+
+
+def load_redacted(path: Path):
+    """Read a sessions-redacted.jsonl file, return (metas, facets, source_by_sid).
+
+    Redacted rows have first_prompt_len but no first_prompt raw text, and no
+    brief_summary / friction_detail / underlying_goal text. We fabricate a
+    first_prompt placeholder of the correct length so build_sessions'
+    len(first_prompt) call matches. All text fields stay empty.
+    """
+    metas, facets, source_by_sid = {}, {}, {}
+    if not path.exists():
+        return metas, facets, source_by_sid
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+        except Exception as e:
+            print(f"warn: redacted parse err in {path.name}: {e}", file=sys.stderr)
+            continue
+        sid = r.get("session_id")
+        if not sid:
+            continue
+        source_by_sid[sid] = r.get("source_machine", "unknown")
+        m = {k: r[k] for k in _REDACTED_META_KEYS if k in r}
+        # Rehydrate a placeholder first_prompt of the correct length so the
+        # downstream len() call produces the right bucket. Content is a string
+        # of non-leaky filler chars. Any code reading first_prompt as text will
+        # see filler, not real content.
+        n = r.get("first_prompt_len", 0)
+        m["first_prompt"] = "\u00a0" * n  # NBSP filler — visually empty, len-preserving
+        metas[sid] = m
+        if r.get("outcome"):
+            f = {k: r[k] for k in _REDACTED_FACETS_KEYS if k in r}
+            # Empty text fields — explicit so downstream .get() works
+            f["brief_summary"] = ""
+            f["friction_detail"] = ""
+            f["underlying_goal"] = ""
+            facets[sid] = f
+    return metas, facets, source_by_sid
 
 
 def build_sessions(metas, facets, tz):
@@ -125,6 +216,12 @@ def build_sessions(metas, facets, tz):
             "first_prompt": m.get("first_prompt", ""),
             "first_prompt_len": len(m.get("first_prompt", "")),
             "response_times": m.get("user_response_times", []),
+            # Transcript-scanner extras. Session-meta doesn't carry these, so
+            # they default to 0/empty for legacy rows.
+            "assistant_msgs": m.get("assistant_message_count", 0),
+            "cache_create_tokens": m.get("cache_creation_input_tokens", 0),
+            "cache_read_tokens": m.get("cache_read_input_tokens", 0),
+            "model_counts": m.get("model_counts", {}) or {},
             # facet fields
             "outcome": f.get("outcome", ""),
             "helpfulness": f.get("claude_helpfulness", ""),
@@ -431,8 +528,91 @@ def compute_scores(sessions, rated, facets_coverage):
     return scores
 
 
+def compute_activity(sessions):
+    """Desktop-style activity panel.
+
+    Derivable from any session row: session_count + message totals + active
+    days + streaks. cache_* and model_counts come from transcript-scanner
+    output only; legacy session-meta rows contribute 0 to these.
+    """
+    if not sessions:
+        return {
+            "total_sessions": 0, "total_messages": 0, "active_days": 0,
+            "current_streak": 0, "longest_streak": 0,
+            "cache_creation_tokens": 0, "cache_read_tokens": 0,
+            "models": {}, "favorite_model": None,
+        }
+
+    total_msgs = sum((s.get("user_msgs", 0) or 0) + (s.get("assistant_msgs", 0) or 0)
+                     for s in sessions)
+
+    # Active days = distinct YYYY-MM-DD across all session start_times
+    dates = set()
+    for s in sessions:
+        start = s.get("start", "")
+        if start and len(start) >= 10:
+            dates.add(start[:10])
+
+    # Streak: sort unique dates, walk them; longest_streak = max consecutive run.
+    # current_streak is measured from today backward — but for deterministic
+    # test behaviour we compute it as: trailing consecutive run from the most
+    # recent active date. If today isn't in the set and the gap to the latest
+    # date is > 1 day, current_streak = 0.
+    longest_streak = 0
+    current_streak = 0
+    if dates:
+        sorted_dates = sorted(dates)
+        run = 1
+        longest_streak = 1
+        for i in range(1, len(sorted_dates)):
+            prev = datetime.fromisoformat(sorted_dates[i - 1])
+            cur = datetime.fromisoformat(sorted_dates[i])
+            if (cur - prev).days == 1:
+                run += 1
+                longest_streak = max(longest_streak, run)
+            else:
+                run = 1
+        # Current streak: walk backward from the latest date
+        latest = datetime.fromisoformat(sorted_dates[-1])
+        today = datetime.utcnow().date()
+        days_since_latest = (today - latest.date()).days
+        if days_since_latest <= 1:
+            # Latest date is today or yesterday — count trailing run
+            current_streak = 1
+            for i in range(len(sorted_dates) - 2, -1, -1):
+                prev = datetime.fromisoformat(sorted_dates[i])
+                cur = datetime.fromisoformat(sorted_dates[i + 1])
+                if (cur - prev).days == 1:
+                    current_streak += 1
+                else:
+                    break
+        else:
+            current_streak = 0
+
+    # Cache + model aggregation
+    cache_create = sum(s.get("cache_create_tokens", 0) or 0 for s in sessions)
+    cache_read = sum(s.get("cache_read_tokens", 0) or 0 for s in sessions)
+    models = Counter()
+    for s in sessions:
+        for m, c in (s.get("model_counts", {}) or {}).items():
+            models[m] += c
+
+    return {
+        "total_sessions": len(sessions),
+        "total_messages": total_msgs,
+        "active_days": len(dates),
+        "current_streak": current_streak,
+        "longest_streak": longest_streak,
+        "cache_creation_tokens": cache_create,
+        "cache_read_tokens": cache_read,
+        "models": dict(models),
+        "favorite_model": models.most_common(1)[0][0] if models else None,
+    }
+
+
 def compute_aggregates(sessions, rated, facets_coverage):
     result = {}
+    result["activity"] = compute_activity(sessions)
 
     # tokens
     toks = [s["total_tokens"] for s in sessions if s["total_tokens"]]
@@ -753,10 +933,20 @@ def compute_aggregates(sessions, rated, facets_coverage):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR))
+    parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR),
+                        help="Path to ~/.claude/usage-data (session-meta mode). "
+                             "Ignored when --transcript-rows is set.")
+    parser.add_argument("--transcript-rows", default=None,
+                        help="Path to scan_transcripts.py output jsonl. When set, "
+                             "this is the primary session source and --data-dir is "
+                             "only used for facets.")
     parser.add_argument("--output", required=True)
     parser.add_argument("--tz", default="auto",
                         help="timezone offset hours (e.g. 8) or 'auto' or 'utc'")
+    parser.add_argument("--extra-redacted", action="append", default=[],
+                        help="Path to sessions-redacted.jsonl from another machine. "
+                             "Can be given multiple times. Each row augments the session pool. "
+                             "Local sessions take precedence on session_id collisions.")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir).expanduser()
@@ -764,11 +954,6 @@ def main():
     facets_dir = data_dir / "facets"
     out = Path(args.output).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
-
-    if not meta_dir.exists():
-        print(f"error: {meta_dir} not found. Run a few Claude Code sessions first so usage data accumulates.",
-              file=sys.stderr)
-        sys.exit(2)
 
     if args.tz == "auto":
         tz = detect_tz()
@@ -780,12 +965,75 @@ def main():
         except Exception:
             tz = timezone.utc
 
-    metas, facets = load_all(meta_dir, facets_dir)
-    print(f"loaded {len(metas)} session-meta, {len(facets)} facets", file=sys.stderr)
+    # Two universes:
+    #  - scoring_metas: the rich, LLM-labeled subset used for 8-dimension scores
+    #  - activity_metas: the full session universe (transcript-scan output)
+    # When --transcript-rows is set, activity_metas uses it; scoring_metas
+    # prefers session-meta's richer data (uses_task_agent etc.) intersected
+    # with transcript rows.
+    if args.transcript_rows:
+        tr_path = Path(args.transcript_rows).expanduser()
+        activity_metas, _ = load_transcript_rows(tr_path)
+        _, facets = load_all(Path("/dev/null"), facets_dir)
+        meta_raw, _ = load_all(meta_dir, Path("/dev/null"))
+        # Scoring pool = sessions with session-meta (which carries the LLM
+        # uses_task_agent flag plus accurate user_msg/tool counts). Transcripts
+        # without session-meta are quick one-shot sessions that would distort
+        # scores if included. They still power the full activity panel.
+        # Meta-only sessions (transcript cleaned up) are also kept.
+        scoring_metas = {}
+        for sid, m in meta_raw.items():
+            if sid in activity_metas:
+                # Merge: scanner provides extras (cache tokens, models),
+                # session-meta provides the definitional flags + accurate counts
+                merged = dict(activity_metas[sid])
+                for k in ("uses_task_agent", "uses_mcp", "uses_web_search",
+                          "uses_web_fetch", "user_interruptions", "tool_errors",
+                          "user_message_count", "assistant_message_count",
+                          "tool_counts", "duration_minutes",
+                          "lines_added", "lines_removed", "files_modified",
+                          "first_prompt"):
+                    if m.get(k) is not None:
+                        merged[k] = m[k]
+                scoring_metas[sid] = merged
+            else:
+                scoring_metas[sid] = m
+        print(f"loaded {len(activity_metas)} transcript rows, {len(facets)} facets, "
+              f"{len(meta_raw)} session-meta → {len(scoring_metas)} scoring pool",
+              file=sys.stderr)
+        metas = scoring_metas
+    else:
+        metas, facets = load_all(meta_dir, facets_dir)
+        activity_metas = None  # fall back to metas in compute_activity
+        print(f"loaded {len(metas)} session-meta, {len(facets)} facets", file=sys.stderr)
+    source_by_sid = {sid: "local" for sid in metas}
+
+    # Merge each --extra-redacted jsonl. Local wins on sid collision.
+    for p in args.extra_redacted:
+        rp = Path(p).expanduser()
+        rm, rf, rsrc = load_redacted(rp)
+        added = 0
+        for sid, m in rm.items():
+            if sid not in metas:
+                metas[sid] = m
+                source_by_sid[sid] = rsrc.get(sid, "unknown")
+                added += 1
+        for sid, f in rf.items():
+            if sid not in facets:
+                facets[sid] = f
+        print(f"merged {added} sessions from {rp.name} ({len(rm) - added} skipped as duplicates)",
+              file=sys.stderr)
 
     if len(metas) == 0:
-        print("error: no session-meta files found. Use Claude Code first.", file=sys.stderr)
-        sys.exit(2)
+        # If transcript-rows supplied data but no meta, fall back to using
+        # activity_metas (full transcript universe) as the scoring pool.
+        # Scores will be thin (no LLM flags) but it's better than refusing.
+        if args.transcript_rows and activity_metas:
+            metas = activity_metas
+            source_by_sid = {sid: "local" for sid in metas}
+        else:
+            print("error: no session-meta files found and no --extra-redacted data. Use Claude Code first.", file=sys.stderr)
+            sys.exit(2)
 
     sessions = build_sessions(metas, facets, tz)
     rated = [s for s in sessions if s["outcome"]]
@@ -803,6 +1051,14 @@ def main():
         "data_thin_warning": len(rated) < 20,
     }
     aggregates = compute_aggregates(sessions, rated, facets_coverage)
+    # When transcript-rows mode supplied a wider universe, recompute the
+    # activity panel using the full pool rather than just the scoring subset.
+    if activity_metas is not None:
+        activity_sessions = build_sessions(activity_metas, {}, tz)
+        aggregates["activity"] = compute_activity(activity_sessions)
+        # Expose both scopes so the HTML can choose which to surface
+        aggregates["activity"]["scoring_pool_sessions"] = len(sessions)
+        aggregates["activity"]["full_pool_sessions"] = len(activity_sessions)
     scores = compute_scores(sessions, rated, facets_coverage)
 
     # _sessions is the per-session row schema consumed by sample_sessions.py
@@ -831,6 +1087,7 @@ def main():
             "goal_cats": s["goal_cats"],
             "brief_summary": s["brief_summary"],
             "friction_detail": s["friction_detail"],
+            "source_machine": source_by_sid.get(s["sid"], "local"),
         } for s in sessions],
     }
 

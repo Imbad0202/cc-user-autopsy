@@ -318,3 +318,13 @@ Read `references/scoring-rubric.md` for the exact threshold logic if you need to
 - `scripts/build_html.py` — renders final HTML
 - `tests/smoke_test.py` — end-to-end offline/sanitization smoke test
 - `references/scoring-rubric.md` — the 8 rule-based scoring rules
+
+## Cross-machine merge (optional)
+
+If the user works on two machines and wants one report covering both, `aggregate.py` accepts `--extra-redacted <file>` (repeatable). Each file is a `sessions-redacted.jsonl` produced on another machine — per-session numbers with all free text stripped. Sessions are merged into the pool; local wins on `session_id` collisions; scores/aggregates recompute over the combined pool.
+
+Paired tooling for this lives in `claude-memory-sync`:
+- `_scripts/dump-redacted-sessions.py` — produce the jsonl from `~/.claude/usage-data/`
+- `_scripts/merge-cross-machine-autopsy.sh` — one-shot: dump + push + pull + aggregate + build
+
+Evidence library (the 24 session cards in Section 6) only samples local transcripts; cross-machine sessions contribute to aggregate numbers only. If the user asks for this workflow, point them at `claude-memory-sync`'s README section "cc-user-autopsy 跨機合併".
