@@ -126,6 +126,33 @@ class ScanTranscriptsTests(unittest.TestCase):
             self.assertEqual(row["start_time"], meta["start_time"])
             self.assertGreaterEqual(row["duration_minutes"], meta["duration_minutes"])
 
+    def test_skips_subagent_runs(self):
+        """agent-*.jsonl files are subagent internal runs and must be excluded."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pdir = tmp / "projects" / "subagents"
+            pdir.mkdir(parents=True)
+            # Real UUID — keep
+            real = "11111111-2222-3333-4444-555555555555"
+            (pdir / f"{real}.jsonl").write_text(
+                json.dumps({"type": "user", "timestamp": "2026-04-18T00:00:00.000Z",
+                            "message": {"role": "user", "content": "hello"}}) + "\n" +
+                json.dumps({"type": "assistant", "timestamp": "2026-04-18T00:00:01.000Z",
+                            "message": {"role": "assistant", "model": "claude-opus-4-6",
+                                        "content": [], "usage": {"input_tokens": 1, "output_tokens": 1}}}) + "\n"
+            )
+            # Subagent-style filename — must be skipped
+            (pdir / "agent-abc123def456789.jsonl").write_text(
+                json.dumps({"type": "user", "timestamp": "2026-04-18T00:00:00.000Z",
+                            "message": {"role": "user", "content": "subagent"}}) + "\n"
+            )
+            out = tmp / "out.jsonl"
+            r = _run_scanner(tmp / "projects", out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            lines = out.read_text().splitlines()
+            self.assertEqual(len(lines), 1, "exactly the UUID-named transcript should be emitted")
+            self.assertEqual(json.loads(lines[0])["session_id"], real)
+
     def test_skips_non_transcript_files(self):
         """Files like skill-injections.jsonl must not produce rows."""
         with tempfile.TemporaryDirectory() as tmp:
