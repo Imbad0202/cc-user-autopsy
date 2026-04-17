@@ -69,12 +69,13 @@ def detect_tz() -> timezone:
 
 def load_all(meta_dir: Path, facets_dir: Path):
     metas, facets = {}, {}
-    for f in meta_dir.glob("*.json"):
-        try:
-            d = json.loads(f.read_text())
-            metas[d["session_id"]] = d
-        except Exception as e:
-            print(f"warn: meta load err {f.name}: {e}", file=sys.stderr)
+    if meta_dir.exists():
+        for f in meta_dir.glob("*.json"):
+            try:
+                d = json.loads(f.read_text())
+                metas[d["session_id"]] = d
+            except Exception as e:
+                print(f"warn: meta load err {f.name}: {e}", file=sys.stderr)
     if facets_dir.exists():
         for f in facets_dir.glob("*.json"):
             try:
@@ -83,6 +84,64 @@ def load_all(meta_dir: Path, facets_dir: Path):
             except Exception as e:
                 print(f"warn: facet load err {f.name}: {e}", file=sys.stderr)
     return metas, facets
+
+
+# Fields a redacted row carries on the meta side. Must stay in sync with
+# _scripts/dump-redacted-sessions.py in claude-memory-sync.
+_REDACTED_META_KEYS = {
+    "session_id", "start_time", "project_path", "duration_minutes",
+    "input_tokens", "output_tokens", "tool_counts", "user_message_count",
+    "git_commits", "git_pushes", "user_interruptions", "tool_errors",
+    "uses_task_agent", "uses_mcp", "uses_web_search", "uses_web_fetch",
+    "lines_added", "lines_removed", "files_modified",
+    "user_response_times", "message_hours",
+}
+_REDACTED_FACETS_KEYS = {
+    "session_id", "outcome", "claude_helpfulness", "session_type",
+    "friction_counts", "primary_success", "goal_categories",
+}
+
+
+def load_redacted(path: Path):
+    """Read a sessions-redacted.jsonl file, return (metas, facets, source_by_sid).
+
+    Redacted rows have first_prompt_len but no first_prompt raw text, and no
+    brief_summary / friction_detail / underlying_goal text. We fabricate a
+    first_prompt placeholder of the correct length so build_sessions'
+    len(first_prompt) call matches. All text fields stay empty.
+    """
+    metas, facets, source_by_sid = {}, {}, {}
+    if not path.exists():
+        return metas, facets, source_by_sid
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+        except Exception as e:
+            print(f"warn: redacted parse err in {path.name}: {e}", file=sys.stderr)
+            continue
+        sid = r.get("session_id")
+        if not sid:
+            continue
+        source_by_sid[sid] = r.get("source_machine", "unknown")
+        m = {k: r[k] for k in _REDACTED_META_KEYS if k in r}
+        # Rehydrate a placeholder first_prompt of the correct length so the
+        # downstream len() call produces the right bucket. Content is a string
+        # of non-leaky filler chars. Any code reading first_prompt as text will
+        # see filler, not real content.
+        n = r.get("first_prompt_len", 0)
+        m["first_prompt"] = "\u00a0" * n  # NBSP filler — visually empty, len-preserving
+        metas[sid] = m
+        if r.get("outcome"):
+            f = {k: r[k] for k in _REDACTED_FACETS_KEYS if k in r}
+            # Empty text fields — explicit so downstream .get() works
+            f["brief_summary"] = ""
+            f["friction_detail"] = ""
+            f["underlying_goal"] = ""
+            facets[sid] = f
+    return metas, facets, source_by_sid
 
 
 def build_sessions(metas, facets, tz):
@@ -757,6 +816,10 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--tz", default="auto",
                         help="timezone offset hours (e.g. 8) or 'auto' or 'utc'")
+    parser.add_argument("--extra-redacted", action="append", default=[],
+                        help="Path to sessions-redacted.jsonl from another machine. "
+                             "Can be given multiple times. Each row augments the session pool. "
+                             "Local sessions take precedence on session_id collisions.")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir).expanduser()
@@ -764,11 +827,6 @@ def main():
     facets_dir = data_dir / "facets"
     out = Path(args.output).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
-
-    if not meta_dir.exists():
-        print(f"error: {meta_dir} not found. Run a few Claude Code sessions first so usage data accumulates.",
-              file=sys.stderr)
-        sys.exit(2)
 
     if args.tz == "auto":
         tz = detect_tz()
@@ -781,10 +839,27 @@ def main():
             tz = timezone.utc
 
     metas, facets = load_all(meta_dir, facets_dir)
+    source_by_sid = {sid: "local" for sid in metas}
     print(f"loaded {len(metas)} session-meta, {len(facets)} facets", file=sys.stderr)
 
+    # Merge each --extra-redacted jsonl. Local wins on sid collision.
+    for p in args.extra_redacted:
+        rp = Path(p).expanduser()
+        rm, rf, rsrc = load_redacted(rp)
+        added = 0
+        for sid, m in rm.items():
+            if sid not in metas:
+                metas[sid] = m
+                source_by_sid[sid] = rsrc.get(sid, "unknown")
+                added += 1
+        for sid, f in rf.items():
+            if sid not in facets:
+                facets[sid] = f
+        print(f"merged {added} sessions from {rp.name} ({len(rm) - added} skipped as duplicates)",
+              file=sys.stderr)
+
     if len(metas) == 0:
-        print("error: no session-meta files found. Use Claude Code first.", file=sys.stderr)
+        print("error: no session-meta files found and no --extra-redacted data. Use Claude Code first.", file=sys.stderr)
         sys.exit(2)
 
     sessions = build_sessions(metas, facets, tz)
@@ -831,6 +906,7 @@ def main():
             "goal_cats": s["goal_cats"],
             "brief_summary": s["brief_summary"],
             "friction_detail": s["friction_detail"],
+            "source_machine": source_by_sid.get(s["sid"], "local"),
         } for s in sessions],
     }
 
