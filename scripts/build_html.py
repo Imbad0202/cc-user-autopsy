@@ -57,6 +57,49 @@ SAFE_URL_SCHEMES = {"http", "https"}
 SAFE_URL_SCHEMES_WITH_MAILTO = SAFE_URL_SCHEMES | {"mailto"}
 
 
+def _build_activity_panel(activity: dict) -> str:
+    """Render the Desktop-style Activity overview if present. Empty string if not."""
+    if not activity or not activity.get("total_sessions"):
+        return ""
+    total = activity.get("total_sessions", 0)
+    msgs = activity.get("total_messages", 0)
+    days = activity.get("active_days", 0)
+    cur = activity.get("current_streak", 0)
+    lng = activity.get("longest_streak", 0)
+    fav = activity.get("favorite_model") or "—"
+    cache_c = activity.get("cache_creation_tokens", 0)
+    cache_r = activity.get("cache_read_tokens", 0)
+    scoring_pool = activity.get("scoring_pool_sessions")
+    full_pool = activity.get("full_pool_sessions")
+
+    # Compact favorite model label
+    fav_short = fav.replace("claude-", "").replace("-20251001", "").replace("-20250929", "")
+
+    scope_note = ""
+    if scoring_pool is not None and full_pool is not None and full_pool != scoring_pool:
+        scope_note = (
+            f'<p class="method" style="margin-top:8px">'
+            f'Activity metrics count every transcript ({full_pool:,}). '
+            f'Scores below use the {scoring_pool:,}-session pool that has Claude Code\'s '
+            f'labeled session-meta — partial coverage of your full history.'
+            f'</p>'
+        )
+
+    return f"""
+<div class="metrics" style="margin-bottom:16px">
+  <div class="metric"><div class="n">{total:,}</div><div class="lbl">Full sessions (transcripts)</div></div>
+  <div class="metric"><div class="n">{msgs:,}</div><div class="lbl">Total messages</div></div>
+  <div class="metric"><div class="n">{days}</div><div class="lbl">Active days</div></div>
+  <div class="metric"><div class="n">{cur}d</div><div class="lbl">Current streak</div></div>
+  <div class="metric"><div class="n">{lng}d</div><div class="lbl">Longest streak</div></div>
+  <div class="metric"><div class="n">{fmt(cache_r)}</div><div class="lbl">Cache-read tokens</div></div>
+  <div class="metric"><div class="n">{fmt(cache_c)}</div><div class="lbl">Cache-create tokens</div></div>
+  <div class="metric"><div class="n">{esc(fav_short)}</div><div class="lbl">Favorite model</div></div>
+</div>
+{scope_note}
+""".strip()
+
+
 def fmt(n):
     if n is None:
         return "—"
@@ -980,6 +1023,8 @@ $artifacts_section
 <section id="overview">
   <h2 class="sec" data-num="§ 01">Overview</h2>
   <h2 class="sec-title">The raw numbers, before interpretation.</h2>
+
+  $activity_panel
 
   <div class="metrics">
     <div class="metric"><div class="n">$total_sessions</div><div class="lbl">Sessions</div></div>
@@ -2095,6 +2140,7 @@ def main():
         "mcp_rate": mcp_rate,
         "facets_coverage": meta["facets_coverage_pct"],
         "resp_median": int(agg["response_times"]["median_seconds"]),
+        "activity_panel": _build_activity_panel(agg.get("activity", {})),
         "date_first": meta["date_range"]["first"][:10],
         "date_last": meta["date_range"]["last"][:10],
         "preliminary_warning": preliminary_warning,
