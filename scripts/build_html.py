@@ -300,6 +300,19 @@ def score_band(sc):
     return "weak"
 
 
+def _load_chart_layout_js() -> str:
+    """Read js/chart_layout.js and strip its CommonJS export so it can be
+    inlined into a browser <script> tag. node:test still loads the original
+    file directly via require()."""
+    js_path = Path(__file__).resolve().parent.parent / "js" / "chart_layout.js"
+    src = js_path.read_text()
+    marker = "if (typeof module"
+    idx = src.find(marker)
+    if idx != -1:
+        src = src[:idx].rstrip() + "\n"
+    return src
+
+
 # ---- Big HTML template as a module-level string.
 # Uses string.Template's $placeholder style so CSS/JS braces don't need escaping.
 PAGE_TEMPLATE = r"""<!DOCTYPE html>
@@ -1228,6 +1241,8 @@ const FONT_MONO = '11px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospa
 const FONT_MONO_SMALL = '10px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
 const renderers = [];
 
+$chart_layout_js
+
 function registerRenderer(fn) {
   renderers.push(fn);
 }
@@ -1352,6 +1367,10 @@ function drawXAxisLabels(ctx, labels, plot) {
   ctx.font = FONT_MONO_SMALL;
   ctx.fillStyle = MUTED;
   ctx.textAlign = 'right';
+  // Per-label budget along the rotated axis: at -45deg the label rises into
+  // the gap between adjacent ticks, so width budget is groupWidth / cos(45).
+  const measure = (s) => ctx.measureText(s).width;
+  const labelBudget = Math.max(40, (groupWidth / Math.SQRT1_2) * 0.95);
   for (let i = 0; i < labels.length; i += 1) {
     if (i % step !== 0 && i !== labels.length - 1) continue;
     const x = plot.left + groupWidth * (i + 0.5);
@@ -1359,7 +1378,7 @@ function drawXAxisLabels(ctx, labels, plot) {
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(-Math.PI / 4);
-    ctx.fillText(labels[i], 0, 0);
+    ctx.fillText(clipLabelToWidth(labels[i], labelBudget, measure), 0, 0);
     ctx.restore();
   }
   ctx.restore();
@@ -1402,11 +1421,14 @@ function drawDonutChart(id, labels, values, colors) {
     let legendY = Math.max(32, cy - (labels.length * 18) / 2);
     ctx.textAlign = 'left';
     ctx.font = FONT_MONO_SMALL;
+    const legendBudget = Math.max(40, width - legendX - 16 - 8);
+    const measure = (s) => ctx.measureText(s).width;
     labels.forEach((label, index) => {
       ctx.fillStyle = colors[index % colors.length];
       ctx.fillRect(legendX, legendY - 5, 10, 10);
       ctx.fillStyle = INK_SOFT;
-      ctx.fillText(`${label} (${values[index]})`, legendX + 16, legendY);
+      const full = `${label} (${values[index]})`;
+      ctx.fillText(clipLabelToWidth(full, legendBudget, measure), legendX + 16, legendY);
       legendY += 18;
     });
   });
@@ -1429,9 +1451,16 @@ function drawGroupedBarChart(id, labels, datasets, colors, legendLabels) {
       18,
       width - 36,
     );
-    const plot = { left: 48, top: legendBottom + 8, width: width - 70, height: height - legendBottom - 72 };
+    ctx.save();
+    ctx.font = FONT_MONO_SMALL;
+    const measure = (s) => ctx.measureText(s).width;
     const yMax = niceMax(maxValue);
     const ticks = ticksFor(yMax).map((raw) => ({ raw, value: raw / yMax }));
+    const yAxisMaxTickLabel = formatTick(yMax);
+    const plot = computeBarPlot({
+      width, height, legendBottom, labels, charWidth: measure, yAxisMaxTickLabel,
+    });
+    ctx.restore();
     drawPlotFrame(ctx, plot, ticks, formatTick);
     const groupWidth = plot.width / Math.max(labels.length, 1);
     const innerWidth = groupWidth * 0.72;
@@ -2221,6 +2250,7 @@ def main():
 
     # Assemble via string.Template to avoid CSS brace escaping
     subs = {
+        "chart_layout_js": _load_chart_layout_js(),
         "identity_block": identity_block,
         "hero_block": hero_block,
         "profile_section": profile_section,
