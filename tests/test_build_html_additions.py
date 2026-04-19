@@ -1,0 +1,231 @@
+"""TDD for new HTML additions: API-equivalent cost tile + models chart.
+
+Tests are intentionally narrow — they check that the specific elements
+appear in the output, not the full rendered layout. Render tests beyond that
+become brittle and fight the authors.
+"""
+import sys
+import unittest
+from pathlib import Path
+
+SKILL_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(SKILL_DIR / "scripts"))
+import build_html  # noqa: E402
+
+
+def _activity_panel(**overrides):
+    base = {
+        "total_sessions": 10,
+        "total_messages": 100,
+        "active_days": 5,
+        "current_streak": 2,
+        "longest_streak": 3,
+        "cache_creation_tokens": 1_000_000,
+        "cache_read_tokens": 5_000_000,
+        "models": {"claude-opus-4-6": 50, "claude-haiku-4-5": 30},
+        "favorite_model": "claude-opus-4-6",
+        "api_equivalent_cost_usd": 1234.56,
+    }
+    base.update(overrides)
+    return base
+
+
+class CostTileTests(unittest.TestCase):
+    def test_activity_panel_shows_api_equivalent_cost(self):
+        """The Desktop-style activity panel must include a tile showing the
+        API-equivalent cost when the aggregator provides it."""
+        html = build_html._build_activity_panel(_activity_panel())
+        self.assertIn("API-equivalent", html)
+        # Dollar amount should render compactly (e.g. $1.2k or $1,234)
+        self.assertTrue("$1" in html, f"expected dollar amount in panel, got: {html[:500]}")
+
+    def test_cost_tile_hidden_when_zero(self):
+        """When cost is 0 (e.g. no cache/tokens data available), the tile
+        should not appear — otherwise readers assume the work was free."""
+        html = build_html._build_activity_panel(
+            _activity_panel(api_equivalent_cost_usd=0.0,
+                            cache_creation_tokens=0, cache_read_tokens=0))
+        self.assertNotIn("API-equivalent", html)
+
+
+class ModelsChartTests(unittest.TestCase):
+    def test_activity_panel_includes_models_chart_canvas(self):
+        """When `models` is populated, the activity panel must render a chart
+        container plus a short model label. We use the `claude-` prefix
+        stripped form (e.g. 'opus-4-6') for readability, so the legend
+        must at least contain that canonical short name."""
+        html = build_html._build_activity_panel(_activity_panel())
+        self.assertIn('id="models-chart"', html)
+        self.assertIn("opus-4-6", html)
+
+    def test_no_chart_when_models_empty(self):
+        """Empty models dict → no chart canvas (avoid rendering an empty box)."""
+        html = build_html._build_activity_panel(_activity_panel(models={}))
+        self.assertNotIn('id="models-chart"', html)
+
+
+class HRLayoutTests(unittest.TestCase):
+    """HR version should not duplicate at-a-glance data.
+
+    profile-card already exposes scale / velocity / parallel-work. Adding a
+    full Overview section with 8 more tiles + charts duplicates the story
+    and pushes the peer review below the fold. HR-specific: Overview is
+    hidden, but the activity panel (cache/models/cost — the highest-value
+    numbers for readers comparing builders) lives directly under the
+    profile card. Self audit still gets the full Overview.
+    """
+    def _build_hr(self, **overrides):
+        # Minimal analysis-data + profile to exercise build_report_html.
+        import subprocess, tempfile, json as _json
+        skill_dir = Path(__file__).resolve().parent.parent
+        analysis = {
+            "meta": {"total_sessions": 5, "sessions_with_facets": 3,
+                     "facets_coverage_pct": 60.0,
+                     "date_range": {"first": "2026-03-01T00:00:00Z",
+                                    "last": "2026-04-01T00:00:00Z"},
+                     "tz_offset_hours": 8.0, "data_thin_warning": False},
+            "aggregates": {
+                "activity": {
+                    "total_sessions": 5, "total_messages": 100,
+                    "active_days": 10, "current_streak": 2, "longest_streak": 5,
+                    "cache_creation_tokens": 1_000_000,
+                    "cache_read_tokens": 50_000_000,
+                    "models": {"claude-opus-4-6": 50, "claude-haiku-4-5": 20},
+                    "favorite_model": "claude-opus-4-6",
+                    "api_equivalent_cost_usd": 234.0,
+                },
+                "tokens": {"total": 1000, "median": 100, "p90": 500, "max": 800,
+                           "dist_buckets": {}},
+                "tools": {"totals": {"Bash": 3}, "sessions_using_task_agent": 3,
+                          "sessions_using_mcp": 1, "sessions_using_web_search": 0,
+                          "sessions_using_web_fetch": 0},
+                "heatmap": {}, "projects": {}, "outcomes": {}, "friction": {"totals": {}, "by_outcome": {}},
+                "interrupts": {"sessions_with_interrupt": 0, "total_interrupts": 0, "interrupt_rate_pct": 0},
+                "prompt_len_vs_outcome": {}, "weekly": [],
+                "extremes": {"top_tokens": [], "top_interrupts": [], "top_duration": [],
+                             "highest_friction": [], "outcome_not_achieved": []},
+                "session_types": {}, "helpfulness": {}, "response_times": {"median_seconds": 10, "mean_seconds": 10, "p90_seconds": 10, "sample_count": 5},
+                "goal_categories": {},
+                "efficiency": {"tokens_per_commit_median": 0, "sessions_with_commits": 0,
+                               "commits_per_hour": 0.5, "total_duration_hr": 1.0},
+                "shipped_artifacts": [], "growth_curve": [],
+                "profile_summary": {"scale_tier": "light", "total_duration_hr": 1.0,
+                                    "total_sessions": 5, "project_count_active": 1,
+                                    "top_project_share_pct": 100.0,
+                                    "top_project_label": "demo", "ta_pct": 60.0,
+                                    "mcp_pct": 20.0, "specialty": "testing",
+                                    "date_span_days": 30},
+            },
+            "scores": {"_overall": {"avg": 7.0, "dimensions_scored": 0, "dimensions_total": 8}},
+            "_sessions": [],
+        }
+        profile = {"name": "Test User", "role": "Tester", "contact": {}}
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "a.json").write_text(_json.dumps(analysis))
+            (tmp / "s.json").write_text("{}")
+            (tmp / "p.json").write_text(_json.dumps(profile))
+            out = tmp / "out.html"
+            r = subprocess.run([
+                "python3", str(skill_dir / "scripts" / "build_html.py"),
+                "--input", str(tmp / "a.json"),
+                "--samples", str(tmp / "s.json"),
+                "--profile", str(tmp / "p.json"),
+                "--audience", "hr",
+                "--output", str(out),
+            ], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return out.read_text()
+
+    def test_hr_has_no_overview_section(self):
+        """§ 01 Overview must be absent from HR output."""
+        html = self._build_hr()
+        self.assertNotIn('id="overview"', html)
+        self.assertNotIn('§ 01', html)
+
+    def test_hr_still_shows_activity_panel_under_profile(self):
+        """Activity panel (cache/models/cost) must remain — it's the most
+        compelling scale signal for a reader who lacks access to raw data."""
+        html = self._build_hr()
+        self.assertIn("Cache-read tokens", html)
+        self.assertIn("API-equivalent", html)
+        self.assertIn('id="models-chart"', html)
+
+    def test_self_still_has_overview_section(self):
+        """Self audit keeps Overview — the reader is the user themselves and
+        wants the full dump."""
+        import subprocess, tempfile, json as _json
+        skill_dir = Path(__file__).resolve().parent.parent
+        # Reuse the same analysis dict by calling _build_hr's fixture path.
+        analysis = self._build_hr.__func__  # silence unused warn
+        # Keep it simple: just check a fresh self build directly.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "a.json").write_text(_json.dumps({
+                "meta": {"total_sessions": 5, "sessions_with_facets": 3,
+                         "facets_coverage_pct": 60.0,
+                         "date_range": {"first": "2026-03-01T00:00:00Z",
+                                        "last": "2026-04-01T00:00:00Z"},
+                         "tz_offset_hours": 8.0, "data_thin_warning": False},
+                "aggregates": {
+                    "activity": {"total_sessions": 5, "total_messages": 100,
+                                 "active_days": 10, "current_streak": 2,
+                                 "longest_streak": 5, "cache_creation_tokens": 0,
+                                 "cache_read_tokens": 0, "models": {},
+                                 "favorite_model": None,
+                                 "api_equivalent_cost_usd": 0.0},
+                    "tokens": {"total": 1000, "median": 100, "p90": 500, "max": 800, "dist_buckets": {}},
+                    "tools": {"totals": {}, "sessions_using_task_agent": 0,
+                              "sessions_using_mcp": 0, "sessions_using_web_search": 0, "sessions_using_web_fetch": 0},
+                    "heatmap": {}, "projects": {}, "outcomes": {}, "friction": {"totals": {}, "by_outcome": {}},
+                    "interrupts": {"sessions_with_interrupt": 0, "total_interrupts": 0, "interrupt_rate_pct": 0},
+                    "prompt_len_vs_outcome": {}, "weekly": [],
+                    "extremes": {"top_tokens": [], "top_interrupts": [], "top_duration": [],
+                                 "highest_friction": [], "outcome_not_achieved": []},
+                    "session_types": {}, "helpfulness": {},
+                    "response_times": {"median_seconds": 10, "mean_seconds": 10, "p90_seconds": 10, "sample_count": 5},
+                    "goal_categories": {},
+                    "efficiency": {"tokens_per_commit_median": 0, "sessions_with_commits": 0,
+                                   "commits_per_hour": 0, "total_duration_hr": 1.0},
+                    "shipped_artifacts": [], "growth_curve": [],
+                    "profile_summary": {"scale_tier": "light", "total_duration_hr": 1.0,
+                                        "total_sessions": 5, "project_count_active": 1,
+                                        "top_project_share_pct": 100.0,
+                                        "top_project_label": "demo", "ta_pct": 0,
+                                        "mcp_pct": 0, "specialty": "x", "date_span_days": 30},
+                },
+                "scores": {"_overall": {"avg": 0, "dimensions_scored": 0, "dimensions_total": 8}},
+                "_sessions": [],
+            }))
+            (tmp / "s.json").write_text("{}")
+            out = tmp / "out.html"
+            r = subprocess.run([
+                "python3", str(skill_dir / "scripts" / "build_html.py"),
+                "--input", str(tmp / "a.json"),
+                "--samples", str(tmp / "s.json"),
+                "--audience", "self",
+                "--output", str(out),
+            ], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            html = out.read_text()
+            self.assertIn('id="overview"', html)
+            self.assertIn('§ 01', html)
+
+
+class FmtTests(unittest.TestCase):
+    def test_billion_scale_uses_B_suffix(self):
+        """Values >=1B must render with B suffix, not as thousands-of-M."""
+        # Previously fmt(14_000_000_000) produced "14000.0M" — ugly and wrong.
+        self.assertEqual(build_html.fmt(14_000_000_000), "14.0B")
+        self.assertEqual(build_html.fmt(14_291_307_909), "14.3B")
+
+    def test_million_still_uses_M(self):
+        self.assertEqual(build_html.fmt(730_500_000), "730.5M")
+
+    def test_trillion_uses_T(self):
+        """Just in case someone runs this in the future at absurd scale."""
+        self.assertEqual(build_html.fmt(1_500_000_000_000), "1.5T")
+
+
+if __name__ == "__main__":
+    unittest.main()

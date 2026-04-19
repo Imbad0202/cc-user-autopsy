@@ -69,11 +69,13 @@ def _build_activity_panel(activity: dict) -> str:
     fav = activity.get("favorite_model") or "—"
     cache_c = activity.get("cache_creation_tokens", 0)
     cache_r = activity.get("cache_read_tokens", 0)
+    cost = activity.get("api_equivalent_cost_usd", 0) or 0
+    models = activity.get("models") or {}
     scoring_pool = activity.get("scoring_pool_sessions")
     full_pool = activity.get("full_pool_sessions")
 
     # Compact favorite model label
-    fav_short = fav.replace("claude-", "").replace("-20251001", "").replace("-20250929", "")
+    fav_short = fav.replace("claude-", "").replace("-20251001", "").replace("-20250929", "").replace("-20251101", "")
 
     scope_note = ""
     if scoring_pool is not None and full_pool is not None and full_pool != scoring_pool:
@@ -85,6 +87,15 @@ def _build_activity_panel(activity: dict) -> str:
             f'</p>'
         )
 
+    cost_tile = ""
+    if cost > 0:
+        cost_tile = (
+            f'  <div class="metric"><div class="n">${_fmt_cost(cost)}</div>'
+            f'<div class="lbl">API-equivalent (pay-per-use)</div></div>\n'
+        )
+
+    chart = _build_models_chart(models) if models else ""
+
     return f"""
 <div class="metrics" style="margin-bottom:16px">
   <div class="metric"><div class="n">{total:,}</div><div class="lbl">Full sessions (transcripts)</div></div>
@@ -94,9 +105,61 @@ def _build_activity_panel(activity: dict) -> str:
   <div class="metric"><div class="n">{lng}d</div><div class="lbl">Longest streak</div></div>
   <div class="metric"><div class="n">{fmt(cache_r)}</div><div class="lbl">Cache-read tokens</div></div>
   <div class="metric"><div class="n">{fmt(cache_c)}</div><div class="lbl">Cache-create tokens</div></div>
-  <div class="metric"><div class="n">{esc(fav_short)}</div><div class="lbl">Favorite model</div></div>
+{cost_tile}  <div class="metric"><div class="n">{esc(fav_short)}</div><div class="lbl">Favorite model</div></div>
 </div>
+{chart}
 {scope_note}
+""".strip()
+
+
+def _fmt_cost(n: float) -> str:
+    """Compact USD formatter — '$12.3k' / '$1.2M'. No fractional dollars
+    below $100 to avoid implying precision we don't have."""
+    n = float(n)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return f"{int(round(n)):,}"
+
+
+def _build_models_chart(models: dict) -> str:
+    """Stacked horizontal bar showing assistant-message share per model.
+    Pure inline SVG — no external dependencies, renders in any static HTML."""
+    items = sorted(models.items(), key=lambda kv: -kv[1])
+    total = sum(v for _, v in items) or 1
+    # Readable colour palette; extra models fall back to grey.
+    palette = ["#6b8afd", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#14b8a6", "#94a3b8"]
+    # Build the stacked bar as SVG rects — one per model.
+    bar_w = 720
+    bar_h = 18
+    x = 0
+    rects = []
+    legend = []
+    for i, (m, v) in enumerate(items):
+        pct = v / total
+        w = round(bar_w * pct, 2)
+        color = palette[i] if i < len(palette) else "#94a3b8"
+        short = m.replace("claude-", "").replace("-20251001", "").replace("-20250929", "").replace("-20251101", "")
+        rects.append(
+            f'<rect x="{x}" y="0" width="{w}" height="{bar_h}" fill="{color}">'
+            f'<title>{esc(short)}: {v:,} messages ({pct*100:.1f}%)</title>'
+            f'</rect>'
+        )
+        legend.append(
+            f'<span class="lg-item"><span class="lg-dot" style="background:{color}"></span>'
+            f'{esc(short)} <span class="muted">{pct*100:.1f}%</span></span>'
+        )
+        x += w
+    return f"""
+<div id="models-chart" style="margin-top:4px">
+  <div class="method" style="margin-bottom:6px">Assistant messages by model</div>
+  <svg width="{bar_w}" height="{bar_h}" role="img" aria-label="Models breakdown"
+       style="max-width:100%;height:auto;display:block">{''.join(rects)}</svg>
+  <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:10px;font-size:12px">
+    {''.join(legend)}
+  </div>
+</div>
 """.strip()
 
 
@@ -107,6 +170,10 @@ def fmt(n):
         n = float(n)
     except (TypeError, ValueError):
         return str(n)
+    if n >= 1_000_000_000_000:
+        return f"{n / 1_000_000_000_000:.1f}T"
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.1f}B"
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
     if n >= 1_000:
@@ -1025,6 +1092,8 @@ $hero_block
 
 $profile_section
 
+$hr_activity_block
+
 $how_to_read_section
 
 $shipped_section
@@ -1035,29 +1104,7 @@ $artifacts_section
   $toc_links
 </nav>
 
-<section id="overview">
-  <h2 class="sec" data-num="§ 01">Overview</h2>
-  <h2 class="sec-title">The raw numbers, before interpretation.</h2>
-
-  $activity_panel
-
-  <div class="metrics">
-    <div class="metric"><div class="n">$total_sessions</div><div class="lbl">Sessions</div></div>
-    <div class="metric"><div class="n">$total_tokens</div><div class="lbl">Total tokens</div></div>
-    <div class="metric"><div class="n">$commits_total</div><div class="lbl">Git commits</div></div>
-    <div class="metric"><div class="n">${duration_hr}h</div><div class="lbl">Interactive time</div></div>
-    <div class="metric"><div class="n">${ta_rate}%</div><div class="lbl">Used Task agent</div></div>
-    <div class="metric"><div class="n">${mcp_rate}%</div><div class="lbl">Used MCP</div></div>
-    <div class="metric"><div class="n">$facets_coverage%</div><div class="lbl">Facet coverage</div></div>
-    <div class="metric"><div class="n">${resp_median}s</div><div class="lbl">Median think time</div></div>
-  </div>
-
-  <div class="two-col">
-    <div class="chart-box" data-fig="Fig. 01"><canvas id="outcomeChart"></canvas></div>
-    <div class="chart-box" data-fig="Fig. 02"><canvas id="stypeChart"></canvas></div>
-  </div>
-  <div class="chart-box tall" data-fig="Fig. 03"><canvas id="projChart"></canvas></div>
-</section>
+$overview_section
 
 <section id="scores">
   <h2 class="sec" data-num="§ 02">Scoring</h2>
@@ -2134,11 +2181,51 @@ def main():
     growth_ta = json_for_script([g["ta_rate"] for g in growth])
     growth_good = json_for_script([g["good_rate"] for g in growth])
 
+    # HR version hides Overview (§ 01) entirely — profile-card + activity
+    # panel cover the same ground without duplicating 8 more tiles and 3
+    # charts. Self audit keeps Overview as the unfiltered raw-numbers view.
+    activity_panel_html = _build_activity_panel(agg.get("activity", {}))
+    if args.audience == "hr":
+        overview_section = ""
+        # Drop the activity panel directly under the profile card so readers
+        # still see cache/models/cost — the most compelling scale evidence.
+        hr_activity_block = (
+            f'<div style="margin-top:28px">{activity_panel_html}</div>'
+            if activity_panel_html else ""
+        )
+    else:
+        hr_activity_block = ""
+        overview_section = f'''<section id="overview">
+  <h2 class="sec" data-num="§ 01">Overview</h2>
+  <h2 class="sec-title">The raw numbers, before interpretation.</h2>
+
+  {activity_panel_html}
+
+  <div class="metrics">
+    <div class="metric"><div class="n">{total}</div><div class="lbl">Sessions</div></div>
+    <div class="metric"><div class="n">{fmt(total_tok)}</div><div class="lbl">Total tokens</div></div>
+    <div class="metric"><div class="n">{commits_total}</div><div class="lbl">Git commits</div></div>
+    <div class="metric"><div class="n">{duration_hr}h</div><div class="lbl">Interactive time</div></div>
+    <div class="metric"><div class="n">{ta_rate}%</div><div class="lbl">Used Task agent</div></div>
+    <div class="metric"><div class="n">{mcp_rate}%</div><div class="lbl">Used MCP</div></div>
+    <div class="metric"><div class="n">{meta["facets_coverage_pct"]}%</div><div class="lbl">Facet coverage</div></div>
+    <div class="metric"><div class="n">{int(agg["response_times"]["median_seconds"])}s</div><div class="lbl">Median think time</div></div>
+  </div>
+
+  <div class="two-col">
+    <div class="chart-box" data-fig="Fig. 01"><canvas id="outcomeChart"></canvas></div>
+    <div class="chart-box" data-fig="Fig. 02"><canvas id="stypeChart"></canvas></div>
+  </div>
+  <div class="chart-box tall" data-fig="Fig. 03"><canvas id="projChart"></canvas></div>
+</section>'''
+
     # Assemble via string.Template to avoid CSS brace escaping
     subs = {
         "identity_block": identity_block,
         "hero_block": hero_block,
         "profile_section": profile_section,
+        "hr_activity_block": hr_activity_block,
+        "overview_section": overview_section,
         "how_to_read_section": how_to_read_section,
         "shipped_section": shipped_section,
         "artifacts_section": artifacts_section,
@@ -2147,15 +2234,6 @@ def main():
         "growth_composite": growth_composite,
         "growth_good": growth_good,
         "growth_ta": growth_ta,
-        "total_sessions": total,
-        "total_tokens": fmt(total_tok),
-        "commits_total": commits_total,
-        "duration_hr": duration_hr,
-        "ta_rate": ta_rate,
-        "mcp_rate": mcp_rate,
-        "facets_coverage": meta["facets_coverage_pct"],
-        "resp_median": int(agg["response_times"]["median_seconds"]),
-        "activity_panel": _build_activity_panel(agg.get("activity", {})),
         "date_first": meta["date_range"]["first"][:10],
         "date_last": meta["date_range"]["last"][:10],
         "preliminary_warning": preliminary_warning,

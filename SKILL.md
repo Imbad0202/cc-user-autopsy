@@ -30,7 +30,10 @@ A self-contained HTML report at `~/.claude/usage-data/cc-user-autopsy.html` cont
 ```
 Step 0 → ASK the user which version to build (self / hr / both). For HR,
          collect profile + privacy allowlist BEFORE running anything.
-Step 1 → run scripts/aggregate.py        (reads session-meta + facets, outputs analysis-data.json)
+Step 1a → run scripts/scan_transcripts.py  (reads ~/.claude/projects/**/*.jsonl,
+          aggregates subagent tokens into parent sessions, outputs transcript-rows.jsonl)
+Step 1b → run scripts/aggregate.py --transcript-rows …  (combines scanner output
+          with session-meta + facets, outputs analysis-data.json)
 Step 2 → run scripts/sample_sessions.py  (picks 15-24 representative sessions, reads raw .jsonl)
 Step 3 → you (Claude) read analysis-data.json and write a personalized peer-review block
 Step 4 → run scripts/build_html.py --peer-review <your-review-file>  (produces final HTML)
@@ -77,17 +80,50 @@ Self version does not need any of this; it shows raw data to the user themselves
 
 ## Step 1 — Aggregate quantitative data
 
-Run:
+### Step 1a — Scan transcripts (recommended; enables accurate tokens/models/cost)
 
 ```bash
-python3 scripts/aggregate.py --output /tmp/cc-autopsy/analysis-data.json
+python3 scripts/scan_transcripts.py --output /tmp/cc-autopsy/transcript-rows.jsonl
 ```
 
 What it does:
-- Reads every `~/.claude/usage-data/session-meta/*.json` (required — fail gracefully if missing)
+- Walks every `~/.claude/projects/**/*.jsonl`
+- Emits one row per real session (UUID-named jsonl)
+- **Critically: merges `agent-*.jsonl` (subagent runs) into the parent session's row.** Parent sid comes from the `sessionId` field inside each subagent record. Without this, haiku/sonnet usage from subagent dispatches is invisible and cache tokens undercount by ~2x.
+- Orphan subagents (parent transcript already cleaned up by Claude Code's rotation) produce a synthetic row marked `orphan_subagent_only=true` so their tokens still count in the activity pool.
+
+### Step 1b — Aggregate
+
+```bash
+python3 scripts/aggregate.py \
+  --transcript-rows /tmp/cc-autopsy/transcript-rows.jsonl \
+  --output /tmp/cc-autopsy/analysis-data.json
+```
+
+What it does:
+- Reads the transcript-rows file (for the activity/cost/model panel — the "full pool")
+- Reads every `~/.claude/usage-data/session-meta/*.json` (for the 8-dim scoring pool — Claude Code's LLM-labeled subset)
 - Reads every `~/.claude/usage-data/facets/*.json` if present (optional — report facets_coverage=0 if absent)
-- Computes: token distribution, tool counts, weekday×hour heatmap, project breakdown, friction/outcome crosstabs, interrupt × outcome correlation, weekly series, efficiency ratios, prompt-length vs outcome, extremes lists (top-tokens, top-interrupts, highest-friction, etc.)
+- Computes: token distribution, tool counts, weekday×hour heatmap, project breakdown, friction/outcome crosstabs, interrupt × outcome correlation, weekly series, efficiency ratios, prompt-length vs outcome, extremes lists, **API-equivalent cost** (blended by model-share across `PRICING` table)
 - Writes `analysis-data.json` with every number the HTML needs
+
+### Methodology note: two token universes
+
+Activity metrics (tokens, cache, models, cost, active_days) come from the **full transcript pool**, which Claude Code rotates — typically the last ~30–60 days.
+
+8-dim scores come from the **session-meta pool**, which has LLM-derived labels (outcome, friction, goal categories) but partial coverage of history.
+
+If both numbers disagree (e.g. activity shows 150 sessions, scoring shows 420), that's expected. The HTML scope_note explains this to the reader.
+
+### If you skip Step 1a
+
+`aggregate.py` still works without `--transcript-rows` — it falls back to session-meta-only. But you'll get:
+- **0 cache tokens** (session-meta doesn't record them)
+- **0 cost estimate** (needs token breakdown to compute)
+- **null favorite_model** (session-meta doesn't record models)
+- **2-5x undercount of total tokens** (session-meta's `input+output` misses cache_read, which dominates)
+
+Skip Step 1a only if transcripts are unavailable.
 
 Required: session-meta dir must exist. If it doesn't, tell the user to run a few Claude Code sessions first so usage data accumulates.
 
@@ -310,12 +346,18 @@ Read `references/scoring-rubric.md` for the exact threshold logic if you need to
 - Only analyzes data in `~/.claude/usage-data/` and `~/.claude/projects/` — doesn't see Cloud sessions, external logs, or code quality outside the transcripts
 - facet labels come from `/insights` (an LLM pass) and may be miscategorized
 - On fresh installs with <20 sessions, the skill should tell the user data is too thin and stop
+- **API-equivalent cost is informational, not a bill.** Claude Code Max Plan users pay a flat monthly fee regardless of usage. The cost estimate shows what the same token volume *would* cost on pay-per-use API pricing — useful for understanding scale, not for reconciliation. The number is blended by the user's actual model mix and uses conservative 1h cache-write pricing. Pricing is pinned in `scripts/aggregate.py`'s `PRICING` dict with a dated comment — update when Anthropic's public rates change.
+- Claude Code rotates transcript files in `~/.claude/projects/` (typically keeps ~30–60 days). Activity/token/cost metrics cover only the rotation window; 8-dim scores cover the longer session-meta history. Scope disagreement between the two panels is expected and documented in the HTML.
 
 ## Files
 
-- `scripts/aggregate.py` — reads usage-data, writes analysis-data.json
+- `scripts/scan_transcripts.py` — walks `~/.claude/projects/`, merges subagent tokens into parents, writes transcript-rows.jsonl
+- `scripts/aggregate.py` — combines transcript rows + session-meta + facets, writes analysis-data.json (includes cost estimate via `PRICING` table)
 - `scripts/sample_sessions.py` — picks representative sessions, writes samples.json
-- `scripts/build_html.py` — renders final HTML
+- `scripts/build_html.py` — renders final HTML (includes API-equivalent cost tile + models breakdown chart)
+- `tests/test_scan_transcripts.py` — scanner unit tests
+- `tests/test_cost_estimate.py` — cost calc + pricing table tests
+- `tests/test_build_html_additions.py` — cost tile + models chart render tests
 - `tests/smoke_test.py` — end-to-end offline/sanitization smoke test
 - `references/scoring-rubric.md` — the 8 rule-based scoring rules
 

@@ -126,8 +126,10 @@ class ScanTranscriptsTests(unittest.TestCase):
             self.assertEqual(row["start_time"], meta["start_time"])
             self.assertGreaterEqual(row["duration_minutes"], meta["duration_minutes"])
 
-    def test_skips_subagent_runs(self):
-        """agent-*.jsonl files are subagent internal runs and must be excluded."""
+    def test_subagent_not_emitted_as_separate_session(self):
+        """agent-*.jsonl files are subagent internal runs and must not produce
+        their own session row — they belong to the parent session identified
+        by the `sessionId` field inside each record."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             pdir = tmp / "projects" / "subagents"
@@ -141,17 +143,107 @@ class ScanTranscriptsTests(unittest.TestCase):
                             "message": {"role": "assistant", "model": "claude-opus-4-6",
                                         "content": [], "usage": {"input_tokens": 1, "output_tokens": 1}}}) + "\n"
             )
-            # Subagent-style filename — must be skipped
+            # Subagent-style filename — must not emit a separate row
             (pdir / "agent-abc123def456789.jsonl").write_text(
                 json.dumps({"type": "user", "timestamp": "2026-04-18T00:00:00.000Z",
+                            "sessionId": real,
                             "message": {"role": "user", "content": "subagent"}}) + "\n"
             )
             out = tmp / "out.jsonl"
             r = _run_scanner(tmp / "projects", out)
             self.assertEqual(r.returncode, 0, r.stderr)
             lines = out.read_text().splitlines()
-            self.assertEqual(len(lines), 1, "exactly the UUID-named transcript should be emitted")
+            self.assertEqual(len(lines), 1, "only one session row (the parent) should be emitted")
             self.assertEqual(json.loads(lines[0])["session_id"], real)
+
+    def test_subagent_tokens_aggregated_to_parent(self):
+        """Subagent runs (agent-*.jsonl) carry a sessionId pointing to their
+        parent. Their cache_creation_input_tokens, cache_read_input_tokens,
+        input_tokens, output_tokens, and model_counts must be added to the
+        parent session's row — not dropped."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pdir = tmp / "projects" / "p"
+            pdir.mkdir(parents=True)
+            parent_sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            # Parent transcript: one opus-4-6 assistant turn with modest usage
+            (pdir / f"{parent_sid}.jsonl").write_text(
+                json.dumps({"type": "user", "timestamp": "2026-04-18T00:00:00.000Z",
+                            "message": {"role": "user", "content": "hello"}}) + "\n" +
+                json.dumps({"type": "assistant", "timestamp": "2026-04-18T00:00:01.000Z",
+                            "message": {"role": "assistant", "model": "claude-opus-4-6",
+                                        "content": [],
+                                        "usage": {"input_tokens": 10, "output_tokens": 20,
+                                                  "cache_creation_input_tokens": 100,
+                                                  "cache_read_input_tokens": 1000}}}) + "\n"
+            )
+            # Subagent run: claude-haiku-4-5 with its own usage. Must be merged
+            # into the parent sid (because agent-*.jsonl records carry
+            # sessionId = parent sid).
+            (pdir / "agent-subagent1.jsonl").write_text(
+                json.dumps({"type": "user", "timestamp": "2026-04-18T00:00:02.000Z",
+                            "sessionId": parent_sid,
+                            "message": {"role": "user", "content": "go"}}) + "\n" +
+                json.dumps({"type": "assistant", "timestamp": "2026-04-18T00:00:03.000Z",
+                            "sessionId": parent_sid,
+                            "message": {"role": "assistant", "model": "claude-haiku-4-5",
+                                        "content": [],
+                                        "usage": {"input_tokens": 5, "output_tokens": 7,
+                                                  "cache_creation_input_tokens": 50,
+                                                  "cache_read_input_tokens": 500}}}) + "\n"
+            )
+            out = tmp / "out.jsonl"
+            r = _run_scanner(tmp / "projects", out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertEqual(row["session_id"], parent_sid)
+            # Token fields must be SUM of parent + subagent usage
+            self.assertEqual(row["input_tokens"], 10 + 5)
+            self.assertEqual(row["output_tokens"], 20 + 7)
+            self.assertEqual(row["cache_creation_input_tokens"], 100 + 50)
+            self.assertEqual(row["cache_read_input_tokens"], 1000 + 500)
+            # model_counts must include BOTH the parent's model and the
+            # subagent's model
+            self.assertEqual(row["model_counts"].get("claude-opus-4-6"), 1)
+            self.assertEqual(row["model_counts"].get("claude-haiku-4-5"), 1)
+
+    def test_orphan_subagent_tokens_aggregated_into_pool(self):
+        """If a subagent's sessionId points to a parent whose transcript file
+        is not on disk (e.g. auto-cleaned), its tokens must still be emitted
+        as a synthetic 'orphan' row so they contribute to the activity pool
+        instead of being silently lost."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pdir = tmp / "projects" / "p"
+            pdir.mkdir(parents=True)
+            orphan_parent = "99999999-8888-7777-6666-555555555555"
+            # No parent transcript — simulate cleaned-up session.
+            (pdir / "agent-orphan1.jsonl").write_text(
+                json.dumps({"type": "user", "timestamp": "2026-04-18T00:00:02.000Z",
+                            "sessionId": orphan_parent,
+                            "message": {"role": "user", "content": "go"}}) + "\n" +
+                json.dumps({"type": "assistant", "timestamp": "2026-04-18T00:00:03.000Z",
+                            "sessionId": orphan_parent,
+                            "message": {"role": "assistant", "model": "claude-haiku-4-5",
+                                        "content": [],
+                                        "usage": {"input_tokens": 5, "output_tokens": 7,
+                                                  "cache_creation_input_tokens": 50,
+                                                  "cache_read_input_tokens": 500}}}) + "\n"
+            )
+            out = tmp / "out.jsonl"
+            r = _run_scanner(tmp / "projects", out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            # One synthetic orphan row carrying the subagent tokens.
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertEqual(row["session_id"], orphan_parent)
+            self.assertEqual(row["cache_read_input_tokens"], 500)
+            self.assertEqual(row["model_counts"].get("claude-haiku-4-5"), 1)
+            # Marked as orphan so downstream knows it lacks a parent transcript
+            self.assertTrue(row.get("orphan_subagent_only"))
 
     def test_skips_non_transcript_files(self):
         """Files like skill-injections.jsonl must not produce rows."""
