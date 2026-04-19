@@ -21,6 +21,11 @@ CLEANED_COMPONENTS: list[tuple[str, str, str]] = [
         "  .profile-card {",
         "    margin-top: var(--space-1);\n  }",
     ),
+    (
+        ".metrics",
+        "  /* Metric cards grid */\n  .metrics {",
+        "    margin-top: var(--space-4);\n  }",
+    ),
 ]
 
 # Hard-coded px values that are allowed inside cleaned component blocks.
@@ -31,6 +36,9 @@ HARDCODE_WHITELIST_PX = {
 
     # --- Sparse typographic trim (mono caps labels) ---
     "9.5px", "10.5px", "11.5px", "14.5px",
+
+    # --- Display-size typography (unique hero numerics) ---
+    "32px",                                  # .metric .n display-size number
 
     # --- Border indicator widths (used as visual accents, not spacing) ---
     "4px",                                   # profile-card accent border-left

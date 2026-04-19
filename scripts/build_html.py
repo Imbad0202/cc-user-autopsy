@@ -618,14 +618,14 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 0;
-    margin: 30px 0 20px 0;
+    margin: var(--space-15) 0 var(--space-10) 0;
     border-top: 1px solid var(--rule);
     border-left: 1px solid var(--rule);
   }
   .metrics > .metric {
     border-right: 1px solid var(--rule);
     border-bottom: 1px solid var(--rule);
-    padding: 16px 18px 18px 18px;
+    padding: var(--space-8) var(--space-9) var(--space-9) var(--space-9);
     background: rgba(255,250,240,0.35);
   }
   @media (max-width: 640px) {
@@ -634,7 +634,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .metric .n {
     font-family: var(--serif);
     font-variation-settings: "opsz" 72, "wght" 400;
-    font-size: 32px;
+    font-size: 32px;   /* hero-size display number; not on type scale */
     line-height: 1;
     letter-spacing: -0.025em;
     color: var(--ink);
@@ -645,7 +645,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--ink-muted);
-    margin-top: 8px;
+    margin-top: var(--space-4);
   }
 
   /* Score rows — like rubric scores on a form */
