@@ -21,6 +21,51 @@ WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 # key `chart_*` or `series_*` and it flows through automatically.
 JS_KEY_PREFIXES = ("chart_", "series_")
 
+_DATE_SUFFIX_RE = re.compile(r"-\d{8}$")
+
+
+def prettify_model(name: str | None) -> str:
+    """Convert a raw model identifier to a human-readable display label.
+
+    Rules:
+    - None or empty string → empty string.
+    - Strip 'claude-' prefix if present.
+    - Strip any trailing date suffix matching -YYYYMMDD (generalised).
+    - Tokenize on '-': first token is the family name (capitalize it).
+      Remaining tokens (version digits, e.g. '4', '7') are joined with '.'
+      to form the version string.
+    - Known families: opus, sonnet, haiku — all follow <family>-<major>-<minor>.
+    - Unknown / non-standard: title-case each token, join with spaces.
+
+    Examples:
+        'claude-opus-4-7-20251101' → 'Opus 4.7'
+        'claude-sonnet-4-6-20251001' → 'Sonnet 4.6'
+        'opus-4-7'                  → 'Opus 4.7'
+        'claude-opus'               → 'Opus'
+        'unknown-model-x'           → 'Unknown Model X'
+        ''                          → ''
+        None                        → ''
+    """
+    if not name:
+        return ""
+    # Strip claude- prefix
+    if name.startswith("claude-"):
+        name = name[len("claude-"):]
+    # Strip generic date suffix -YYYYMMDD
+    name = _DATE_SUFFIX_RE.sub("", name)
+    if not name:
+        return ""
+    tokens = name.split("-")
+    family = tokens[0].capitalize()
+    version_tokens = tokens[1:]
+    if not version_tokens:
+        return family
+    # Heuristic: if all version tokens are digit strings, join with dots (version).
+    if all(t.isdigit() for t in version_tokens):
+        return f"{family} {'.'.join(version_tokens)}"
+    # Fallback: title-case all tokens and join with spaces.
+    return " ".join(t.capitalize() for t in tokens)
+
 
 def load_json_or_warn(path_arg, label, default):
     """Load a JSON file if the path resolves. Warn on parse error, return default."""
@@ -81,7 +126,7 @@ def _build_activity_panel(activity: dict, locale: str = "en") -> str:
     full_pool = activity.get("full_pool_sessions")
 
     # Compact favorite model label
-    fav_short = fav.replace("claude-", "").replace("-20251001", "").replace("-20250929", "").replace("-20251101", "")
+    fav_short = prettify_model(fav) if fav != "—" else "—"
 
     scope_note = ""
     if scoring_pool is not None and full_pool is not None and full_pool != scoring_pool:
@@ -175,7 +220,7 @@ def _build_models_chart(models: dict, locale: str = "en") -> str:
         pct = v / total
         w = round(bar_w * pct, 2)
         color = palette[i] if i < len(palette) else "#94a3b8"
-        short = m.replace("claude-", "").replace("-20251001", "").replace("-20250929", "").replace("-20251101", "")
+        short = prettify_model(m)
         rects.append(
             f'<rect x="{x}" y="0" width="{w}" height="{bar_h}" fill="{color}">'
             f'<title>{esc(short)}: {v:,} messages ({pct*100:.1f}%)</title>'
@@ -1544,7 +1589,7 @@ function drawXAxisLabels(ctx, labels, plot) {
   const labelBudget = Math.max(40, (groupWidth / Math.SQRT1_2) * 0.95);
   for (let i = 0; i < labels.length; i += 1) {
     if (i % step !== 0 && i !== labels.length - 1) continue;
-    const x = plot.left + groupWidth * (i + 0.5);
+    const x = slotCenterX(i, labels.length, plot);
     const y = plot.top + plot.height + 14;
     ctx.save();
     ctx.translate(x, y);
@@ -1588,19 +1633,33 @@ function drawDonutChart(id, labels, values, colors) {
     ctx.font = FONT_MONO;
     ctx.fillText(I18N.chart_rated, cx, cy + 16);
 
-    const legendX = Math.max(cx + radius + 32, width * 0.54);
-    let legendY = Math.max(32, cy - (labels.length * 18) / 2);
+    const SWATCH_D = 12;  // swatch circle diameter (was ~10px fillRect)
+    const SWATCH_GAP = 8; // gap between swatch and label text
     ctx.textAlign = 'left';
     ctx.font = FONT_MONO_SMALL;
-    const legendBudget = Math.max(40, width - legendX - 16 - 8);
     const measure = (s) => ctx.measureText(s).width;
-    labels.forEach((label, index) => {
+    // Build the full label strings to measure them accurately.
+    const fullLabels = labels.map((label, i) => `${label} (${values[i]})`);
+    const layout = computeLegendWidth(fullLabels, measure, SWATCH_D, SWATCH_GAP);
+    // legendX: right of the donut + gap; never eat into the donut itself.
+    const legendX = Math.max(cx + radius + 32, width * 0.54);
+    // legendBudget: actual pixel space from legendX to canvas right edge,
+    // minus the swatch + gap overhead. Use the measured label width as the
+    // minimum so labels are never under-allocated.
+    const legendBudget = Math.max(
+      layout.labelWidth,
+      width - legendX - SWATCH_D - SWATCH_GAP - 8,
+    );
+    let legendY = Math.max(SWATCH_D, cy - layout.totalHeight / 2) + layout.rowHeight * 0.7;
+    fullLabels.forEach((full, index) => {
+      // Draw swatch as a filled circle for better visual clarity.
       ctx.fillStyle = colors[index % colors.length];
-      ctx.fillRect(legendX, legendY - 5, 10, 10);
+      ctx.beginPath();
+      ctx.arc(legendX + SWATCH_D / 2, legendY - SWATCH_D * 0.3, SWATCH_D / 2, 0, Math.PI * 2);
+      ctx.fill();
       ctx.fillStyle = INK_SOFT;
-      const full = `${label} (${values[index]})`;
-      ctx.fillText(clipLabelToWidth(full, legendBudget, measure), legendX + 16, legendY);
-      legendY += 18;
+      ctx.fillText(clipLabelToWidth(full, legendBudget, measure), legendX + SWATCH_D + SWATCH_GAP, legendY);
+      legendY += layout.rowHeight;
     });
   });
 }
@@ -1699,29 +1758,37 @@ function drawHorizontalBarChart(id, labels, values, color) {
 
 function drawLinePath(ctx, points, color, dashed = false, fill = false) {
   if (!points.length) return;
+  const runs = segmentsWithoutNulls(points);
+  if (!runs.length) return;
   ctx.save();
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
   ctx.setLineDash(dashed ? [6, 4] : []);
   if (fill) {
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].baseY);
-    points.forEach((point) => ctx.lineTo(point.x, point.y));
-    ctx.lineTo(points[points.length - 1].x, points[points.length - 1].baseY);
-    ctx.closePath();
-    ctx.fillStyle = color + '22';
-    ctx.fill();
+    runs.forEach((run) => {
+      ctx.beginPath();
+      ctx.moveTo(run[0].x, run[0].baseY);
+      run.forEach((point) => ctx.lineTo(point.x, point.y));
+      ctx.lineTo(run[run.length - 1].x, run[run.length - 1].baseY);
+      ctx.closePath();
+      ctx.fillStyle = color + '22';
+      ctx.fill();
+    });
   }
-  ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  points.forEach((point) => ctx.lineTo(point.x, point.y));
-  ctx.stroke();
+  runs.forEach((run) => {
+    ctx.beginPath();
+    ctx.moveTo(run[0].x, run[0].y);
+    run.forEach((point) => ctx.lineTo(point.x, point.y));
+    ctx.stroke();
+  });
   ctx.setLineDash([]);
   ctx.fillStyle = color;
-  points.forEach((point) => {
-    ctx.beginPath();
-    ctx.arc(point.x, point.y, 2.5, 0, Math.PI * 2);
-    ctx.fill();
+  runs.forEach((run) => {
+    run.forEach((point) => {
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    });
   });
   ctx.restore();
 }
@@ -1731,20 +1798,26 @@ function drawLineChart(id, labels, series, options = {}) {
     const setup = setupCanvas(id);
     if (!setup) return;
     const { ctx, width, height } = setup;
-    const maxValue = options.maxValue !== undefined ? options.maxValue : Math.max(0, ...series.flatMap((item) => item.data));
+    const allValues = series.flatMap((item) => item.data.filter((v) => v !== null && v !== undefined && !Number.isNaN(v)));
+    const maxValue = options.maxValue !== undefined ? options.maxValue : Math.max(0, ...allValues);
     if (!maxValue) {
       drawNoData(ctx, width, height);
       return;
     }
     const legendBottom = drawLegend(ctx, series.map((item) => ({ label: item.label, color: item.color })), 18, 18, width - 36);
-    const plot = { left: 48, top: legendBottom + 8, width: width - 70, height: height - legendBottom - 72 };
     const yMax = options.maxValue !== undefined ? options.maxValue : niceMax(maxValue);
+    ctx.save();
+    ctx.font = FONT_MONO_SMALL;
+    const measure = (s) => ctx.measureText(s).width;
+    const yAxisMaxTickLabel = (options.formatter || formatTick)(yMax);
+    const plot = computeBarPlot({ width, height, legendBottom, labels, charWidth: measure, yAxisMaxTickLabel });
+    ctx.restore();
     const ticks = ticksFor(yMax).map((raw) => ({ raw, value: raw / yMax }));
     drawPlotFrame(ctx, plot, ticks, options.formatter || formatTick);
-    const step = labels.length > 1 ? plot.width / (labels.length - 1) : 0;
+    // uses centered slot math; same function used by drawXAxisLabels so points align with labels
     series.forEach((item) => {
       const points = item.data.map((value, index) => ({
-        x: plot.left + step * index,
+        x: slotCenterX(index, labels.length, plot),
         y: plot.top + plot.height - (value / yMax) * plot.height,
         baseY: plot.top + plot.height,
       }));
@@ -1759,8 +1832,8 @@ function drawDualChart(id, labels, bars, line, options = {}) {
     const setup = setupCanvas(id);
     if (!setup) return;
     const { ctx, width, height } = setup;
-    const leftMax = options.leftMax !== undefined ? options.leftMax : niceMax(Math.max(0, ...line.data));
-    const rightMax = options.rightMax !== undefined ? options.rightMax : niceMax(Math.max(0, ...bars.data));
+    const leftMax = options.leftMax !== undefined ? options.leftMax : niceMax(Math.max(0, ...line.data.filter((v) => v !== null && v !== undefined && !Number.isNaN(v))));
+    const rightMax = options.rightMax !== undefined ? options.rightMax : niceMax(Math.max(0, ...bars.data.filter((v) => v !== null && v !== undefined && !Number.isNaN(v))));
     if (!leftMax && !rightMax) {
       drawNoData(ctx, width, height);
       return;
@@ -1772,7 +1845,16 @@ function drawDualChart(id, labels, bars, line, options = {}) {
       18,
       width - 36,
     );
-    const plot = { left: 48, top: legendBottom + 8, width: width - 90, height: height - legendBottom - 72 };
+    ctx.save();
+    ctx.font = FONT_MONO_SMALL;
+    const measure = (s) => ctx.measureText(s).width;
+    // For dual-axis: pick whichever tick label is WIDER in pixels (not char count —
+    // '%' and digits can have different widths in some fonts).
+    const leftTickLabel = (options.leftFormatter || formatTick)(leftMax);
+    const rightTickLabel = (options.rightFormatter || formatTick)(rightMax);
+    const yAxisMaxTickLabel = measure(leftTickLabel) >= measure(rightTickLabel) ? leftTickLabel : rightTickLabel;
+    const plot = computeBarPlot({ width, height, legendBottom, labels, charWidth: measure, yAxisMaxTickLabel });
+    ctx.restore();
     const leftTicks = ticksFor(leftMax).map((raw) => ({ raw, value: raw / leftMax }));
     const rightTicks = ticksFor(rightMax).map((raw) => ({ raw, value: raw / rightMax }));
     drawPlotFrame(ctx, plot, leftTicks, options.leftFormatter || formatTick, rightTicks, options.rightFormatter || formatTick);
@@ -1784,9 +1866,9 @@ function drawDualChart(id, labels, bars, line, options = {}) {
       ctx.fillStyle = bars.color;
       ctx.fillRect(x, plot.top + plot.height - heightValue, barWidth, heightValue);
     });
-    const step = labels.length > 1 ? plot.width / (labels.length - 1) : 0;
+    // uses centered slot math; same function used by drawXAxisLabels so points align with labels
     const points = line.data.map((value, index) => ({
-      x: plot.left + step * index,
+      x: slotCenterX(index, labels.length, plot),
       y: plot.top + plot.height - (value / leftMax) * plot.height,
       baseY: plot.top + plot.height,
     }));
@@ -1800,8 +1882,8 @@ function drawDualLineChart(id, labels, leftSeries, rightSeries, options = {}) {
     const setup = setupCanvas(id);
     if (!setup) return;
     const { ctx, width, height } = setup;
-    const leftMax = options.leftMax !== undefined ? options.leftMax : niceMax(Math.max(0, ...leftSeries.data));
-    const rightMax = options.rightMax !== undefined ? options.rightMax : niceMax(Math.max(0, ...rightSeries.data));
+    const leftMax = options.leftMax !== undefined ? options.leftMax : niceMax(Math.max(0, ...leftSeries.data.filter((v) => v !== null && v !== undefined && !Number.isNaN(v))));
+    const rightMax = options.rightMax !== undefined ? options.rightMax : niceMax(Math.max(0, ...rightSeries.data.filter((v) => v !== null && v !== undefined && !Number.isNaN(v))));
     if (!leftMax && !rightMax) {
       drawNoData(ctx, width, height);
       return;
@@ -1813,18 +1895,27 @@ function drawDualLineChart(id, labels, leftSeries, rightSeries, options = {}) {
       18,
       width - 36,
     );
-    const plot = { left: 48, top: legendBottom + 8, width: width - 90, height: height - legendBottom - 72 };
+    ctx.save();
+    ctx.font = FONT_MONO_SMALL;
+    const measure = (s) => ctx.measureText(s).width;
+    // For dual-axis: pick whichever tick label is WIDER in pixels (not char count —
+    // '%' and digits can have different widths in some fonts).
+    const leftTickLabel = (options.leftFormatter || formatTick)(leftMax);
+    const rightTickLabel = (options.rightFormatter || formatTick)(rightMax);
+    const yAxisMaxTickLabel = measure(leftTickLabel) >= measure(rightTickLabel) ? leftTickLabel : rightTickLabel;
+    const plot = computeBarPlot({ width, height, legendBottom, labels, charWidth: measure, yAxisMaxTickLabel });
+    ctx.restore();
     const leftTicks = ticksFor(leftMax).map((raw) => ({ raw, value: raw / leftMax }));
     const rightTicks = ticksFor(rightMax).map((raw) => ({ raw, value: raw / rightMax }));
     drawPlotFrame(ctx, plot, leftTicks, options.leftFormatter || formatTick, rightTicks, options.rightFormatter || formatTick);
-    const step = labels.length > 1 ? plot.width / (labels.length - 1) : 0;
+    // uses centered slot math; same function used by drawXAxisLabels so points align with labels
     const leftPoints = leftSeries.data.map((value, index) => ({
-      x: plot.left + step * index,
+      x: slotCenterX(index, labels.length, plot),
       y: plot.top + plot.height - (value / leftMax) * plot.height,
       baseY: plot.top + plot.height,
     }));
     const rightPoints = rightSeries.data.map((value, index) => ({
-      x: plot.left + step * index,
+      x: slotCenterX(index, labels.length, plot),
       y: plot.top + plot.height - (value / rightMax) * plot.height,
       baseY: plot.top + plot.height,
     }));
@@ -1978,7 +2069,9 @@ def main():
 
     # Chart series
     weekly = agg["weekly"]
-    w_labels = [w["week"] for w in weekly]
+    # Use week_label (e.g. "W15") for display; fall back to full "week" key
+    # for older aggregate files that pre-date the week_label field.
+    w_labels = [w.get("week_label", w["week"]) for w in weekly]
 
     # heatmap
     grid = [[0] * 24 for _ in range(7)]
@@ -2385,7 +2478,7 @@ def main():
 
     # Growth curve chart section (both audiences but different placement)
     growth = agg.get("growth_curve", [])
-    growth_labels = json_for_script([g["week"] for g in growth])
+    growth_labels = json_for_script([g.get("week_label", g["week"]) for g in growth])
     growth_composite = json_for_script([g["composite_score"] for g in growth])
     growth_ta = json_for_script([g["ta_rate"] for g in growth])
     growth_good = json_for_script([g["good_rate"] for g in growth])

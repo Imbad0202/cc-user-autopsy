@@ -41,6 +41,7 @@ _FALLBACK_PRICING = PRICING["claude-opus-4-6"]
 
 _PATTERN_MIN_SAMPLE = 5  # minimum group size to emit a per-dimension pattern contrast sentence
 _USAGE_CHAR_MIN_SESSIONS = 10  # minimum session count to emit the usage_characteristics block
+GROWTH_MIN_RATED_PER_WEEK = 3  # weeks with fewer rated sessions emit null for good_rate/composite (not plottable)
 
 
 def _normalize_model_id(m: str) -> str:
@@ -1014,8 +1015,12 @@ def compute_aggregates(sessions, rated, facets_coverage):
     for w, d in sorted(weekly.items()):
         total_oc = sum(d["outcomes"].values())
         good = d["outcomes"].get("fully_achieved", 0) + d["outcomes"].get("mostly_achieved", 0)
+        # `week` is kept as "YYYY-WWW" for cross-year sorting/joining.
+        # `week_label` strips the year prefix for axis display ("W15" not "2026-W15").
+        week_label = w.split("-", 1)[-1] if "-" in w else w
         wk.append({
             "week": w,
+            "week_label": week_label,
             "sessions": d["sessions"],
             "tokens": d["tokens"],
             "commits": d["commits"],
@@ -1136,6 +1141,8 @@ def compute_aggregates(sessions, rated, facets_coverage):
     for w in result["weekly"]:
         if w["sessions"] == 0:
             continue
+        week_rated_count = w["rated"]
+        insufficient = week_rated_count < GROWTH_MIN_RATED_PER_WEEK
         ta_rate_w = 100 * w["uses_task_agent"] / w["sessions"]
         good_rate_w = w["good_rate_pct"]
         fric_ratio = (w["friction"] / w["sessions"]) / max_fric_per_session if max_fric_per_session else 0
@@ -1144,11 +1151,12 @@ def compute_aggregates(sessions, rated, facets_coverage):
         composite = round(0.4 * good_rate_w + 0.3 * ta_rate_w + 0.3 * fric_score, 1)
         growth.append({
             "week": w["week"],
-            "composite_score": composite,
-            "ta_rate": round(ta_rate_w, 1),
-            "good_rate": good_rate_w,
+            "week_label": w.get("week_label", w["week"]),
+            "composite_score": None if insufficient else composite,
+            "ta_rate": round(ta_rate_w, 1),  # uses sessions denominator, no gate
+            "good_rate": None if insufficient else good_rate_w,
             "fric_score": round(fric_score, 1),
-            "rated_sessions": w["rated"],
+            "rated_sessions": week_rated_count,
         })
     result["growth_curve"] = growth
 

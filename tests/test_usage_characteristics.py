@@ -712,5 +712,130 @@ class UsageCharacteristicsTests(unittest.TestCase):
         self.assertEqual(uc["until"], "2026-03-15")
 
 
+class GrowthCurveNullTests(unittest.TestCase):
+    """Tests that growth_curve emits None for good_rate and composite_score
+    when a week has fewer than GROWTH_MIN_RATED_PER_WEEK rated sessions."""
+
+    def _agg_session(self, sid, week, outcome="", **overrides):
+        """Minimal session dict compatible with compute_aggregates internals."""
+        base = {
+            "sid": sid,
+            "sid8": sid[:8],
+            "project": "test-project",
+            "project_key": "test-project",
+            "project_path": "/projects/test",
+            "start": f"2026-04-{14 + int(sid[1:]) % 7:02d}T10:00:00Z",
+            "week": week,
+            "hour": 10,
+            "weekday": 0,
+            "total_tokens": 1000,
+            "input_tokens": 500,
+            "output_tokens": 500,
+            "duration_min": 15,
+            "git_commits": 1,
+            "friction": 0,
+            "friction_counts": {},
+            "interrupts": 0,
+            "uses_task_agent": False,
+            "uses_mcp": False,
+            "uses_web_search": False,
+            "uses_web_fetch": False,
+            "tool_counts": {},
+            "outcome": outcome,
+            "session_type": "",
+            "helpfulness": "",
+            "first_prompt": "do something",
+            "first_prompt_len": 12,
+            "primary_success": "",
+            "brief_summary": "",
+            "friction_detail": "",
+            "goal_cats": {},
+            "underlying_goal": "",
+            "model_counts": {},
+            "cache_creation_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_create_tokens": 0,
+            "response_times": [],
+            "assistant_msgs": 5,
+            "user_msgs": 5,
+            "hit_output_limit": False,
+            "lines_added": 0,
+            "lines_removed": 0,
+            "files_modified": 0,
+        }
+        base.update(overrides)
+        return base
+
+    def _build_growth_curve(self, sessions):
+        """Call compute_aggregates and extract growth_curve."""
+        rated = [s for s in sessions if s.get("outcome", "")]
+        result = aggregate.compute_aggregates(sessions, rated, facets_coverage=60)
+        return result["growth_curve"]
+
+    def test_week_with_insufficient_rated_emits_null_good_rate(self):
+        """A week with only 2 rated sessions (< GROWTH_MIN_RATED_PER_WEEK=3)
+        must emit None for good_rate, not 0."""
+        sessions = []
+        # Week A: 2 rated sessions (insufficient)
+        for i in range(4):
+            outcome = "fully_achieved" if i < 2 else ""
+            sessions.append(self._agg_session(f"a{i}", "2026-W15", outcome=outcome))
+        # Week B: 4 rated sessions (sufficient)
+        for i in range(5):
+            outcome = "fully_achieved" if i < 4 else ""
+            sessions.append(self._agg_session(f"b{i}", "2026-W16", outcome=outcome))
+        gc = self._build_growth_curve(sessions)
+        week_a = next((w for w in gc if w["week"] == "2026-W15"), None)
+        week_b = next((w for w in gc if w["week"] == "2026-W16"), None)
+        self.assertIsNotNone(week_a, "Week A must appear in growth_curve")
+        self.assertIsNone(week_a["good_rate"],
+                          f"Week A with 2 rated sessions must emit null good_rate, got {week_a['good_rate']}")
+        self.assertIsNotNone(week_b, "Week B must appear in growth_curve")
+        self.assertIsNotNone(week_b["good_rate"],
+                             "Week B with 4 rated sessions must emit non-null good_rate")
+
+    def test_week_with_insufficient_rated_emits_null_composite(self):
+        """Same insufficient-rated week must also have None composite_score."""
+        sessions = []
+        for i in range(2):
+            sessions.append(self._agg_session(f"a{i}", "2026-W15", outcome="fully_achieved"))
+        sessions.append(self._agg_session("a2", "2026-W15", outcome=""))
+        gc = self._build_growth_curve(sessions)
+        week_a = next((w for w in gc if w["week"] == "2026-W15"), None)
+        self.assertIsNotNone(week_a)
+        self.assertIsNone(week_a["composite_score"],
+                          f"Week with 2 rated sessions must emit null composite_score, got {week_a['composite_score']}")
+
+    def test_ta_rate_preserved_regardless_of_rated_count(self):
+        """ta_rate uses sessions (not rated) as denominator — must be a number
+        even when rated < GROWTH_MIN_RATED_PER_WEEK."""
+        sessions = []
+        # 1 rated session + 2 unrated, 1 uses_task_agent
+        sessions.append(self._agg_session("a0", "2026-W15", outcome="fully_achieved", uses_task_agent=True))
+        sessions.append(self._agg_session("a1", "2026-W15", outcome=""))
+        sessions.append(self._agg_session("a2", "2026-W15", outcome=""))
+        gc = self._build_growth_curve(sessions)
+        week_a = next((w for w in gc if w["week"] == "2026-W15"), None)
+        self.assertIsNotNone(week_a)
+        self.assertIsNotNone(week_a["ta_rate"],
+                             "ta_rate must never be None — uses sessions denominator")
+        self.assertIsInstance(week_a["ta_rate"], float,
+                              "ta_rate must be a float")
+
+    def test_exactly_at_threshold_emits_non_null(self):
+        """GROWTH_MIN_RATED_PER_WEEK=3: exactly 3 rated sessions must NOT emit null."""
+        sessions = []
+        for i in range(3):
+            sessions.append(self._agg_session(f"a{i}", "2026-W15", outcome="fully_achieved"))
+        sessions.append(self._agg_session("a3", "2026-W15", outcome=""))
+        gc = self._build_growth_curve(sessions)
+        week_a = next((w for w in gc if w["week"] == "2026-W15"), None)
+        self.assertIsNotNone(week_a)
+        self.assertIsNotNone(week_a["good_rate"],
+                             "Exactly 3 rated sessions (== threshold) must NOT emit null good_rate")
+        self.assertIsNotNone(week_a["composite_score"],
+                             "Exactly 3 rated sessions (== threshold) must NOT emit null composite_score")
+
+
 if __name__ == "__main__":
     unittest.main()

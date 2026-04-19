@@ -20,9 +20,19 @@ function computeBarPlot({ width, height, legendBottom, labels, charWidth, yAxisM
   // Vertical band must hold the rotated label projection plus a small gap.
   // Use ceil to avoid sub-pixel under-budgeting.
   const labelBand = Math.ceil(longestRotated + 12);
-  // Left margin must hold the widest y-axis tick label plus 12px gap.
+  // Left margin must hold:
+  //   a) the widest y-axis tick label plus 12px gap, AND
+  //   b) half of the leftmost rotated label's diagonal projection plus a 6px gap.
+  // (b) mirrors the rightMargin logic: the first slot center sits at
+  // plot.left + groupWidth/2, and the label extends rotatedHalf to the LEFT
+  // of that center. Without this, the label's left tail clips into the y-axis
+  // line or the canvas border on narrow charts with long labels.
   const tickWidth = yAxisMaxTickLabel ? charWidth(yAxisMaxTickLabel) : 0;
-  const left = Math.max(48, Math.ceil(tickWidth + 12));
+  const left = Math.max(
+    48,
+    Math.ceil(tickWidth + 12),
+    Math.ceil(longestRotated / 2 + 6),
+  );
   // Right margin must hold half of the rightmost rotated label so it
   // doesn't fall off the canvas. Bar centers sit at (i+0.5)*groupWidth
   // from plot.left, so the rightmost center extends `rotated/2` past it.
@@ -39,6 +49,21 @@ function computeBarPlot({ width, height, legendBottom, labels, charWidth, yAxisM
     canvasWidth: width,
     canvasHeight: height,
   };
+}
+
+/**
+ * Return the X position of the center of the i-th slot in a chart plot.
+ * Used for both line-chart point X and x-axis label X so they always align.
+ *
+ * @param {number} index       - 0-based slot index
+ * @param {number} labelCount  - total slot count (>=1)
+ * @param {object} plot        - {left, width}
+ * @returns {number}           - pixel X position, NaN if labelCount <= 0
+ */
+function slotCenterX(index, labelCount, plot) {
+  if (labelCount <= 0) return NaN;
+  const groupWidth = plot.width / labelCount;
+  return plot.left + groupWidth * (index + 0.5);
 }
 
 function clipLabelToWidth(label, maxWidth, charWidth) {
@@ -59,6 +84,54 @@ function clipLabelToWidth(label, maxWidth, charWidth) {
   return lo > 0 ? label.slice(0, lo) + ELLIPSIS : '';
 }
 
+/**
+ * Split a list of points into contiguous runs of non-null points.
+ * A point is "null" when its y is null or undefined or NaN.
+ * Used by drawLinePath so line charts break (not dive to 0) on missing data.
+ *
+ * @param {Array<{x:number,y:number|null}>} points
+ * @returns {Array<Array<{x:number,y:number}>>}  - array of runs; each run has >=1 points
+ */
+function segmentsWithoutNulls(points) {
+  const runs = [];
+  let current = [];
+  for (const p of points) {
+    const hasValue = p.y !== null && p.y !== undefined && !Number.isNaN(p.y);
+    if (hasValue) {
+      current.push(p);
+    } else if (current.length) {
+      runs.push(current);
+      current = [];
+    }
+  }
+  if (current.length) runs.push(current);
+  return runs;
+}
+
+/**
+ * Compute the legend layout for a donut chart given a set of labels.
+ * Returns an object that drawDonutChart can use to decide donut vs legend split
+ * and avoid clipping long label text.
+ *
+ * @param {string[]} labels    - Legend label strings (full form, e.g. "fully_achieved (63)")
+ * @param {function} charWidth - (string) → pixel width measurement
+ * @param {number} swatchWidth - Swatch circle diameter in pixels (e.g. 12)
+ * @param {number} gap         - Gap between swatch and label text in pixels (e.g. 8)
+ * @returns {{ labelWidth: number, rowHeight: number, totalHeight: number }}
+ */
+function computeLegendWidth(labels, charWidth, swatchWidth, gap) {
+  if (!labels || labels.length === 0) {
+    return { labelWidth: 0, rowHeight: 0, totalHeight: 0 };
+  }
+  const labelWidth = Math.max(...labels.map((l) => charWidth(l)));
+  const rowHeight = 22; // 22px gives breathing room between rows
+  return {
+    labelWidth,
+    rowHeight,
+    totalHeight: rowHeight * labels.length,
+  };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { computeBarPlot, clipLabelToWidth, measureRotatedLabel };
+  module.exports = { computeBarPlot, clipLabelToWidth, measureRotatedLabel, slotCenterX, segmentsWithoutNulls, computeLegendWidth };
 }

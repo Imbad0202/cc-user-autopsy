@@ -51,12 +51,10 @@ class CostTileTests(unittest.TestCase):
 class ModelsChartTests(unittest.TestCase):
     def test_activity_panel_includes_models_chart_canvas(self):
         """When `models` is populated, the activity panel must render a chart
-        container plus a short model label. We use the `claude-` prefix
-        stripped form (e.g. 'opus-4-6') for readability, so the legend
-        must at least contain that canonical short name."""
+        container plus a prettified model label (e.g. 'Opus 4.6')."""
         html = build_html._build_activity_panel(_activity_panel())
         self.assertIn('id="models-chart"', html)
-        self.assertIn("opus-4-6", html)
+        self.assertIn("Opus 4.6", html)
 
     def test_no_chart_when_models_empty(self):
         """Empty models dict → no chart canvas (avoid rendering an empty box)."""
