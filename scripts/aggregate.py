@@ -477,7 +477,7 @@ def score_d3_prompt_quality(sessions):
 
 def score_d4_context_mgmt(sessions):
     if not sessions:
-        return {"score": None}
+        return {"score": None, "pattern": None}
     otl = [
         s for s in sessions
         if any(k in s["friction_counts"] for k in
@@ -509,6 +509,17 @@ def score_d4_context_mgmt(sessions):
         score -= 1
     score = max(score, 3)
 
+    long_no_commit = [s for s in sessions if s.get("duration_min", 0) > 20 and s.get("git_commits", 0) == 0]
+    other          = [s for s in sessions if not (s.get("duration_min", 0) > 20 and s.get("git_commits", 0) == 0)]
+    pattern = None
+    if len(long_no_commit) >= _PATTERN_MIN_SAMPLE and len(other) >= _PATTERN_MIN_SAMPLE:
+        lnc_rate   = 100 * sum(1 for s in long_no_commit if s.get("hit_output_limit", False)) / len(long_no_commit)
+        other_rate = 100 * sum(1 for s in other         if s.get("hit_output_limit", False)) / len(other)
+        pattern = (
+            f"Sessions over 20 minutes without a commit hit output-token-limit "
+            f"{lnc_rate:.0f}% of the time, versus {other_rate:.0f}% for other sessions."
+        )
+
     return {
         "score": score,
         "metric_output_token_limit_sessions": len(otl),
@@ -516,6 +527,7 @@ def score_d4_context_mgmt(sessions):
         "metric_effort_no_commit_pct": round(enc_pct, 1),
         "metric_max_otl_in_one_project": max_proj_otl,
         "explanation": f"{len(otl)} sessions hit output-token-limit. {enc_pct:.0f}% of >20min sessions had 0 commits. Long-session interrupt rate: {long_intr_rate:.0f}%.",
+        "pattern": pattern,
     }
 
 

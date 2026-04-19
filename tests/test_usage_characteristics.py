@@ -162,5 +162,83 @@ class ScoreD3PatternTests(unittest.TestCase):
         self.assertIsNone(result["pattern"])
 
 
+class ScoreD4PatternTests(unittest.TestCase):
+    def _d4_session(self, sid, duration_min=10, git_commits=1,
+                    hit_output_limit=False, interrupts=0, project_key="proj-a"):
+        """Minimal session dict for score_d4_context_mgmt.
+
+        score_d4 accesses friction_counts, duration_min, interrupts,
+        project_key, and git_commits without .get() — all must be present.
+        """
+        return _session(
+            sid,
+            duration_min=duration_min,
+            git_commits=git_commits,
+            hit_output_limit=hit_output_limit,
+            interrupts=interrupts,
+            project_key=project_key,
+            friction_counts={},
+        )
+
+    def test_pattern_contrasts_long_no_commit_vs_other(self):
+        """6 long-no-commit (>20min, 0 commits) + 6 other sessions.
+        3 of the long-no-commit sessions hit output limit → 50%.
+        1 of the other sessions hits output limit → ~17%.
+        Pattern must contain '50%' AND '17%'.
+        """
+        long_no_commit = [
+            self._d4_session(f"lnc{i}", duration_min=25, git_commits=0,
+                             hit_output_limit=(i < 3))
+            for i in range(6)
+        ]
+        other = [
+            self._d4_session(f"oth{i}", duration_min=10, git_commits=2,
+                             hit_output_limit=(i == 0))
+            for i in range(6)
+        ]
+        sessions = long_no_commit + other
+        result = aggregate.score_d4_context_mgmt(sessions)
+        self.assertIn("pattern", result)
+        self.assertIsNotNone(result["pattern"])
+        self.assertIn("50%", result["pattern"])
+        self.assertIn("17%", result["pattern"])
+
+    def test_pattern_none_when_long_no_commit_group_too_small(self):
+        """Fewer than _PATTERN_MIN_SAMPLE long-no-commit sessions → pattern None."""
+        long_no_commit = [
+            self._d4_session(f"lnc{i}", duration_min=25, git_commits=0)
+            for i in range(4)   # only 4 — below floor
+        ]
+        other = [
+            self._d4_session(f"oth{i}", duration_min=10, git_commits=2)
+            for i in range(6)
+        ]
+        result = aggregate.score_d4_context_mgmt(long_no_commit + other)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+
+    def test_pattern_none_when_other_group_too_small(self):
+        """Fewer than _PATTERN_MIN_SAMPLE 'other' sessions → pattern None.
+        Symmetric floor: large long-no-commit group doesn't compensate.
+        """
+        long_no_commit = [
+            self._d4_session(f"lnc{i}", duration_min=25, git_commits=0)
+            for i in range(6)
+        ]
+        other = [
+            self._d4_session(f"oth{i}", duration_min=10, git_commits=2)
+            for i in range(4)   # only 4 — below floor
+        ]
+        result = aggregate.score_d4_context_mgmt(long_no_commit + other)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+
+    def test_pattern_key_present_when_no_sessions(self):
+        """Empty input: early-return path must still carry 'pattern' key = None."""
+        result = aggregate.score_d4_context_mgmt([])
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+
+
 if __name__ == "__main__":
     unittest.main()
