@@ -416,8 +416,8 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     --forest: #2e5b3e;
     --oxblood: #6b1b1b;
     --plum: #63355c;
-    --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
-    --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, "Songti TC", "Noto Serif CJK TC", serif;
+    --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Noto Sans CJK TC", sans-serif;
     --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 
     /* --- Spacing primitives (2px granularity, matches existing component values) --- */
@@ -518,6 +518,17 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   html[lang="zh-Hant"] h1.title em {
     font-weight: 600;
     font-variation-settings: "opsz" 144, "wght" 600;
+  }
+  /* CJK editorial rhythm: 字距補償（中英夾雜時西文後方需微距）+ 等寬數字
+     （stat tile 的 19,872 / 15,019 縱向對齊，避免 proportional 飄移）*/
+  html[lang="zh-Hant"] body,
+  html[lang="zh-Hant"] p {
+    letter-spacing: 0.02em;
+  }
+  html[lang="zh-Hant"] .metric .n,
+  html[lang="zh-Hant"] .num,
+  html[lang="zh-Hant"] .tile .n {
+    font-feature-settings: "tnum" 1, "lnum" 1;
   }
   @media (max-width: 720px) {
     html[lang="zh-Hant"] body { font-size: 17px; }
@@ -1582,20 +1593,44 @@ function drawXAxisLabels(ctx, labels, plot) {
   ctx.save();
   ctx.font = FONT_MONO_SMALL;
   ctx.fillStyle = MUTED;
-  ctx.textAlign = 'right';
-  // Per-label budget along the rotated axis: at -45deg the label rises into
-  // the gap between adjacent ticks, so width budget is groupWidth / cos(45).
   const measure = (s) => ctx.measureText(s).width;
-  const labelBudget = Math.max(40, (groupWidth / Math.SQRT1_2) * 0.95);
+  // Collect labels we'll actually render (after step filter) and check
+  // whether they all fit horizontally within their group slot. If yes,
+  // draw horizontally (cleaner). If no, fall back to -45deg rotation.
+  const toDraw = [];
   for (let i = 0; i < labels.length; i += 1) {
     if (i % step !== 0 && i !== labels.length - 1) continue;
-    const x = slotCenterX(i, labels.length, plot);
-    const y = plot.top + plot.height + 14;
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(-Math.PI / 4);
-    ctx.fillText(clipLabelToWidth(labels[i], labelBudget, measure), 0, 0);
-    ctx.restore();
+    toDraw.push(i);
+  }
+  const horizontalBudget = groupWidth * 0.9;
+  let maxWidth = 0;
+  for (const i of toDraw) {
+    const w = measure(labels[i]);
+    if (w > maxWidth) maxWidth = w;
+  }
+  const horizontal = maxWidth <= horizontalBudget;
+  if (horizontal) {
+    ctx.textAlign = 'center';
+    for (const i of toDraw) {
+      const x = slotCenterX(i, labels.length, plot);
+      const y = plot.top + plot.height + 14;
+      ctx.fillText(labels[i], x, y);
+    }
+  } else {
+    ctx.textAlign = 'right';
+    // Per-label budget along the rotated axis: at -45deg the label rises
+    // into the gap between adjacent ticks, so width budget is
+    // groupWidth / cos(45).
+    const labelBudget = Math.max(40, (groupWidth / Math.SQRT1_2) * 0.95);
+    for (const i of toDraw) {
+      const x = slotCenterX(i, labels.length, plot);
+      const y = plot.top + plot.height + 14;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(-Math.PI / 4);
+      ctx.fillText(clipLabelToWidth(labels[i], labelBudget, measure), 0, 0);
+      ctx.restore();
+    }
   }
   ctx.restore();
 }

@@ -278,7 +278,7 @@ STRINGS = {
             "從七個分桶最多取 24 個 session。展開任何一列可看當初評分與同行檢視所依據的原始脈絡。"
         ),
         "section_method": "方法論",
-        "section_method_subtitle": "這份報告是什麼，又不是什麼。",
+        "section_method_subtitle": "報告限制。",
         "method_h_sources": "資料來源",
         "method_src_session_meta": (
             "<code>~/.claude/usage-data/session-meta/*.json</code>：Claude Code 自動記錄。"
@@ -292,16 +292,19 @@ STRINGS = {
         ),
         "method_h_sampling": "抽樣策略",
         "method_sampling_body": (
-            "從七個分桶最多取 24 個 session：摩擦最高 5 筆、Token 用量最多 5 筆、"
-            "中斷次數最多 5 筆、未達成 4 筆、部分達成 3 筆、對照組（完全達成+關鍵）4 筆、"
-            "你否決動作 2 筆。若無 facet 資料，改以 session 持續時間為後備抽樣依據。"
+            "最多抽 24 個 session 進證據庫，分七類：摩擦最高 5 筆、Token 用量最多 5 筆、"
+            "中斷次數最多 5 筆、未達成 4 筆、部分達成 3 筆、"
+            "對照組（完全達成＋關鍵任務）4 筆、你否決 Claude 動作 2 筆。"
+            "沒有 facet 資料時改看 session 長度。"
         ),
         "method_h_caveats": "注意事項",
         "method_caveats_body": (
-            "Facet 標籤由 LLM 產出，可能誤分類。Facet 覆蓋率約 50% 以上，"
-            "outcome 規則才可靠；30% 以下，某些面向會回 n/a。"
-            "評分門檻只是經驗法則，不是科學。"
-            "同行檢視倚賴足夠資料才有具體結論；資料量薄時，回饋應該短，而不是被填滿。"
+            "Facet 標籤是 LLM 分類出來的，會有誤判。"
+            "Facet 覆蓋率要超過 50%，outcome 相關規則才站得住；"
+            "低於 30% 時部分面向會顯示 n/a。"
+            "評分門檻是經驗值，不是科學公式。"
+            "同行檢視要有足夠資料才做得出具體判斷；"
+            "資料量薄的時候，回饋要精簡，不是硬湊滿版。"
         ),
         # --- Hero block (self audience) ---
         "hero_self_title_line1": "一份診斷信",
