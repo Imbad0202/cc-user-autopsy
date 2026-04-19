@@ -837,8 +837,7 @@ def compute_activity(sessions):
         pct2 = round(100 * long_friction / denom2) if denom2 > 0 else 0
 
         # Item 3: good+task_agent / good-total
-        good_sessions = [s for s in sessions
-                         if s.get("outcome") in ("fully_achieved", "good")]
+        good_sessions = [s for s in sessions if is_good(s.get("outcome", ""))]
         good_task_agent = sum(1 for s in good_sessions if s.get("uses_task_agent"))
         denom3 = len(good_sessions)
         pct3 = round(100 * good_task_agent / denom3) if denom3 > 0 else 0

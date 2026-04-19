@@ -601,9 +601,65 @@ class ScoreD8PatternTests(unittest.TestCase):
 
 class UsageCharacteristicsTests(unittest.TestCase):
     def test_block_emitted_when_10_plus_sessions(self):
-        """20 sessions → usage_characteristics block present with 5 items,
-        n_sessions=20, since/until, each item has pct/label/tip, pct is int."""
-        sessions = [_session(f"s{i}") for i in range(20)]
+        """20 sessions with varied inputs → specific pct values verify each item.
+
+        Session layout (20 total):
+        - Item 1 (hit_output_limit rate): 4 True / 20 → 20%
+        - Item 3 (good+TA / good):
+            6 fully_achieved (4 with TA) + 4 mostly_achieved (1 with TA) = 10 good, 5 TA
+            → correct: 5/10 = 50%
+            → bug (missing mostly_achieved): 4/6 = 67% (rounds to 67) ≠ 50 → RED
+        - Item 4 (narrow-tool rate): sessions with exactly 1 distinct tool = 10/20 = 50%
+
+        Session index → attributes:
+          s0-s5  (6): fully_achieved, first 4 have TA, narrow (1 tool {"Read":5})
+          s6-s9  (4): mostly_achieved, first 1 has TA, wide (3 tools)
+          s10-s13(4): failed, no TA, hit_output_limit=True, narrow (1 tool)
+          s14-s19(6): outcome="", no TA, no limit, wide (3 tools)
+
+        Item 1: hit_output_limit True = s10-s13 = 4/20 = 20
+        Item 3: good = s0-s9 = 10; TA in good = s0,s1,s2,s3 + s6 = 5 → 5/10 = 50
+                bug path: good = s0-s5 = 6; TA in good = 4 → round(400/6) = 67 (≠ 50)
+        Item 4: narrow (len(tool_counts)==1) = s0-s5 (6) + s10-s13 (4) = 10/20 = 50
+        """
+        sessions = []
+        # s0-s5: fully_achieved, first 4 have TA, narrow (1 tool)
+        for i in range(6):
+            sessions.append(_session(
+                f"s{i}",
+                outcome="fully_achieved",
+                uses_task_agent=(i < 4),
+                hit_output_limit=False,
+                tool_counts={"Read": 5},
+            ))
+        # s6-s9: mostly_achieved, only s6 has TA, wide (3 tools)
+        for i in range(4):
+            sessions.append(_session(
+                f"s{i + 6}",
+                outcome="mostly_achieved",
+                uses_task_agent=(i == 0),
+                hit_output_limit=False,
+                tool_counts={"Read": 2, "Bash": 1, "Edit": 1},
+            ))
+        # s10-s13: failed, no TA, hit_output_limit=True, narrow (1 tool)
+        for i in range(4):
+            sessions.append(_session(
+                f"s{i + 10}",
+                outcome="failed",
+                uses_task_agent=False,
+                hit_output_limit=True,
+                tool_counts={"Read": 3},
+            ))
+        # s14-s19: unrated (outcome=""), no TA, no limit, wide (3 tools)
+        for i in range(6):
+            sessions.append(_session(
+                f"s{i + 14}",
+                outcome="",
+                uses_task_agent=False,
+                hit_output_limit=False,
+                tool_counts={"Read": 2, "Bash": 1, "Edit": 1},
+            ))
+
         activity = aggregate.compute_activity(sessions)
         self.assertIn("usage_characteristics", activity)
         uc = activity["usage_characteristics"]
@@ -617,6 +673,19 @@ class UsageCharacteristicsTests(unittest.TestCase):
             self.assertIn("label", item)
             self.assertIn("tip", item)
             self.assertIsInstance(item["pct"], int)
+
+        # Item 1: hit_output_limit rate = 4/20 = 20%
+        self.assertEqual(uc["items"][0]["pct"], 20,
+                         "Item 1 (hit_output_limit rate) should be 20% (4/20)")
+        # Item 3: good+TA / good = 5/10 = 50%
+        # If 'mostly_achieved' were excluded (the bug), denominator = 6 (fully_achieved only),
+        # TA count = 4 → round(100*4/6) = 67, NOT 50. This assertion catches the regression.
+        self.assertEqual(uc["items"][2]["pct"], 50,
+                         "Item 3 (good+TA / good) should be 50% (5/10); "
+                         "bug would give 67% (4/6) by missing mostly_achieved")
+        # Item 4: narrow-tool (1 distinct tool) rate = 10/20 = 50%
+        self.assertEqual(uc["items"][3]["pct"], 50,
+                         "Item 4 (narrow-tool rate) should be 50% (10/20)")
 
     def test_block_omitted_below_10_sessions(self):
         """8 sessions → usage_characteristics NOT in activity."""
