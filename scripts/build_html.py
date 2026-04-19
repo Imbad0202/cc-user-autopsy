@@ -360,6 +360,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     --space-10: 20px;
     --space-11: 22px;
     --space-12: 24px;
+    /* --space-13 (26px) omitted — only used in intro-card's unique horizontal padding */
     --space-14: 28px;
     --space-15: 30px;
 

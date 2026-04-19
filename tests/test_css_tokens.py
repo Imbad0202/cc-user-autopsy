@@ -6,7 +6,6 @@ Primitives define the scale; semantic aliases name the intent.
 Target component CSS blocks must not contain hard-coded spacing.
 """
 import re
-import sys
 import unittest
 from pathlib import Path
 
