@@ -345,6 +345,51 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
     --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+    /* --- Spacing primitives (2px granularity, matches existing component values) --- */
+    --space-0: 0;
+    --space-1: 2px;
+    --space-2: 4px;
+    --space-3: 6px;
+    --space-4: 8px;
+    --space-5: 10px;
+    --space-6: 12px;
+    --space-7: 14px;
+    --space-8: 16px;
+    --space-9: 18px;
+    --space-10: 20px;
+    --space-11: 22px;
+    --space-12: 24px;
+    /* --space-13 (26px) omitted — only used in intro-card's unique horizontal padding */
+    --space-14: 28px;
+    --space-15: 30px;
+
+    /* --- Radius primitives --- */
+    --radius-sm: 2px;
+    --radius-md: 3px;
+    --radius-lg: 6px;
+
+    /* --- Font-size primitives (zh-Hant overrides handled separately) --- */
+    --text-xs: 11.5px;
+    --text-sm: 13px;
+    --text-base: 15px;
+    --text-md: 16px;
+    --text-lg: 17px;
+    --text-xl: 18px;
+    --text-2xl: 24px;
+
+    /* --- Line-height primitives --- */
+    --leading-tight: 1.2;
+    --leading-snug: 1.35;
+    --leading-normal: 1.55;
+    --leading-loose: 1.7;
+
+    /* --- Semantic aliases (design intent — add new ones as components need them).
+       --card-padding / --card-radius were considered but removed pending a concrete
+       consumer; .profile-card currently uses primitives directly. --- */
+    --section-gap: var(--space-15);
+    --tag-padding-y: var(--space-1);
+    --tag-padding-x: var(--space-3);
   }
 
   * { box-sizing: border-box; }
@@ -389,6 +434,17 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   html[lang="zh-Hant"] .intro-card { font-size: 17px; }
   html[lang="zh-Hant"] .method,
   html[lang="zh-Hant"] .caveat { font-size: 15.5px; }
+  /* Variable serif weight 300 renders bony on CJK fallbacks (PingFang TC,
+     Noto Serif CJK). Bump to 500 (em to 600) so the Chinese hero reads
+     with intent, not fragility. English hero unaffected (lang="en"). */
+  html[lang="zh-Hant"] h1.title {
+    font-weight: 500;
+    font-variation-settings: "opsz" 144, "wght" 500;
+  }
+  html[lang="zh-Hant"] h1.title em {
+    font-weight: 600;
+    font-variation-settings: "opsz" 144, "wght" 600;
+  }
   @media (max-width: 720px) {
     html[lang="zh-Hant"] body { font-size: 17px; }
   }
@@ -436,18 +492,18 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
   .dek {
     font-family: var(--sans);
-    font-size: 15px;
-    line-height: 1.55;
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
     color: var(--ink-soft);
     max-width: 56ch;
-    margin: 0 0 30px 0;
+    margin: 0 0 var(--section-gap) 0;
   }
 
   .intro-card {
     border: 1px solid var(--rule);
     background: rgba(255,250,240,0.5);
-    padding: 22px 26px;
-    margin: 0 0 60px 0;
+    padding: var(--space-11) 26px;       /* 26px horizontal kept hardcode (component-unique) */
+    margin: 0 0 calc(2 * var(--section-gap)) 0;   /* 60px = 2× section-gap */
     font-size: 15.5px;
     line-height: 1.6;
     position: relative;
@@ -455,9 +511,9 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .intro-card::before {
     content: "NOTE";
     position: absolute;
-    top: -9px; left: 22px;
+    top: -9px; left: var(--space-11);   /* 22px — intentionally 4px inside the 26px horizontal padding */
     background: var(--paper);
-    padding: 0 8px;
+    padding: 0 var(--space-4);
     font-family: var(--mono);
     font-size: 10px;
     letter-spacing: 0.2em;
@@ -573,14 +629,14 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 0;
-    margin: 30px 0 20px 0;
+    margin: var(--space-15) 0 var(--space-10) 0;
     border-top: 1px solid var(--rule);
     border-left: 1px solid var(--rule);
   }
   .metrics > .metric {
     border-right: 1px solid var(--rule);
     border-bottom: 1px solid var(--rule);
-    padding: 16px 18px 18px 18px;
+    padding: var(--space-8) var(--space-9) var(--space-9) var(--space-9);
     background: rgba(255,250,240,0.35);
   }
   @media (max-width: 640px) {
@@ -589,7 +645,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .metric .n {
     font-family: var(--serif);
     font-variation-settings: "opsz" 72, "wght" 400;
-    font-size: 32px;
+    font-size: 32px;   /* hero-size display number; not on type scale */
     line-height: 1;
     letter-spacing: -0.025em;
     color: var(--ink);
@@ -600,7 +656,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--ink-muted);
-    margin-top: 8px;
+    margin-top: var(--space-4);
   }
 
   /* Score rows — like rubric scores on a form */
@@ -730,8 +786,8 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
   /* ---- HR-facing additions ---- */
   .profile-card {
-    margin: 24px 0 48px 0;
-    padding: 30px 34px 34px 34px;
+    margin: var(--space-12) 0 48px 0;
+    padding: var(--space-15) 34px 34px 34px;
     background: linear-gradient(135deg, rgba(255,250,240,0.8) 0%, rgba(236,229,213,0.4) 100%);
     border: 1px solid var(--rule);
     border-left: 4px solid var(--accent);
@@ -740,9 +796,9 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .profile-card::before {
     content: "AT A GLANCE";
     position: absolute;
-    top: -10px; left: 30px;
+    top: -10px; left: var(--space-15);
     background: var(--paper);
-    padding: 0 10px;
+    padding: 0 var(--space-5);
     font-family: var(--mono);
     font-size: 10.5px;
     letter-spacing: 0.26em;
@@ -755,7 +811,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     line-height: 1.42;
     letter-spacing: -0.012em;
     color: var(--ink);
-    margin: 0 0 22px 0;
+    margin: 0 0 var(--space-11) 0;
   }
   .profile-lede em {
     color: var(--accent);
@@ -766,7 +822,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 0;
-    margin-top: 20px;
+    margin-top: var(--space-10);
     border-top: 1px solid var(--rule);
     border-left: 1px solid var(--rule);
   }
@@ -774,7 +830,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .profile-cell {
     border-right: 1px solid var(--rule);
     border-bottom: 1px solid var(--rule);
-    padding: 14px 16px 16px 16px;
+    padding: var(--space-7) var(--space-8) var(--space-8) var(--space-8);
   }
   .profile-cell .k {
     font-family: var(--mono);
@@ -782,12 +838,12 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--ink-muted);
-    margin-bottom: 6px;
+    margin-bottom: var(--space-3);
   }
   .profile-cell .v {
     font-family: var(--serif);
     font-variation-settings: "opsz" 72, "wght" 400;
-    font-size: 24px;
+    font-size: var(--text-2xl);
     line-height: 1.1;
     letter-spacing: -0.02em;
     color: var(--ink);
@@ -796,7 +852,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     font-family: var(--sans);
     font-size: 12px;
     color: var(--ink-muted);
-    margin-top: 3px;
+    margin-top: var(--space-1);
   }
 
   /* How to read */
@@ -962,9 +1018,9 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .chart-box {
     background: rgba(255,250,240,0.4);
     border: 1px solid var(--rule);
-    padding: 18px 20px 14px 20px;
-    margin: 20px 0;
-    height: 340px;
+    padding: var(--space-9) var(--space-10) var(--space-7) var(--space-10);
+    margin: var(--space-10) 0;
+    height: 340px;     /* fixed chart area; not a spacing token */
     position: relative;
   }
   .chart-box.tall { height: 420px; }
@@ -977,9 +1033,9 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .chart-box::after {
     content: attr(data-fig);
     position: absolute;
-    top: -8px; right: 18px;
+    top: -8px; right: var(--space-9);
     background: var(--paper);
-    padding: 0 8px;
+    padding: 0 var(--space-4);
     font-family: var(--mono);
     font-size: 9.5px;
     letter-spacing: 0.2em;
@@ -992,7 +1048,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   /* §06 evidence library */
   details.evidence {
     border-top: 1px solid var(--rule);
-    padding: 14px 0;
+    padding: var(--space-7) 0;
     margin: 0;
   }
   details.evidence:last-of-type { border-bottom: 1px solid var(--rule); }
@@ -1004,8 +1060,8 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     line-height: 1.4;
     color: var(--ink);
     display: grid;
-    grid-template-columns: 90px 1fr 80px;
-    gap: 16px;
+    grid-template-columns: 90px 1fr 80px;   /* summary tri-column layout */
+    gap: var(--space-8);
     align-items: center;
   }
   details.evidence summary::-webkit-details-marker { display: none; }
@@ -1015,7 +1071,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--ink-muted);
-    padding: 3px 8px;
+    padding: var(--tag-padding-y) var(--tag-padding-x);   /* 2px 6px, intentional -1/-2px from orig 3/8 */
     border: 1px solid var(--rule);
     text-align: center;
     border-radius: 1px;
@@ -1027,7 +1083,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   details.evidence summary .tag.top_token { color: var(--plum); border-color: var(--plum); }
   details.evidence summary .sid {
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: var(--text-sm);
     color: var(--ink-soft);
   }
   details.evidence summary .proj { color: var(--ink); }
@@ -1037,14 +1093,14 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     font-size: 11.5px;
     color: var(--ink-muted);
   }
-  details.evidence[open] summary { margin-bottom: 14px; }
+  details.evidence[open] summary { margin-bottom: var(--space-7); }
   details.evidence[open] summary .sid { color: var(--accent); }
   details.evidence p {
     font-family: var(--sans);
     font-size: 14px;
     line-height: 1.55;
-    margin: 6px 0;
-    padding-left: 106px;
+    margin: var(--space-3) 0;
+    padding-left: 106px;     /* aligns after summary's 90px col + space-8 gap */
   }
   details.evidence p code {
     font-size: 0.85em;
@@ -1059,8 +1115,8 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     letter-spacing: 0.22em;
     text-transform: uppercase;
     color: var(--accent);
-    margin: 34px 0 8px 0;
-    padding-bottom: 6px;
+    margin: 34px 0 var(--space-4) 0;     /* 34px = component-unique top gap */
+    padding-bottom: var(--space-3);
     border-bottom: 1px solid var(--rule);
   }
 
@@ -1083,14 +1139,14 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     font-size: 14.5px;
     line-height: 1.6;
   }
-  .method ul { padding-left: 20px; margin: 8px 0 14px 0; }
-  .method li { margin: 4px 0; }
+  .method ul { padding-left: var(--space-10); margin: var(--space-4) 0 var(--space-7) 0; }
+  .method li { margin: var(--space-2) 0; }
   .caveat {
     background: rgba(160, 67, 30, 0.06);
     border: 1px solid rgba(160, 67, 30, 0.2);
     border-left: 3px solid var(--accent);
-    padding: 14px 20px;
-    margin: 16px 0;
+    padding: var(--space-7) var(--space-10);
+    margin: var(--space-8) 0;
     font-size: 14px;
     line-height: 1.6;
   }
