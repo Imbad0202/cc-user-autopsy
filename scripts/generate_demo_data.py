@@ -242,6 +242,20 @@ def gen_session(sid, start_time, project):
         "git_pushes": commits if commits > 0 and random.random() < 0.7 else 0,
         "input_tokens": max(0, in_tok),
         "output_tokens": max(0, out_tok),
+        # Cache tokens scale with input — realistic Claude Code users see
+        # heavy cache reuse because the system prompt + CLAUDE.md stays stable
+        # across turns. cache_read typically 4-8× input; cache_creation
+        # much smaller (only when context shifts).
+        "cache_read_input_tokens": int(max(0, in_tok) * random.uniform(4.0, 8.0)),
+        "cache_creation_input_tokens": int(max(0, in_tok) * random.uniform(0.15, 0.35)),
+        # model_counts: which model answered how many turns. Use session's
+        # primary model plus a small rotation so the favorite_model tile and
+        # models-breakdown chart render plausibly.
+        "model_counts": (lambda primary: {
+            primary: assistant_msgs - (1 if assistant_msgs > 3 else 0),
+            **({weighted_choice({m: w for m, w in MODEL_MIX.items() if m != primary}): 1}
+               if assistant_msgs > 3 else {}),
+        })(weighted_choice(MODEL_MIX)),
         "first_prompt": fp_text,
         "user_interruptions": interrupts,
         "user_response_times": response_times,
