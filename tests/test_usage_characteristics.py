@@ -319,5 +319,95 @@ class ScoreD5PatternTests(unittest.TestCase):
         self.assertIsNotNone(result["score"])
 
 
+class ScoreD6PatternTests(unittest.TestCase):
+    def _d6_session(self, sid, tool_counts=None, outcome="", uses_mcp=False):
+        """Minimal session dict for score_d6_tool_breadth.
+
+        score_d6_tool_breadth accesses s["uses_mcp"] and s["tool_counts"]
+        without .get(), so both keys must be present. The base _session()
+        does not include 'uses_mcp', so we set it explicitly here.
+        """
+        return _session(
+            sid,
+            tool_counts=tool_counts if tool_counts is not None else {},
+            outcome=outcome,
+            uses_mcp=uses_mcp,
+        )
+
+    def test_pattern_contrasts_diverse_vs_narrow(self):
+        """6 diverse sessions (≥4 distinct tools, 3 good → 50%) +
+        6 narrow sessions (1-2 distinct tools, 5 good → ~83%).
+        Pattern must contain '50%' AND '83%' AND '≥4' AND '1–2' (EN-DASH).
+        """
+        diverse_tools = {"Bash": 5, "Read": 3, "Edit": 2, "Grep": 1}  # 4 distinct tools
+        narrow_tools = {"Bash": 5, "Read": 3}  # 2 distinct tools
+
+        diverse = [
+            self._d6_session(
+                f"div{i}",
+                tool_counts=diverse_tools,
+                outcome="fully_achieved" if i < 3 else "failed",
+            )
+            for i in range(6)
+        ]
+        narrow = [
+            self._d6_session(
+                f"nar{i}",
+                tool_counts=narrow_tools,
+                outcome="fully_achieved" if i < 5 else "failed",
+            )
+            for i in range(6)
+        ]
+        result = aggregate.score_d6_tool_breadth(diverse + narrow)
+        self.assertIn("pattern", result)
+        self.assertIsNotNone(result["pattern"])
+        self.assertIn("50%", result["pattern"])
+        self.assertIn("83%", result["pattern"])
+        self.assertIn("≥4", result["pattern"])
+        self.assertIn("1\u20132", result["pattern"])  # EN-DASH U+2013
+
+    def test_pattern_none_when_diverse_group_too_small(self):
+        """Fewer than _PATTERN_MIN_SAMPLE diverse sessions → pattern is None."""
+        diverse_tools = {"Bash": 5, "Read": 3, "Edit": 2, "Grep": 1}
+        narrow_tools = {"Bash": 5, "Read": 3}
+
+        diverse = [
+            self._d6_session(f"div{i}", tool_counts=diverse_tools, outcome="fully_achieved")
+            for i in range(4)  # only 4 — below floor
+        ]
+        narrow = [
+            self._d6_session(f"nar{i}", tool_counts=narrow_tools, outcome="fully_achieved")
+            for i in range(6)
+        ]
+        result = aggregate.score_d6_tool_breadth(diverse + narrow)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+
+    def test_pattern_none_when_narrow_group_too_small(self):
+        """Fewer than _PATTERN_MIN_SAMPLE narrow sessions → pattern is None.
+        Symmetric floor: large diverse group doesn't compensate.
+        """
+        diverse_tools = {"Bash": 5, "Read": 3, "Edit": 2, "Grep": 1}
+        narrow_tools = {"Bash": 5, "Read": 3}
+
+        diverse = [
+            self._d6_session(f"div{i}", tool_counts=diverse_tools, outcome="fully_achieved")
+            for i in range(6)
+        ]
+        narrow = [
+            self._d6_session(f"nar{i}", tool_counts=narrow_tools, outcome="fully_achieved")
+            for i in range(4)  # only 4 — below floor
+        ]
+        result = aggregate.score_d6_tool_breadth(diverse + narrow)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+
+    def test_pattern_key_present_when_no_sessions(self):
+        """Empty input: early return must carry 'pattern' key = None."""
+        result = aggregate.score_d6_tool_breadth([])
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -566,7 +566,7 @@ def score_d5_interrupt(rated):
 
 def score_d6_tool_breadth(sessions):
     if not sessions:
-        return {"score": None}
+        return {"score": None, "pattern": None}
     mcp_rate = 100 * sum(1 for s in sessions if s["uses_mcp"]) / len(sessions)
     tool_totals = Counter()
     for s in sessions:
@@ -588,12 +588,25 @@ def score_d6_tool_breadth(sessions):
         score = 5
     else:
         score = 4
+
+    diverse = [s for s in sessions if len(s.get("tool_counts", {})) >= 4]
+    narrow  = [s for s in sessions if 0 < len(s.get("tool_counts", {})) <= 2]
+    pattern = None
+    if len(diverse) >= _PATTERN_MIN_SAMPLE and len(narrow) >= _PATTERN_MIN_SAMPLE:
+        diverse_good = 100 * sum(1 for s in diverse if is_good(s["outcome"])) / len(diverse)
+        narrow_good  = 100 * sum(1 for s in narrow  if is_good(s["outcome"])) / len(narrow)
+        pattern = (
+            f"Sessions using ≥4 distinct tools reached good outcomes {diverse_good:.0f}% of the time, "
+            f"versus {narrow_good:.0f}% for sessions using 1\u20132 tools."
+        )
+
     return {
         "score": score,
         "metric_mcp_rate_pct": round(mcp_rate, 1),
         "metric_top3_share_pct": round(top3_share, 1),
         "metric_top_tools": dict(tool_totals.most_common(10)),
         "explanation": f"{mcp_rate:.0f}% of sessions used any MCP tool; top-3 tools (Bash/Read/Edit) consume {top3_share:.0f}% of all calls.",
+        "pattern": pattern,
     }
 
 
