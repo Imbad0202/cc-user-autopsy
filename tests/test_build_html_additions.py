@@ -619,5 +619,30 @@ class PatternRenderTests(unittest.TestCase):
                       "XSS payload must be HTML-escaped to &lt;script&gt; in output")
 
 
+class ScoreDisclaimerTests(unittest.TestCase):
+    def test_disclaimer_placeholder_in_template(self):
+        """Template source must contain both the $score_disclaimer placeholder
+        and the class="score-disclaimer" element."""
+        src = Path(__file__).resolve().parent.parent / "scripts" / "build_html.py"
+        text = src.read_text()
+        self.assertIn("$score_disclaimer", text,
+                      "Template must contain $score_disclaimer placeholder")
+        self.assertIn('class="score-disclaimer"', text,
+                      "Template must contain class=\"score-disclaimer\" element")
+
+    def test_disclaimer_rendered_above_score_table(self):
+        """score-disclaimer element must appear BEFORE score-table in source order."""
+        src = Path(__file__).resolve().parent.parent / "scripts" / "build_html.py"
+        text = src.read_text()
+        idx_disclaimer = text.find('class="score-disclaimer"')
+        idx_table = text.find('class="score-table"')
+        self.assertGreater(idx_disclaimer, 0,
+                           "class=\"score-disclaimer\" not found in source")
+        self.assertGreater(idx_table, 0,
+                           "class=\"score-table\" not found in source")
+        self.assertLess(idx_disclaimer, idx_table,
+                        "score-disclaimer must appear before score-table in source")
+
+
 if __name__ == "__main__":
     unittest.main()

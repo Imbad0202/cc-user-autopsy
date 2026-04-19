@@ -1223,6 +1223,7 @@ $overview_section
 
   <div class="overall-strip">$section_scoring_overall_label &nbsp;·&nbsp; $overall_line</div>
 
+  <p class="score-disclaimer">$score_disclaimer</p>
   <div class="score-table">
     $score_rows
   </div>
@@ -2413,6 +2414,7 @@ def main():
         "facets_coverage": f'{meta.get("facets_coverage_pct", 0):.0f}',
         "preliminary_warning": preliminary_warning,
         "overall_line": overall_line,
+        "score_disclaimer": t(args.locale, "score_disclaimer"),
         "score_rows": score_rows,
         "peer_review_html": pr_html,
         "weekly_count": len(weekly),
