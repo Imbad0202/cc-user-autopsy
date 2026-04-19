@@ -202,6 +202,23 @@ STRINGS = {
         # --- Footer ---
         "footer_repo": "repo",
         "footer_tagline": "rule-based + LLM-assisted · re-run the skill anytime",
+        # --- Usage rubric (Task 12) ---
+        "score_disclaimer": "These are independent characteristics, not a breakdown — scores do not sum.",
+        "score_disclaimer_long": (
+            "Each dimension is scored from the sessions that apply to it. A session can "
+            "contribute to multiple dimensions, so the eight scores describe independent "
+            "slices, not shares of a whole."
+        ),
+        "how_to_read_key_relate": "HOW SCORES RELATE",
+        "how_to_read_val_relate": (
+            "Each dimension scores a different aspect of sessions. A session can score "
+            "high on Delegation but low on Time-of-day; they are independent "
+            "characteristics, not shares of a total."
+        ),
+        "usage_char_header": "Usage characteristics",
+        "usage_char_note_template": (
+            "Across {n_sessions} sessions from {since} to {until}, local only."
+        ),
     },
     "zh_TW": {
         # --- Document chrome ---
@@ -378,6 +395,13 @@ STRINGS = {
         # --- Footer ---
         "footer_repo": "原始碼",
         "footer_tagline": "規則為主、LLM 輔助；隨時可重新執行此 skill",
+        # --- Usage rubric (Task 12) ---
+        "score_disclaimer": "[TODO zh_TW] These are independent characteristics, not a breakdown; scores do not sum.",
+        "score_disclaimer_long": "[TODO zh_TW] Each dimension is scored from the sessions that apply to it.",
+        "how_to_read_key_relate": "[TODO zh_TW] HOW SCORES RELATE",
+        "how_to_read_val_relate": "[TODO zh_TW] Each dimension scores a different aspect of sessions.",
+        "usage_char_header": "[TODO zh_TW] Usage characteristics",
+        "usage_char_note_template": "[TODO zh_TW] Across {n_sessions} sessions from {since} to {until}, local only.",
     },
 }
 

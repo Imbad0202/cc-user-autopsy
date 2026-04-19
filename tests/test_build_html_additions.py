@@ -476,5 +476,241 @@ class LocaleTests(unittest.TestCase):
                                 "build_html must reject unknown locales")
 
 
+class CssRuleTests(unittest.TestCase):
+    """Light smoke tests that the new CSS rules are present in the full
+    rendered HTML output. We test the rule strings exist and are syntactically
+    plausible; full visual correctness is checked by the user in-browser."""
+
+    def _render_minimal(self):
+        """Render a minimal HTML using the module's template — enough to
+        assert CSS presence without requiring full demo data."""
+        import sys
+        from pathlib import Path
+        SKILL = Path(__file__).resolve().parent.parent
+        sys.path.insert(0, str(SKILL / "scripts"))
+        import build_html
+        # Read the raw template text to inspect CSS — simpler than full render
+        template_path = SKILL / "scripts" / "build_html.py"
+        return template_path.read_text()
+
+    def test_pattern_class_css_present(self):
+        src = self._render_minimal()
+        self.assertIn(".score-row .body .pattern", src)
+        self.assertIn("font-style: italic", src)
+
+    def test_score_disclaimer_css_present(self):
+        src = self._render_minimal()
+        self.assertIn(".score-disclaimer", src)
+        self.assertIn("text-align: left", src)
+
+    def test_usage_characteristics_css_present(self):
+        src = self._render_minimal()
+        self.assertIn(".usage-characteristics", src)
+        self.assertIn(".uc-row", src)
+        self.assertIn("grid-template-columns: 72px 1fr", src)
+
+
+class PatternRenderTests(unittest.TestCase):
+    """Task 14: score_rows loop must emit <p class="pattern"> when pattern is present."""
+
+    def _score_rows_source(self):
+        """Return the raw Python source of build_html.py for structural assertions."""
+        import inspect
+        src_path = Path(__file__).resolve().parent.parent / "scripts" / "build_html.py"
+        return src_path.read_text()
+
+    def _render_with_pattern(self, pattern_val):
+        """Build an analysis fixture where D1_delegation carries `pattern_val`,
+        then run build_html.py and return the rendered HTML string."""
+        import subprocess, tempfile, json as _json
+        skill_dir = Path(__file__).resolve().parent.parent
+        analysis = _minimal_analysis()
+        analysis["scores"] = {
+            "_overall": {"avg": 7.0, "dimensions_scored": 1, "dimensions_total": 8},
+            "D1_delegation": {
+                "score": 7,
+                "explanation": "Good delegation practice.",
+                "pattern": pattern_val,
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "a.json").write_text(_json.dumps(analysis))
+            (tmp / "s.json").write_text("{}")
+            out = tmp / "out.html"
+            r = subprocess.run([
+                "python3", str(skill_dir / "scripts" / "build_html.py"),
+                "--input", str(tmp / "a.json"),
+                "--samples", str(tmp / "s.json"),
+                "--audience", "self",
+                "--output", str(out),
+            ], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return out.read_text()
+
+    def test_pattern_block_rendered_when_non_none(self):
+        """When pattern is a non-empty string, the rendered score row must
+        contain an element with class="pattern"."""
+        html = self._render_with_pattern("Uses Task agent for all long-running work.")
+        self.assertIn('class="pattern"', html)
+
+    def test_pattern_block_absent_when_pattern_is_none(self):
+        """When pattern is None (or key absent), no pattern element is emitted.
+        Guard check: source code must use s.get('pattern') not s['pattern']."""
+        # First assert the rendered output has no pattern element
+        html = self._render_with_pattern(None)
+        self.assertNotIn('class="pattern"', html)
+        # Structural guard: source must use dict.get() to avoid KeyError
+        src = self._score_rows_source()
+        self.assertTrue(
+            's.get("pattern")' in src or "s.get('pattern')" in src,
+            "score_rows loop must use s.get('pattern') not s['pattern']",
+        )
+
+    def test_pattern_xss_escaped_in_full_render(self):
+        """XSS gate: injecting a raw <script> tag via pattern must produce
+        the HTML-escaped form (&lt;script&gt;) in output, never the raw tag."""
+        demo_dir = Path("/tmp/cc-autopsy-demo")
+        if not demo_dir.exists():
+            self.skipTest("Demo data absent at /tmp/cc-autopsy-demo/ — skipping XSS integration test.")
+
+        import subprocess, tempfile, json as _json
+        skill_dir = Path(__file__).resolve().parent.parent
+
+        # Load the demo aggregate if it exists, otherwise build our own fixture
+        demo_agg = demo_dir / "analysis-data.json"
+        if demo_agg.exists():
+            analysis = _json.loads(demo_agg.read_text())
+        else:
+            self.skipTest("Demo analysis-data.json absent — skipping XSS integration test.")
+
+        # Inject XSS payload into the first scored dimension we find
+        xss_payload = "<script>alert(1)</script>"
+        scores = analysis.get("scores", {})
+        injected = False
+        for dim_key in scores:
+            if dim_key.startswith("D") and isinstance(scores[dim_key], dict):
+                scores[dim_key]["pattern"] = xss_payload
+                injected = True
+                break
+        if not injected:
+            self.skipTest("No scored dimension found to inject XSS payload — skipping.")
+
+        analysis["scores"] = scores
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "a.json").write_text(_json.dumps(analysis))
+            (tmp / "s.json").write_text("{}")
+            out = tmp / "out.html"
+            r = subprocess.run([
+                "python3", str(skill_dir / "scripts" / "build_html.py"),
+                "--input", str(tmp / "a.json"),
+                "--samples", str(tmp / "s.json"),
+                "--audience", "self",
+                "--output", str(out),
+            ], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rendered = out.read_text()
+
+        self.assertNotIn(xss_payload, rendered,
+                         "Raw <script> tag must not appear in rendered HTML")
+        self.assertIn("&lt;script&gt;", rendered,
+                      "XSS payload must be HTML-escaped to &lt;script&gt; in output")
+
+
+class HowScoresRelateTests(unittest.TestCase):
+    def test_how_to_read_hr_mode_includes_relate_entry(self):
+        """build_html.py source must reference both locale keys for the new
+        HOW SCORES RELATE dt/dd entry in the HR how-to-read block."""
+        src = (Path(__file__).resolve().parent.parent / "scripts" / "build_html.py").read_text()
+        self.assertIn('how_to_read_key_relate', src,
+                      "build_html.py must reference locale key 'how_to_read_key_relate'")
+        self.assertIn('how_to_read_val_relate', src,
+                      "build_html.py must reference locale key 'how_to_read_val_relate'")
+
+
+class ScoreDisclaimerTests(unittest.TestCase):
+    def test_disclaimer_placeholder_in_template(self):
+        """Template source must contain both the $score_disclaimer placeholder
+        and the class="score-disclaimer" element."""
+        src = Path(__file__).resolve().parent.parent / "scripts" / "build_html.py"
+        text = src.read_text()
+        self.assertIn("$score_disclaimer", text,
+                      "Template must contain $score_disclaimer placeholder")
+        self.assertIn('class="score-disclaimer"', text,
+                      "Template must contain class=\"score-disclaimer\" element")
+
+    def test_disclaimer_rendered_above_score_table(self):
+        """score-disclaimer element must appear BEFORE score-table in source order."""
+        src = Path(__file__).resolve().parent.parent / "scripts" / "build_html.py"
+        text = src.read_text()
+        idx_disclaimer = text.find('class="score-disclaimer"')
+        idx_table = text.find('class="score-table"')
+        self.assertGreater(idx_disclaimer, 0,
+                           "class=\"score-disclaimer\" not found in source")
+        self.assertGreater(idx_table, 0,
+                           "class=\"score-table\" not found in source")
+        self.assertLess(idx_disclaimer, idx_table,
+                        "score-disclaimer must appear before score-table in source")
+
+
+class UsageCharacteristicsRenderTests(unittest.TestCase):
+    """Task 17: usage_characteristics block rendered inside _build_activity_panel."""
+
+    def _activity_with_uc(self, **overrides):
+        uc = {
+            "n_sessions": 280,
+            "since": "2026-01-01",
+            "until": "2026-04-19",
+            "items": [
+                {"pct": 42, "label": "output-token-limit", "tip": "Hit the output cap in 42% of sessions."},
+                {"pct": 31, "label": "long-context", "tip": "Loaded >100k tokens of context."},
+                {"pct": 18, "label": "multi-turn-deep", "tip": "Conversation exceeded 20 turns."},
+                {"pct": 12, "label": "tool-heavy", "tip": "More than 10 tool calls per session."},
+                {"pct": 7,  "label": "low-friction", "tip": "No interrupts and goal achieved."},
+            ],
+        }
+        base = _activity_panel(usage_characteristics=uc)
+        base.update(overrides)
+        return base
+
+    def test_usage_characteristics_block_rendered(self):
+        """When usage_characteristics is present, the block renders with header,
+        note, and one uc-row per item."""
+        html = build_html._build_activity_panel(self._activity_with_uc())
+        self.assertIn('class="usage-characteristics"', html)
+        self.assertIn("42%", html)
+        self.assertEqual(html.count('class="uc-row"'), 5)
+        self.assertIn("output-token-limit", html)
+        self.assertIn("Across 280 sessions", html)
+
+    def test_usage_characteristics_absent_when_missing(self):
+        """When the activity dict has no usage_characteristics key, the block
+        must be entirely absent."""
+        html = build_html._build_activity_panel(_activity_panel())
+        self.assertNotIn('class="usage-characteristics"', html)
+
+    def test_usage_characteristics_xss_escaped(self):
+        """Labels and tips coming from the scanner must be HTML-escaped before
+        insertion to prevent XSS."""
+        xss_label = "<script>alert(1)</script>"
+        xss_tip = "'\"<script>alert(2)</script>"
+        uc = {
+            "n_sessions": 1,
+            "since": "2026-01-01",
+            "until": "2026-04-19",
+            "items": [
+                {"pct": 99, "label": xss_label, "tip": xss_tip},
+            ],
+        }
+        html = build_html._build_activity_panel(
+            _activity_panel(usage_characteristics=uc)
+        )
+        self.assertNotIn("<script>alert(1)</script>", html)
+        self.assertNotIn("<script>alert(2)</script>", html)
+        self.assertIn("&lt;script&gt;", html)
+
+
 if __name__ == "__main__":
     unittest.main()

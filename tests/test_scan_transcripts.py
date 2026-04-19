@@ -22,6 +22,9 @@ FIXTURE_SID = "f831eb28-e1f9-43af-a5bb-1c216021d89f"
 FIXTURE_META = Path.home() / ".claude/usage-data/session-meta" / f"{FIXTURE_SID}.json"
 FIXTURE_TRANSCRIPT = Path.home() / ".claude/projects/-Users-imbad" / f"{FIXTURE_SID}.jsonl"
 
+sys.path.insert(0, str(SKILL_DIR / "scripts"))
+import aggregate  # noqa: E402
+
 
 def _run_scanner(projects_dir: Path, out: Path):
     return subprocess.run(
@@ -40,6 +43,21 @@ def _setup_fixture(root: Path):
     pdir.mkdir(parents=True)
     (pdir / f"{FIXTURE_SID}.jsonl").write_bytes(FIXTURE_TRANSCRIPT.read_bytes())
     return pdir
+
+
+def _run_single_row_session(rows, sid):
+    """Write a synthetic jsonl with `rows` at `sid`, invoke scanner, return the first emitted row.
+    Raises AssertionError if the scanner didn't emit exactly one row."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        pdir = td / "projects" / "-proj"
+        pdir.mkdir(parents=True)
+        (pdir / f"{sid}.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+        out = td / "out.jsonl"
+        _run_scanner(td / "projects", out)
+        emitted = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+        assert len(emitted) == 1, f"expected 1 row, got {len(emitted)}: {emitted}"
+        return emitted[0]
 
 
 class ScanTranscriptsTests(unittest.TestCase):
@@ -270,6 +288,46 @@ class ScanTranscriptsTests(unittest.TestCase):
             _run_scanner(tmp / "projects", out)
             row = json.loads(out.read_text().splitlines()[0])
             self.assertEqual(row["project_path"], "/Users/imbad")
+
+
+class HitOutputLimitTests(unittest.TestCase):
+    def test_row_marks_hit_output_limit_when_max_tokens_seen(self):
+        """stop_reason lives on the inner `message` dict, not the outer transcript
+        record — easy to miss, so both polarities are asserted."""
+        sid = "abc12345-0000-0000-0000-000000000001"
+        rows = [
+            {"type": "user", "sessionId": sid,
+             "message": {"role": "user", "content": "hi"},
+             "timestamp": "2026-04-19T10:00:00Z"},
+            {"type": "assistant", "sessionId": sid,
+             "message": {"role": "assistant", "content": "truncated...",
+                         "stop_reason": "max_tokens",
+                         "usage": {"input_tokens": 10, "output_tokens": 8000}},
+             "timestamp": "2026-04-19T10:00:05Z"},
+        ]
+        emitted = _run_single_row_session(rows, sid)
+        self.assertTrue(emitted.get("hit_output_limit"))
+
+    def test_row_hit_output_limit_false_when_no_max_tokens(self):
+        """Complementary polarity: non-max-tokens stop must not flip the flag."""
+        sid = "def45678-0000-0000-0000-000000000002"
+        rows = [
+            {"type": "user", "sessionId": sid,
+             "message": {"role": "user", "content": "hi"},
+             "timestamp": "2026-04-19T10:00:00Z"},
+            {"type": "assistant", "sessionId": sid,
+             "message": {"role": "assistant", "content": "done",
+                         "stop_reason": "end_turn",
+                         "usage": {"input_tokens": 10, "output_tokens": 20}},
+             "timestamp": "2026-04-19T10:00:05Z"},
+        ]
+        emitted = _run_single_row_session(rows, sid)
+        self.assertFalse(emitted.get("hit_output_limit", False))
+
+
+class RedactedSchemaTests(unittest.TestCase):
+    def test_redacted_keys_include_hit_output_limit(self):
+        self.assertIn("hit_output_limit", aggregate._REDACTED_META_KEYS)
 
 
 if __name__ == "__main__":

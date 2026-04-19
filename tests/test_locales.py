@@ -60,5 +60,36 @@ class LookupHelperTests(unittest.TestCase):
             locales.t("ja", "report_title")
 
 
+class UsageRubricKeysTests(unittest.TestCase):
+    REQUIRED_KEYS = {
+        "score_disclaimer",
+        "score_disclaimer_long",
+        "how_to_read_key_relate",
+        "how_to_read_val_relate",
+        "usage_char_header",
+        "usage_char_note_template",
+    }
+
+    def test_all_usage_rubric_keys_present_in_en(self):
+        missing = self.REQUIRED_KEYS - set(locales.STRINGS["en"].keys())
+        self.assertEqual(missing, set(), f"Missing keys in en: {missing}")
+
+    def test_all_usage_rubric_keys_present_in_zh_tw(self):
+        missing = self.REQUIRED_KEYS - set(locales.STRINGS["zh_TW"].keys())
+        self.assertEqual(missing, set(), f"Missing keys in zh_TW: {missing}")
+
+    @unittest.skip(
+        "zh_TW native-tone rewrite scheduled for follow-up PR. Delete this "
+        "skip marker and replace placeholder strings once the rewrite lands."
+    )
+    def test_no_zh_tw_todo_markers_in_release(self):
+        offenders = [
+            (k, v)
+            for k, v in locales.STRINGS["zh_TW"].items()
+            if v.startswith("[TODO zh_TW]")
+        ]
+        self.assertEqual(offenders, [], f"zh_TW TODO stubs still present: {offenders}")
+
+
 if __name__ == "__main__":
     unittest.main()

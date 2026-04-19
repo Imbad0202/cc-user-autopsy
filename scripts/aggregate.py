@@ -39,6 +39,9 @@ PRICING = {
 # likely gap.
 _FALLBACK_PRICING = PRICING["claude-opus-4-6"]
 
+_PATTERN_MIN_SAMPLE = 5  # minimum group size to emit a per-dimension pattern contrast sentence
+_USAGE_CHAR_MIN_SESSIONS = 10  # minimum session count to emit the usage_characteristics block
+
 
 def _normalize_model_id(m: str) -> str:
     """Strip Anthropic date suffixes so 'claude-haiku-4-5-20251001' matches
@@ -182,6 +185,7 @@ _REDACTED_META_KEYS = {
     "assistant_message_count",
     "cache_creation_input_tokens", "cache_read_input_tokens",
     "model_counts",
+    "hit_output_limit",
 }
 _REDACTED_FACETS_KEYS = {
     "session_id", "outcome", "claude_helpfulness", "session_type",
@@ -302,6 +306,7 @@ def build_sessions(metas, facets, tz):
             "cache_create_tokens": m.get("cache_creation_input_tokens", 0),
             "cache_read_tokens": m.get("cache_read_input_tokens", 0),
             "model_counts": m.get("model_counts", {}) or {},
+            "hit_output_limit": m.get("hit_output_limit", False),
             # facet fields
             "outcome": f.get("outcome", ""),
             "helpfulness": f.get("claude_helpfulness", ""),
@@ -321,12 +326,20 @@ def is_good(outcome):
     return outcome in ("fully_achieved", "mostly_achieved")
 
 
+def _overall_good_rate(rated):
+    """Overall good-outcome rate across rated sessions, as a 0-100 float.
+    Returns 0.0 when rated is empty — keeps arithmetic contexts safe."""
+    if not rated:
+        return 0.0
+    return 100 * sum(1 for s in rated if is_good(s["outcome"])) / len(rated)
+
+
 # -------- Scoring rules --------
 
 def score_d1_delegation(sessions, rated):
     n = len(sessions)
     if n == 0:
-        return {"score": None, "reason": "no sessions"}
+        return {"score": None, "reason": "no sessions", "pattern": None}
     ta_count = sum(1 for s in sessions if s["uses_task_agent"])
     ta_rate = 100 * ta_count / n
     ta_rated = [s for s in rated if s["uses_task_agent"]]
@@ -350,24 +363,33 @@ def score_d1_delegation(sessions, rated):
         score = 3
     else:
         score = 1
+    # Pattern string (descriptive contrast). None when TA sample < _PATTERN_MIN_SAMPLE.
+    if len(ta_rated) >= _PATTERN_MIN_SAMPLE:
+        pattern = (
+            f"Sessions that used Task agent had a {good_rate_ta:.0f}% "
+            f"good-outcome rate, versus {_overall_good_rate(rated):.0f}% overall."
+        )
+    else:
+        pattern = None
     return {
         "score": score,
         "metric_ta_rate_pct": round(ta_rate, 1),
         "metric_good_rate_with_ta_pct": round(good_rate_ta, 1),
         "explanation": f"{ta_rate:.0f}% of sessions used Task agent; good-outcome rate with Task agent was {good_rate_ta:.0f}%.",
+        "pattern": pattern,
     }
 
 
 def score_d2_rootcause(sessions, rated, facets_coverage):
     if facets_coverage < 30:
-        return {"score": None, "reason": "insufficient facet coverage"}
+        return {"score": None, "reason": "insufficient facet coverage", "pattern": None}
     iter_buggy = [
         s for s in rated
         if s["session_type"] == "iterative_refinement"
         and s["friction_counts"].get("buggy_code", 0) > 0
     ]
     if not rated:
-        return {"score": None, "reason": "no rated sessions"}
+        return {"score": None, "reason": "no rated sessions", "pattern": None}
     R = 100 * len(iter_buggy) / len(rated)
     thresholds = [(2, 10), (4, 9), (7, 8), (10, 7), (15, 6), (20, 5), (25, 4)]
     score = 3
@@ -375,17 +397,29 @@ def score_d2_rootcause(sessions, rated, facets_coverage):
         if R <= thr:
             score = sc
             break
+    iter_sessions = [s for s in rated if s["session_type"] == "iterative_refinement"]
+    non_iter_sessions = [s for s in rated if s["session_type"] != "iterative_refinement"]
+    pattern = None
+    if len(non_iter_sessions) >= _PATTERN_MIN_SAMPLE and len(iter_sessions) >= _PATTERN_MIN_SAMPLE:
+        non_iter_good = 100 * sum(1 for s in non_iter_sessions if is_good(s["outcome"])) / len(non_iter_sessions)
+        iter_good = 100 * sum(1 for s in iter_sessions if is_good(s["outcome"])) / len(iter_sessions)
+        pattern = (
+            f"Sessions without iterative_refinement friction reached good outcomes "
+            f"{non_iter_good:.0f}% of the time, versus {iter_good:.0f}% for "
+            f"iterative_refinement sessions."
+        )
     return {
         "score": score,
         "metric_iter_buggy_pct": round(R, 1),
         "metric_iter_buggy_count": len(iter_buggy),
         "explanation": f"{len(iter_buggy)} sessions ({R:.0f}%) were iterative_refinement with buggy_code friction — a marker for symptom-level patching.",
+        "pattern": pattern,
     }
 
 
 def score_d3_prompt_quality(sessions):
     if not sessions:
-        return {"score": None}
+        return {"score": None, "pattern": None}
     plen_ge_100 = sum(1 for s in sessions if s["first_prompt_len"] >= 100)
     plen_lt_20 = sum(1 for s in sessions if s["first_prompt_len"] < 20)
     rate_100 = 100 * plen_ge_100 / len(sessions)
@@ -416,6 +450,19 @@ def score_d3_prompt_quality(sessions):
         score = 3
     else:
         score = 5
+
+    # Pattern: compare avg tokens/commit between long-prompt and short-prompt sessions
+    long_prompt = [s for s in sessions if s["first_prompt_len"] >= 100 and s["git_commits"] > 0]
+    short_prompt = [s for s in sessions if s["first_prompt_len"] <= 50 and s["git_commits"] > 0]
+    pattern = None
+    if len(long_prompt) >= _PATTERN_MIN_SAMPLE and len(short_prompt) >= _PATTERN_MIN_SAMPLE:
+        avg_long = sum(s["total_tokens"] / s["git_commits"] for s in long_prompt) / len(long_prompt)
+        avg_short = sum(s["total_tokens"] / s["git_commits"] for s in short_prompt) / len(short_prompt)
+        pattern = (
+            f"Sessions with prompts ≥100 chars averaged {avg_long:.0f} tokens "
+            f"per commit; ≤50-char prompts averaged {avg_short:.0f}."
+        )
+
     return {
         "score": score,
         "metric_pct_prompts_ge_100_chars": round(rate_100, 1),
@@ -425,12 +472,13 @@ def score_d3_prompt_quality(sessions):
         },
         "metric_most_efficient_bucket": best_bucket,
         "explanation": f"{rate_100:.0f}% of sessions used prompts ≥ 100 chars. Most efficient prompt-length bucket for tokens/commit: {best_bucket}.",
+        "pattern": pattern,
     }
 
 
 def score_d4_context_mgmt(sessions):
     if not sessions:
-        return {"score": None}
+        return {"score": None, "pattern": None}
     otl = [
         s for s in sessions
         if any(k in s["friction_counts"] for k in
@@ -462,6 +510,18 @@ def score_d4_context_mgmt(sessions):
         score -= 1
     score = max(score, 3)
 
+    long_no_commit = [s for s in sessions if s.get("duration_min", 0) > 20 and s.get("git_commits", 0) == 0]
+    other          = [s for s in sessions if not (s.get("duration_min", 0) > 20 and s.get("git_commits", 0) == 0)]
+    pattern = None
+    if len(long_no_commit) >= _PATTERN_MIN_SAMPLE and len(other) >= _PATTERN_MIN_SAMPLE:
+        otl_ids    = {id(s) for s in otl}
+        lnc_rate   = 100 * sum(1 for s in long_no_commit if id(s) in otl_ids) / len(long_no_commit)
+        other_rate = 100 * sum(1 for s in other         if id(s) in otl_ids) / len(other)
+        pattern = (
+            f"Sessions over 20 minutes without a commit hit output-token-limit "
+            f"{lnc_rate:.0f}% of the time, versus {other_rate:.0f}% for other sessions."
+        )
+
     return {
         "score": score,
         "metric_output_token_limit_sessions": len(otl),
@@ -469,13 +529,17 @@ def score_d4_context_mgmt(sessions):
         "metric_effort_no_commit_pct": round(enc_pct, 1),
         "metric_max_otl_in_one_project": max_proj_otl,
         "explanation": f"{len(otl)} sessions hit output-token-limit. {enc_pct:.0f}% of >20min sessions had 0 commits. Long-session interrupt rate: {long_intr_rate:.0f}%.",
+        "pattern": pattern,
     }
 
 
 def score_d5_interrupt(rated):
     interrupted = [s for s in rated if s["interrupts"] > 0]
+    # score guard uses literal 5: the scoring eligibility threshold is independent
+    # from _PATTERN_MIN_SAMPLE (the pattern-floor constant). Keep separate so future
+    # tuning of pattern floor doesn't silently move scoring.
     if len(interrupted) < 5:
-        return {"score": None, "reason": "fewer than 5 interrupted rated sessions"}
+        return {"score": None, "reason": "fewer than 5 interrupted rated sessions", "pattern": None}
     good = [s for s in interrupted if is_good(s["outcome"])]
     P = 100 * len(good) / len(interrupted)
     thresholds = [(60, 10), (50, 9), (40, 8), (30, 7), (20, 5)]
@@ -484,17 +548,26 @@ def score_d5_interrupt(rated):
         if P >= thr:
             score = sc
             break
+    non_interrupted = [s for s in rated if s["interrupts"] == 0]
+    pattern = None
+    if len(interrupted) >= _PATTERN_MIN_SAMPLE and len(non_interrupted) >= _PATTERN_MIN_SAMPLE:
+        non_good_rate = 100 * sum(1 for s in non_interrupted if is_good(s["outcome"])) / len(non_interrupted)
+        pattern = (
+            f"Interrupted sessions reached good outcomes {P:.0f}% of the time, "
+            f"versus {non_good_rate:.0f}% for non-interrupted sessions."
+        )
     return {
         "score": score,
         "metric_interrupt_recovery_pct": round(P, 1),
         "metric_interrupted_sessions": len(interrupted),
         "explanation": f"{P:.0f}% of interrupted sessions still reached good outcome ({len(good)}/{len(interrupted)}).",
+        "pattern": pattern,
     }
 
 
 def score_d6_tool_breadth(sessions):
     if not sessions:
-        return {"score": None}
+        return {"score": None, "pattern": None}
     mcp_rate = 100 * sum(1 for s in sessions if s["uses_mcp"]) / len(sessions)
     tool_totals = Counter()
     for s in sessions:
@@ -516,12 +589,29 @@ def score_d6_tool_breadth(sessions):
         score = 5
     else:
         score = 4
+
+    # Rated-only subsets: unrated sessions (outcome == "") would bias is_good() toward
+    # False, so restrict the contrast to sessions with a recorded outcome. 3-tool
+    # sessions are intentionally excluded to sharpen the diverse/narrow contrast.
+    rated_sessions = [s for s in sessions if s.get("outcome", "")]
+    diverse = [s for s in rated_sessions if len(s.get("tool_counts", {})) >= 4]
+    narrow  = [s for s in rated_sessions if 0 < len(s.get("tool_counts", {})) <= 2]
+    pattern = None
+    if len(diverse) >= _PATTERN_MIN_SAMPLE and len(narrow) >= _PATTERN_MIN_SAMPLE:
+        diverse_good = 100 * sum(1 for s in diverse if is_good(s["outcome"])) / len(diverse)
+        narrow_good  = 100 * sum(1 for s in narrow  if is_good(s["outcome"])) / len(narrow)
+        pattern = (
+            f"Sessions using ≥4 distinct tools reached good outcomes {diverse_good:.0f}% of the time, "
+            f"versus {narrow_good:.0f}% for sessions using 1\u20132 tools."
+        )
+
     return {
         "score": score,
         "metric_mcp_rate_pct": round(mcp_rate, 1),
         "metric_top3_share_pct": round(top3_share, 1),
         "metric_top_tools": dict(tool_totals.most_common(10)),
         "explanation": f"{mcp_rate:.0f}% of sessions used any MCP tool; top-3 tools (Bash/Read/Edit) consume {top3_share:.0f}% of all calls.",
+        "pattern": pattern,
     }
 
 
@@ -530,8 +620,11 @@ def score_d7_writing(rated):
         s for s in rated
         if any(g in WRITING_GOALS for g in s.get("goal_cats", {}).keys())
     ]
+    # score guard uses literal 5: the scoring eligibility threshold is independent
+    # from _PATTERN_MIN_SAMPLE (the pattern-floor constant). Keep separate so future
+    # tuning of pattern floor doesn't silently move scoring.
     if len(writing) < 5:
-        return {"score": None, "reason": "fewer than 5 writing sessions"}
+        return {"score": None, "reason": "fewer than 5 writing sessions", "pattern": None}
     misu = sum(s["friction_counts"].get("misunderstood_request", 0) for s in writing)
     W = misu / len(writing)
     thresholds = [(0.1, 10), (0.3, 8), (0.6, 7), (1.0, 5)]
@@ -540,18 +633,31 @@ def score_d7_writing(rated):
         if W <= thr:
             score = sc
             break
+    non_writing = [s for s in rated
+                   if not any(g in WRITING_GOALS for g in s.get("goal_cats", {}).keys())]
+    pattern = None
+    if len(writing) >= _PATTERN_MIN_SAMPLE and len(non_writing) >= _PATTERN_MIN_SAMPLE:
+        w_avg = sum(s["friction_counts"].get("misunderstood_request", 0) for s in writing) / len(writing)
+        nw_avg = sum(s["friction_counts"].get("misunderstood_request", 0) for s in non_writing) / len(non_writing)
+        pattern = (
+            f"Writing-related sessions averaged {w_avg:.1f} misunderstood_request "
+            f"events per session, versus {nw_avg:.1f} for other sessions."
+        )
     return {
         "score": score,
         "metric_misunderstood_per_writing_session": round(W, 2),
         "metric_writing_sessions": len(writing),
         "explanation": f"Across {len(writing)} writing-related sessions, avg misunderstood_request per session is {W:.2f}.",
+        "pattern": pattern,
     }
 
 
 def score_d8_time_mgmt(sessions, rated):
     # Use rated sessions for friction, but all sessions to count session volume
+    # Scoring eligibility guards — literal thresholds, NOT _PATTERN_MIN_SAMPLE.
+    # These control whether the score itself is computable, not the pattern floor.
     if len(rated) < 20:
-        return {"score": None, "reason": "<20 rated sessions"}
+        return {"score": None, "reason": "<20 rated sessions", "pattern": None}
     by_hour = defaultdict(lambda: {"n": 0, "fric": 0})
     for s in rated:
         h = s["hour"]
@@ -562,7 +668,7 @@ def score_d8_time_mgmt(sessions, rated):
         h: d["fric"] / d["n"] for h, d in by_hour.items() if d["n"] >= 5
     }
     if len(rates) < 3:
-        return {"score": None, "reason": "<3 hours with enough data"}
+        return {"score": None, "reason": "<3 hours with enough data", "pattern": None}
     hi = max(rates.values())
     lo = min(rates.values()) or 0.001
     ratio = hi / lo
@@ -578,12 +684,26 @@ def score_d8_time_mgmt(sessions, rated):
         score = 3
     worst_hour = max(rates, key=rates.get)
     best_hour = min(rates, key=rates.get)
+    # Pattern: good-outcome rate by time-of-day bucket (morning vs after-10am).
+    # This is a DIFFERENT metric from the score (friction ratio) — complementary
+    # angle. Uses rated only so unrated sessions can't skew is_good().
+    before_10 = [s for s in rated if s.get("hour", 12) < 10]
+    after_10  = [s for s in rated if s.get("hour", 12) >= 10]
+    pattern = None
+    if len(before_10) >= _PATTERN_MIN_SAMPLE and len(after_10) >= _PATTERN_MIN_SAMPLE:
+        before_good = 100 * sum(1 for s in before_10 if is_good(s["outcome"])) / len(before_10)
+        after_good  = 100 * sum(1 for s in after_10  if is_good(s["outcome"])) / len(after_10)
+        pattern = (
+            f"Sessions started before 10am had a {before_good:.0f}% good-outcome rate, "
+            f"versus {after_good:.0f}% for after-10am sessions."
+        )
     return {
         "score": score,
         "metric_friction_ratio_hi_lo": round(ratio, 2),
         "metric_worst_hour": {"hour": worst_hour, "friction_per_session": round(rates[worst_hour], 2)},
         "metric_best_hour": {"hour": best_hour, "friction_per_session": round(rates[best_hour], 2)},
         "explanation": f"Worst hour ({worst_hour:02d}:00) has {ratio:.1f}x the friction rate of best hour ({best_hour:02d}:00).",
+        "pattern": pattern,
     }
 
 
@@ -678,7 +798,7 @@ def compute_activity(sessions):
         for m, c in (s.get("model_counts", {}) or {}).items():
             models[m] += c
 
-    return {
+    result = {
         "total_sessions": len(sessions),
         "total_messages": total_msgs,
         "active_days": len(dates),
@@ -690,6 +810,83 @@ def compute_activity(sessions):
         "favorite_model": models.most_common(1)[0][0] if models else None,
         "api_equivalent_cost_usd": compute_api_equivalent_cost(sessions),
     }
+
+    # Build usage_characteristics block when enough sessions exist and dates are available.
+    # Guard: omit if < _USAGE_CHAR_MIN_SESSIONS or no valid session start dates.
+    uc_dates = [s["start"][:10] for s in sessions
+                if s.get("start") and len(s.get("start", "")) >= 10]
+    if len(sessions) >= _USAGE_CHAR_MIN_SESSIONS and uc_dates:
+        since = min(uc_dates)
+        until = max(uc_dates)
+        total = len(sessions)
+
+        # Item 1: sessions with hit_output_limit=True / total
+        hit_limit = sum(1 for s in sessions if s.get("hit_output_limit"))
+        pct1 = round(100 * hit_limit / total)
+
+        # Item 2: long-friction / total-friction
+        # "long" = duration_min > 20 AND friction_counts has at least one event
+        # "friction" = sessions with at least one friction event
+        friction_sessions = [s for s in sessions
+                             if sum((s.get("friction_counts") or {}).values()) > 0]
+        long_friction = sum(
+            1 for s in friction_sessions
+            if (s.get("duration_min") or 0) > 20
+        )
+        denom2 = len(friction_sessions)
+        pct2 = round(100 * long_friction / denom2) if denom2 > 0 else 0
+
+        # Item 3: good+task_agent / good-total
+        good_sessions = [s for s in sessions if is_good(s.get("outcome", ""))]
+        good_task_agent = sum(1 for s in good_sessions if s.get("uses_task_agent"))
+        denom3 = len(good_sessions)
+        pct3 = round(100 * good_task_agent / denom3) if denom3 > 0 else 0
+
+        # Item 4: sessions with 1-2 distinct tools / total
+        narrow_tool = sum(
+            1 for s in sessions
+            if len(s.get("tool_counts") or {}) <= 2
+        )
+        pct4 = round(100 * narrow_tool / total)
+
+        # Item 5: sessions hour >= 22 / total
+        late_night = sum(1 for s in sessions if (s.get("hour") or 0) >= 22)
+        pct5 = round(100 * late_night / total)
+
+        result["usage_characteristics"] = {
+            "since": since,
+            "until": until,
+            "n_sessions": total,
+            "items": [
+                {
+                    "pct": pct1,
+                    "label": "of your sessions hit output-token-limit",
+                    "tip": "Sessions that /compact mid-task rarely hit the wall.",
+                },
+                {
+                    "pct": pct2,
+                    "label": "of your high-friction sessions were long (>20min)",
+                    "tip": "Long sessions concentrate friction; consider /clear between subtasks.",
+                },
+                {
+                    "pct": pct3,
+                    "label": "of your good-outcome sessions delegated to Task agent",
+                    "tip": "Task-agent delegation correlates with ship-level outcomes.",
+                },
+                {
+                    "pct": pct4,
+                    "label": "of your sessions used only 1-2 distinct tools",
+                    "tip": "Narrow tool use is fine for focused work but misses MCP leverage.",
+                },
+                {
+                    "pct": pct5,
+                    "label": "of your sessions were after 10pm",
+                    "tip": "Evening sessions produce more tokens per friction event.",
+                },
+            ],
+        }
+
+    return result
 
 
 def compute_aggregates(sessions, rated, facets_coverage):

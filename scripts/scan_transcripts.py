@@ -196,6 +196,7 @@ def scan_one(path: Path):
 
     in_tok = out_tok = cache_create = cache_read = 0
     model_counts = Counter()
+    hit_output_limit = False
     for r in asst_msgs:
         msg = r.get("message", {})
         if not isinstance(msg, dict):
@@ -208,6 +209,8 @@ def scan_one(path: Path):
         out_tok += u.get("output_tokens", 0) or 0
         cache_create += u.get("cache_creation_input_tokens", 0) or 0
         cache_read += u.get("cache_read_input_tokens", 0) or 0
+        if msg.get("stop_reason") == "max_tokens":
+            hit_output_limit = True
 
     tool_counts = Counter()
     for r in asst_msgs:
@@ -320,6 +323,7 @@ def scan_one(path: Path):
         "git_pushes": git_pushes,
         "user_interruptions": user_interruptions,
         "tool_errors": tool_errors,
+        "hit_output_limit": hit_output_limit,
         "uses_task_agent": uses_task_agent,
         "uses_subagent": uses_subagent,
         "uses_mcp": uses_mcp,
@@ -412,6 +416,7 @@ def main():
                     "model_counts": {},
                     "git_commits": 0, "git_pushes": 0,
                     "user_interruptions": 0, "tool_errors": 0,
+                    "hit_output_limit": False,
                     "uses_task_agent": False, "uses_subagent": True,
                     "uses_mcp": False, "uses_web_search": False, "uses_web_fetch": False,
                     "first_prompt": "",
