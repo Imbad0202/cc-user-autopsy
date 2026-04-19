@@ -340,7 +340,7 @@ def _overall_good_rate(rated):
 def score_d1_delegation(sessions, rated):
     n = len(sessions)
     if n == 0:
-        return {"score": None, "reason": "no sessions", "pattern": None}
+        return {"score": None, "reason": "no sessions", "pattern_emit": False, "pattern": None}
     ta_count = sum(1 for s in sessions if s["uses_task_agent"])
     ta_rate = 100 * ta_count / n
     ta_rated = [s for s in rated if s["uses_task_agent"]]
@@ -365,7 +365,8 @@ def score_d1_delegation(sessions, rated):
     else:
         score = 1
     # Pattern string (descriptive contrast). None when TA sample < _PATTERN_MIN_SAMPLE.
-    if len(ta_rated) >= _PATTERN_MIN_SAMPLE:
+    pattern_emit = len(ta_rated) >= _PATTERN_MIN_SAMPLE
+    if pattern_emit:
         pattern = (
             f"Sessions that used Task agent had a {good_rate_ta:.0f}% "
             f"good-outcome rate, versus {_overall_good_rate(rated):.0f}% overall."
@@ -376,6 +377,10 @@ def score_d1_delegation(sessions, rated):
         "score": score,
         "metric_ta_rate_pct": round(ta_rate, 1),
         "metric_good_rate_with_ta_pct": round(good_rate_ta, 1),
+        "pattern_emit": pattern_emit,
+        # DEPRECATED (see docs/SCHEMA-CHANGES.md): prose fields retained for
+        # 2 releases so external JSON consumers don't break. Render layer
+        # reads narrative modules instead.
         "explanation": f"{ta_rate:.0f}% of sessions used Task agent; good-outcome rate with Task agent was {good_rate_ta:.0f}%.",
         "pattern": pattern,
     }
@@ -383,14 +388,14 @@ def score_d1_delegation(sessions, rated):
 
 def score_d2_rootcause(sessions, rated, facets_coverage):
     if facets_coverage < 30:
-        return {"score": None, "reason": "insufficient facet coverage", "pattern": None}
+        return {"score": None, "reason": "insufficient facet coverage", "pattern_emit": False, "pattern": None}
     iter_buggy = [
         s for s in rated
         if s["session_type"] == "iterative_refinement"
         and s["friction_counts"].get("buggy_code", 0) > 0
     ]
     if not rated:
-        return {"score": None, "reason": "no rated sessions", "pattern": None}
+        return {"score": None, "reason": "no rated sessions", "pattern_emit": False, "pattern": None}
     R = 100 * len(iter_buggy) / len(rated)
     thresholds = [(2, 10), (4, 9), (7, 8), (10, 7), (15, 6), (20, 5), (25, 4)]
     score = 3
@@ -400,8 +405,9 @@ def score_d2_rootcause(sessions, rated, facets_coverage):
             break
     iter_sessions = [s for s in rated if s["session_type"] == "iterative_refinement"]
     non_iter_sessions = [s for s in rated if s["session_type"] != "iterative_refinement"]
+    pattern_emit = len(non_iter_sessions) >= _PATTERN_MIN_SAMPLE and len(iter_sessions) >= _PATTERN_MIN_SAMPLE
     pattern = None
-    if len(non_iter_sessions) >= _PATTERN_MIN_SAMPLE and len(iter_sessions) >= _PATTERN_MIN_SAMPLE:
+    if pattern_emit:
         non_iter_good = 100 * sum(1 for s in non_iter_sessions if is_good(s["outcome"])) / len(non_iter_sessions)
         iter_good = 100 * sum(1 for s in iter_sessions if is_good(s["outcome"])) / len(iter_sessions)
         pattern = (
@@ -413,6 +419,10 @@ def score_d2_rootcause(sessions, rated, facets_coverage):
         "score": score,
         "metric_iter_buggy_pct": round(R, 1),
         "metric_iter_buggy_count": len(iter_buggy),
+        "pattern_emit": pattern_emit,
+        # DEPRECATED (see docs/SCHEMA-CHANGES.md): prose fields retained for
+        # 2 releases so external JSON consumers don't break. Render layer
+        # reads narrative modules instead.
         "explanation": f"{len(iter_buggy)} sessions ({R:.0f}%) were iterative_refinement with buggy_code friction — a marker for symptom-level patching.",
         "pattern": pattern,
     }
@@ -420,7 +430,7 @@ def score_d2_rootcause(sessions, rated, facets_coverage):
 
 def score_d3_prompt_quality(sessions):
     if not sessions:
-        return {"score": None, "pattern": None}
+        return {"score": None, "pattern_emit": False, "pattern": None}
     plen_ge_100 = sum(1 for s in sessions if s["first_prompt_len"] >= 100)
     plen_lt_20 = sum(1 for s in sessions if s["first_prompt_len"] < 20)
     rate_100 = 100 * plen_ge_100 / len(sessions)
@@ -455,8 +465,9 @@ def score_d3_prompt_quality(sessions):
     # Pattern: compare avg tokens/commit between long-prompt and short-prompt sessions
     long_prompt = [s for s in sessions if s["first_prompt_len"] >= 100 and s["git_commits"] > 0]
     short_prompt = [s for s in sessions if s["first_prompt_len"] <= 50 and s["git_commits"] > 0]
+    pattern_emit = len(long_prompt) >= _PATTERN_MIN_SAMPLE and len(short_prompt) >= _PATTERN_MIN_SAMPLE
     pattern = None
-    if len(long_prompt) >= _PATTERN_MIN_SAMPLE and len(short_prompt) >= _PATTERN_MIN_SAMPLE:
+    if pattern_emit:
         avg_long = sum(s["total_tokens"] / s["git_commits"] for s in long_prompt) / len(long_prompt)
         avg_short = sum(s["total_tokens"] / s["git_commits"] for s in short_prompt) / len(short_prompt)
         pattern = (
@@ -472,6 +483,10 @@ def score_d3_prompt_quality(sessions):
             k: (round(v, 0) if v else None) for k, v in bucket_median.items()
         },
         "metric_most_efficient_bucket": best_bucket,
+        "pattern_emit": pattern_emit,
+        # DEPRECATED (see docs/SCHEMA-CHANGES.md): prose fields retained for
+        # 2 releases so external JSON consumers don't break. Render layer
+        # reads narrative modules instead.
         "explanation": f"{rate_100:.0f}% of sessions used prompts ≥ 100 chars. Most efficient prompt-length bucket for tokens/commit: {best_bucket}.",
         "pattern": pattern,
     }
@@ -479,7 +494,7 @@ def score_d3_prompt_quality(sessions):
 
 def score_d4_context_mgmt(sessions):
     if not sessions:
-        return {"score": None, "pattern": None}
+        return {"score": None, "pattern_emit": False, "pattern": None}
     otl = [
         s for s in sessions
         if any(k in s["friction_counts"] for k in
@@ -513,8 +528,9 @@ def score_d4_context_mgmt(sessions):
 
     long_no_commit = [s for s in sessions if s.get("duration_min", 0) > 20 and s.get("git_commits", 0) == 0]
     other          = [s for s in sessions if not (s.get("duration_min", 0) > 20 and s.get("git_commits", 0) == 0)]
+    pattern_emit = len(long_no_commit) >= _PATTERN_MIN_SAMPLE and len(other) >= _PATTERN_MIN_SAMPLE
     pattern = None
-    if len(long_no_commit) >= _PATTERN_MIN_SAMPLE and len(other) >= _PATTERN_MIN_SAMPLE:
+    if pattern_emit:
         otl_ids    = {id(s) for s in otl}
         lnc_rate   = 100 * sum(1 for s in long_no_commit if id(s) in otl_ids) / len(long_no_commit)
         other_rate = 100 * sum(1 for s in other         if id(s) in otl_ids) / len(other)
@@ -529,6 +545,10 @@ def score_d4_context_mgmt(sessions):
         "metric_long_session_interrupt_rate_pct": round(long_intr_rate, 1),
         "metric_effort_no_commit_pct": round(enc_pct, 1),
         "metric_max_otl_in_one_project": max_proj_otl,
+        "pattern_emit": pattern_emit,
+        # DEPRECATED (see docs/SCHEMA-CHANGES.md): prose fields retained for
+        # 2 releases so external JSON consumers don't break. Render layer
+        # reads narrative modules instead.
         "explanation": f"{len(otl)} sessions hit output-token-limit. {enc_pct:.0f}% of >20min sessions had 0 commits. Long-session interrupt rate: {long_intr_rate:.0f}%.",
         "pattern": pattern,
     }
@@ -540,7 +560,7 @@ def score_d5_interrupt(rated):
     # from _PATTERN_MIN_SAMPLE (the pattern-floor constant). Keep separate so future
     # tuning of pattern floor doesn't silently move scoring.
     if len(interrupted) < 5:
-        return {"score": None, "reason": "fewer than 5 interrupted rated sessions", "pattern": None}
+        return {"score": None, "reason": "fewer than 5 interrupted rated sessions", "pattern_emit": False, "pattern": None}
     good = [s for s in interrupted if is_good(s["outcome"])]
     P = 100 * len(good) / len(interrupted)
     thresholds = [(60, 10), (50, 9), (40, 8), (30, 7), (20, 5)]
@@ -550,8 +570,9 @@ def score_d5_interrupt(rated):
             score = sc
             break
     non_interrupted = [s for s in rated if s["interrupts"] == 0]
+    pattern_emit = len(interrupted) >= _PATTERN_MIN_SAMPLE and len(non_interrupted) >= _PATTERN_MIN_SAMPLE
     pattern = None
-    if len(interrupted) >= _PATTERN_MIN_SAMPLE and len(non_interrupted) >= _PATTERN_MIN_SAMPLE:
+    if pattern_emit:
         non_good_rate = 100 * sum(1 for s in non_interrupted if is_good(s["outcome"])) / len(non_interrupted)
         pattern = (
             f"Interrupted sessions reached good outcomes {P:.0f}% of the time, "
@@ -561,6 +582,10 @@ def score_d5_interrupt(rated):
         "score": score,
         "metric_interrupt_recovery_pct": round(P, 1),
         "metric_interrupted_sessions": len(interrupted),
+        "pattern_emit": pattern_emit,
+        # DEPRECATED (see docs/SCHEMA-CHANGES.md): prose fields retained for
+        # 2 releases so external JSON consumers don't break. Render layer
+        # reads narrative modules instead.
         "explanation": f"{P:.0f}% of interrupted sessions still reached good outcome ({len(good)}/{len(interrupted)}).",
         "pattern": pattern,
     }
@@ -568,7 +593,7 @@ def score_d5_interrupt(rated):
 
 def score_d6_tool_breadth(sessions):
     if not sessions:
-        return {"score": None, "pattern": None}
+        return {"score": None, "pattern_emit": False, "pattern": None}
     mcp_rate = 100 * sum(1 for s in sessions if s["uses_mcp"]) / len(sessions)
     tool_totals = Counter()
     for s in sessions:
@@ -597,8 +622,9 @@ def score_d6_tool_breadth(sessions):
     rated_sessions = [s for s in sessions if s.get("outcome", "")]
     diverse = [s for s in rated_sessions if len(s.get("tool_counts", {})) >= 4]
     narrow  = [s for s in rated_sessions if 0 < len(s.get("tool_counts", {})) <= 2]
+    pattern_emit = len(diverse) >= _PATTERN_MIN_SAMPLE and len(narrow) >= _PATTERN_MIN_SAMPLE
     pattern = None
-    if len(diverse) >= _PATTERN_MIN_SAMPLE and len(narrow) >= _PATTERN_MIN_SAMPLE:
+    if pattern_emit:
         diverse_good = 100 * sum(1 for s in diverse if is_good(s["outcome"])) / len(diverse)
         narrow_good  = 100 * sum(1 for s in narrow  if is_good(s["outcome"])) / len(narrow)
         pattern = (
@@ -611,6 +637,10 @@ def score_d6_tool_breadth(sessions):
         "metric_mcp_rate_pct": round(mcp_rate, 1),
         "metric_top3_share_pct": round(top3_share, 1),
         "metric_top_tools": dict(tool_totals.most_common(10)),
+        "pattern_emit": pattern_emit,
+        # DEPRECATED (see docs/SCHEMA-CHANGES.md): prose fields retained for
+        # 2 releases so external JSON consumers don't break. Render layer
+        # reads narrative modules instead.
         "explanation": f"{mcp_rate:.0f}% of sessions used any MCP tool; top-3 tools (Bash/Read/Edit) consume {top3_share:.0f}% of all calls.",
         "pattern": pattern,
     }
@@ -625,7 +655,7 @@ def score_d7_writing(rated):
     # from _PATTERN_MIN_SAMPLE (the pattern-floor constant). Keep separate so future
     # tuning of pattern floor doesn't silently move scoring.
     if len(writing) < 5:
-        return {"score": None, "reason": "fewer than 5 writing sessions", "pattern": None}
+        return {"score": None, "reason": "fewer than 5 writing sessions", "pattern_emit": False, "pattern": None}
     misu = sum(s["friction_counts"].get("misunderstood_request", 0) for s in writing)
     W = misu / len(writing)
     thresholds = [(0.1, 10), (0.3, 8), (0.6, 7), (1.0, 5)]
@@ -636,8 +666,9 @@ def score_d7_writing(rated):
             break
     non_writing = [s for s in rated
                    if not any(g in WRITING_GOALS for g in s.get("goal_cats", {}).keys())]
+    pattern_emit = len(writing) >= _PATTERN_MIN_SAMPLE and len(non_writing) >= _PATTERN_MIN_SAMPLE
     pattern = None
-    if len(writing) >= _PATTERN_MIN_SAMPLE and len(non_writing) >= _PATTERN_MIN_SAMPLE:
+    if pattern_emit:
         w_avg = sum(s["friction_counts"].get("misunderstood_request", 0) for s in writing) / len(writing)
         nw_avg = sum(s["friction_counts"].get("misunderstood_request", 0) for s in non_writing) / len(non_writing)
         pattern = (
@@ -648,6 +679,10 @@ def score_d7_writing(rated):
         "score": score,
         "metric_misunderstood_per_writing_session": round(W, 2),
         "metric_writing_sessions": len(writing),
+        "pattern_emit": pattern_emit,
+        # DEPRECATED (see docs/SCHEMA-CHANGES.md): prose fields retained for
+        # 2 releases so external JSON consumers don't break. Render layer
+        # reads narrative modules instead.
         "explanation": f"Across {len(writing)} writing-related sessions, avg misunderstood_request per session is {W:.2f}.",
         "pattern": pattern,
     }
@@ -658,7 +693,7 @@ def score_d8_time_mgmt(sessions, rated):
     # Scoring eligibility guards — literal thresholds, NOT _PATTERN_MIN_SAMPLE.
     # These control whether the score itself is computable, not the pattern floor.
     if len(rated) < 20:
-        return {"score": None, "reason": "<20 rated sessions", "pattern": None}
+        return {"score": None, "reason": "<20 rated sessions", "pattern_emit": False, "pattern": None}
     by_hour = defaultdict(lambda: {"n": 0, "fric": 0})
     for s in rated:
         h = s["hour"]
@@ -669,7 +704,7 @@ def score_d8_time_mgmt(sessions, rated):
         h: d["fric"] / d["n"] for h, d in by_hour.items() if d["n"] >= 5
     }
     if len(rates) < 3:
-        return {"score": None, "reason": "<3 hours with enough data", "pattern": None}
+        return {"score": None, "reason": "<3 hours with enough data", "pattern_emit": False, "pattern": None}
     hi = max(rates.values())
     lo = min(rates.values()) or 0.001
     ratio = hi / lo
@@ -690,8 +725,9 @@ def score_d8_time_mgmt(sessions, rated):
     # angle. Uses rated only so unrated sessions can't skew is_good().
     before_10 = [s for s in rated if s.get("hour", 12) < 10]
     after_10  = [s for s in rated if s.get("hour", 12) >= 10]
+    pattern_emit = len(before_10) >= _PATTERN_MIN_SAMPLE and len(after_10) >= _PATTERN_MIN_SAMPLE
     pattern = None
-    if len(before_10) >= _PATTERN_MIN_SAMPLE and len(after_10) >= _PATTERN_MIN_SAMPLE:
+    if pattern_emit:
         before_good = 100 * sum(1 for s in before_10 if is_good(s["outcome"])) / len(before_10)
         after_good  = 100 * sum(1 for s in after_10  if is_good(s["outcome"])) / len(after_10)
         pattern = (
@@ -703,6 +739,10 @@ def score_d8_time_mgmt(sessions, rated):
         "metric_friction_ratio_hi_lo": round(ratio, 2),
         "metric_worst_hour": {"hour": worst_hour, "friction_per_session": round(rates[worst_hour], 2)},
         "metric_best_hour": {"hour": best_hour, "friction_per_session": round(rates[best_hour], 2)},
+        "pattern_emit": pattern_emit,
+        # DEPRECATED (see docs/SCHEMA-CHANGES.md): prose fields retained for
+        # 2 releases so external JSON consumers don't break. Render layer
+        # reads narrative modules instead.
         "explanation": f"Worst hour ({worst_hour:02d}:00) has {ratio:.1f}x the friction rate of best hour ({best_hour:02d}:00).",
         "pattern": pattern,
     }
@@ -723,6 +763,7 @@ def score_d9_token_efficiency(sessions, rated):
         return {
             "score": None,
             "reason": "insufficient good/not-good sample",
+            "pattern_emit": False,
             "pattern": None,
         }
 
@@ -732,6 +773,7 @@ def score_d9_token_efficiency(sessions, rated):
         return {
             "score": None,
             "reason": "zero-token good sessions",
+            "pattern_emit": False,
             "pattern": None,
         }
     ratio = tokens_per_not_good / tokens_per_good
@@ -799,6 +841,10 @@ def score_d9_token_efficiency(sessions, rated):
         "metric_tokens_per_not_good": round(tokens_per_not_good),
         "metric_ratio": round(ratio, 2),
         "metric_cache_hit_pct": round(cache_hit * 100, 1) if cache_hit is not None else None,
+        "pattern_emit": True,
+        # DEPRECATED (see docs/SCHEMA-CHANGES.md): prose fields retained for
+        # 2 releases so external JSON consumers don't break. Render layer
+        # reads narrative modules instead.
         "explanation": explanation,
         "pattern": pattern,
     }
