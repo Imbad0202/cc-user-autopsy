@@ -182,6 +182,7 @@ _REDACTED_META_KEYS = {
     "assistant_message_count",
     "cache_creation_input_tokens", "cache_read_input_tokens",
     "model_counts",
+    "hit_output_limit",
 }
 _REDACTED_FACETS_KEYS = {
     "session_id", "outcome", "claude_helpfulness", "session_type",
@@ -302,6 +303,7 @@ def build_sessions(metas, facets, tz):
             "cache_create_tokens": m.get("cache_creation_input_tokens", 0),
             "cache_read_tokens": m.get("cache_read_input_tokens", 0),
             "model_counts": m.get("model_counts", {}) or {},
+            "hit_output_limit": m.get("hit_output_limit", False),
             # facet fields
             "outcome": f.get("outcome", ""),
             "helpfulness": f.get("claude_helpfulness", ""),

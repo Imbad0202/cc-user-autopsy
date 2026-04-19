@@ -322,5 +322,15 @@ class HitOutputLimitTests(unittest.TestCase):
         self.assertFalse(emitted.get("hit_output_limit", False))
 
 
+class RedactedSchemaTests(unittest.TestCase):
+    def test_redacted_keys_include_hit_output_limit(self):
+        import sys
+        from pathlib import Path
+        SKILL = Path(__file__).resolve().parent.parent
+        sys.path.insert(0, str(SKILL / "scripts"))
+        import aggregate
+        self.assertIn("hit_output_limit", aggregate._REDACTED_META_KEYS)
+
+
 if __name__ == "__main__":
     unittest.main()
