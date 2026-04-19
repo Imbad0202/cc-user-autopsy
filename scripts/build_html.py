@@ -102,6 +102,34 @@ def _build_activity_panel(activity: dict, locale: str = "en") -> str:
 
     chart = _build_models_chart(models, locale=locale) if models else ""
 
+    uc = activity.get("usage_characteristics")
+    uc_html = ""
+    if uc and uc.get("items"):
+        header = t(locale, "usage_char_header")
+        note = t(locale, "usage_char_note_template").format(
+            n_sessions=uc.get("n_sessions", 0),
+            since=uc.get("since", ""),
+            until=uc.get("until", ""),
+        )
+        rows = ""
+        for item in uc["items"]:
+            rows += (
+                '<div class="uc-row">'
+                f'<span class="pct">{int(item.get("pct", 0))}%</span>'
+                '<div class="uc-body">'
+                f'<p class="label">{esc(item.get("label", ""))}</p>'
+                f'<p class="tip">{esc(item.get("tip", ""))}</p>'
+                '</div>'
+                '</div>'
+            )
+        uc_html = (
+            '<div class="usage-characteristics">'
+            f'<h4 class="uc-header">{esc(header)}</h4>'
+            f'<p class="uc-note">{esc(note)}</p>'
+            f'<div class="uc-list">{rows}</div>'
+            '</div>'
+        )
+
     return f"""
 <div class="metrics" style="margin-bottom:16px">
   <div class="metric"><div class="n">{total:,}</div><div class="lbl">{t(locale, "tile_full_sessions")}</div></div>
@@ -115,6 +143,7 @@ def _build_activity_panel(activity: dict, locale: str = "en") -> str:
 </div>
 {chart}
 {scope_note}
+{uc_html}
 """.strip()
 
 

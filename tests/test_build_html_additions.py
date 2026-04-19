@@ -655,5 +655,62 @@ class ScoreDisclaimerTests(unittest.TestCase):
                         "score-disclaimer must appear before score-table in source")
 
 
+class UsageCharacteristicsRenderTests(unittest.TestCase):
+    """Task 17: usage_characteristics block rendered inside _build_activity_panel."""
+
+    def _activity_with_uc(self, **overrides):
+        uc = {
+            "n_sessions": 280,
+            "since": "2026-01-01",
+            "until": "2026-04-19",
+            "items": [
+                {"pct": 42, "label": "output-token-limit", "tip": "Hit the output cap in 42% of sessions."},
+                {"pct": 31, "label": "long-context", "tip": "Loaded >100k tokens of context."},
+                {"pct": 18, "label": "multi-turn-deep", "tip": "Conversation exceeded 20 turns."},
+                {"pct": 12, "label": "tool-heavy", "tip": "More than 10 tool calls per session."},
+                {"pct": 7,  "label": "low-friction", "tip": "No interrupts and goal achieved."},
+            ],
+        }
+        base = _activity_panel(usage_characteristics=uc)
+        base.update(overrides)
+        return base
+
+    def test_usage_characteristics_block_rendered(self):
+        """When usage_characteristics is present, the block renders with header,
+        note, and one uc-row per item."""
+        html = build_html._build_activity_panel(self._activity_with_uc())
+        self.assertIn('class="usage-characteristics"', html)
+        self.assertIn("42%", html)
+        self.assertEqual(html.count('class="uc-row"'), 5)
+        self.assertIn("output-token-limit", html)
+        self.assertIn("Across 280 sessions", html)
+
+    def test_usage_characteristics_absent_when_missing(self):
+        """When the activity dict has no usage_characteristics key, the block
+        must be entirely absent."""
+        html = build_html._build_activity_panel(_activity_panel())
+        self.assertNotIn('class="usage-characteristics"', html)
+
+    def test_usage_characteristics_xss_escaped(self):
+        """Labels and tips coming from the scanner must be HTML-escaped before
+        insertion to prevent XSS."""
+        xss_label = "<script>alert(1)</script>"
+        xss_tip = "'\"<script>alert(2)</script>"
+        uc = {
+            "n_sessions": 1,
+            "since": "2026-01-01",
+            "until": "2026-04-19",
+            "items": [
+                {"pct": 99, "label": xss_label, "tip": xss_tip},
+            ],
+        }
+        html = build_html._build_activity_panel(
+            _activity_panel(usage_characteristics=uc)
+        )
+        self.assertNotIn("<script>alert(1)</script>", html)
+        self.assertNotIn("<script>alert(2)</script>", html)
+        self.assertIn("&lt;script&gt;", html)
+
+
 if __name__ == "__main__":
     unittest.main()
