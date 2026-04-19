@@ -578,11 +578,11 @@ class PatternRenderTests(unittest.TestCase):
         skill_dir = Path(__file__).resolve().parent.parent
 
         # Load the demo aggregate if it exists, otherwise build our own fixture
-        demo_agg = demo_dir / "aggregate.json"
+        demo_agg = demo_dir / "analysis-data.json"
         if demo_agg.exists():
             analysis = _json.loads(demo_agg.read_text())
         else:
-            self.skipTest("Demo aggregate.json absent — skipping XSS integration test.")
+            self.skipTest("Demo analysis-data.json absent — skipping XSS integration test.")
 
         # Inject XSS payload into the first scored dimension we find
         xss_payload = "<script>alert(1)</script>"
