@@ -619,7 +619,10 @@ def score_d7_writing(rated):
         s for s in rated
         if any(g in WRITING_GOALS for g in s.get("goal_cats", {}).keys())
     ]
-    if len(writing) < _PATTERN_MIN_SAMPLE:
+    # score guard uses literal 5: the scoring eligibility threshold is independent
+    # from _PATTERN_MIN_SAMPLE (the pattern-floor constant). Keep separate so future
+    # tuning of pattern floor doesn't silently move scoring.
+    if len(writing) < 5:
         return {"score": None, "reason": "fewer than 5 writing sessions", "pattern": None}
     misu = sum(s["friction_counts"].get("misunderstood_request", 0) for s in writing)
     W = misu / len(writing)
