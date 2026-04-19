@@ -328,7 +328,7 @@ def is_good(outcome):
 def score_d1_delegation(sessions, rated):
     n = len(sessions)
     if n == 0:
-        return {"score": None, "reason": "no sessions"}
+        return {"score": None, "reason": "no sessions", "pattern": None}
     ta_count = sum(1 for s in sessions if s["uses_task_agent"])
     ta_rate = 100 * ta_count / n
     ta_rated = [s for s in rated if s["uses_task_agent"]]
@@ -352,11 +352,24 @@ def score_d1_delegation(sessions, rated):
         score = 3
     else:
         score = 1
+    # Pattern string (descriptive contrast). None when TA sample < 5.
+    overall_good_rate = (
+        100 * sum(1 for s in rated if is_good(s["outcome"])) / len(rated)
+        if rated else 0
+    )
+    if len(ta_rated) >= 5:
+        pattern = (
+            f"Sessions that used Task agent had a {good_rate_ta:.0f}% "
+            f"good-outcome rate, versus {overall_good_rate:.0f}% overall."
+        )
+    else:
+        pattern = None
     return {
         "score": score,
         "metric_ta_rate_pct": round(ta_rate, 1),
         "metric_good_rate_with_ta_pct": round(good_rate_ta, 1),
         "explanation": f"{ta_rate:.0f}% of sessions used Task agent; good-outcome rate with Task agent was {good_rate_ta:.0f}%.",
+        "pattern": pattern,
     }
 
 
