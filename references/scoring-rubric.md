@@ -155,4 +155,4 @@ If fewer than 3 hours have ≥ 5 sessions, skip.
 - Rules assume > 20 rated sessions. Below that, the aggregate script flags the
   report as "preliminary" and dials down confidence language in the HTML.
 - When a dimension is skipped due to insufficient data, it's shown as "n/a"
-  in the report and does not factor into the 8-dimension average.
+  in the report and does not factor into the 9-dimension average.

@@ -1,6 +1,6 @@
 """
 cc-user-autopsy Step 1: aggregate.
-Reads ~/.claude/usage-data/ and computes every metric + 8 rule-based scores.
+Reads ~/.claude/usage-data/ and computes every metric + 9 rule-based scores.
 Outputs analysis-data.json.
 """
 import argparse
@@ -1350,7 +1350,7 @@ def main():
             tz = timezone.utc
 
     # Two universes:
-    #  - scoring_metas: the rich, LLM-labeled subset used for 8-dimension scores
+    #  - scoring_metas: the rich, LLM-labeled subset used for 9-dimension scores
     #  - activity_metas: the full session universe (transcript-scan output)
     # When --transcript-rows is set, activity_metas uses it; scoring_metas
     # prefers session-meta's richer data (uses_task_agent etc.) intersected
