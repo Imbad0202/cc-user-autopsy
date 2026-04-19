@@ -2113,6 +2113,7 @@ def main():
         "D6_tool_breadth": t(args.locale, "score_d6"),
         "D7_writing_consistency": t(args.locale, "score_d7"),
         "D8_time_mgmt": t(args.locale, "score_d8"),
+        "D9_token_efficiency": t(args.locale, "score_d9"),
     }
     score_rows = ""
     for key, title in dim_titles.items():

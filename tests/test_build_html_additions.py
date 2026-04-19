@@ -710,5 +710,25 @@ class UsageCharacteristicsRenderTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;", html)
 
 
+class D9RenderTests(unittest.TestCase):
+    """D9 token-efficiency dimension must appear in the rendered score table."""
+
+    def test_d9_row_rendered_in_score_table(self):
+        """After D9 wiring, the score table includes a D9 row with the
+        locale title."""
+        html = _run_build(audience="self", locale="en")
+        self.assertIn("Token efficiency", html)
+
+    def test_score_subtitle_says_nine(self):
+        """After adding D9, the scoring section subtitle should mention nine, not eight."""
+        html = _run_build(audience="self", locale="en")
+        self.assertTrue(
+            "Nine dimensions" in html or "nine dimensions" in html,
+            "Expected 'Nine dimensions' or 'nine dimensions' in HTML",
+        )
+        self.assertNotIn("Eight dimensions", html)
+        self.assertNotIn("eight dimensions", html)
+
+
 if __name__ == "__main__":
     unittest.main()
