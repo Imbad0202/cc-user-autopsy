@@ -44,15 +44,21 @@ Each script is idempotent. If a step fails, re-run it.
 
 ## Step 0 — Ask first, build second
 
-Before running anything, **ask the user which version they want**. Never guess from keywords.
+Before running anything, **ask the user two questions in a single prompt**. Never guess from keywords.
 
 > "I can build two versions of this report:
 >   **A. Self audit** — honest diagnostic letter for your eyes only. Shows every project name, session ID, and friction detail.
 >   **B. HR / portfolio** — public-facing summary for recruiters. Hides private projects, redacts session IDs, and leads with a profile card.
 >   **C. Both.**
-> Which one(s)?"
+> Which one(s)?
+>
+> Output language:
+>   **1. English (default)**
+>   **2. Traditional Chinese (zh_TW)** — chrome strings and peer-review prose will be in zh_TW. The peer-review will be rewritten natively (not translated) in Step 4.5.
+>
+> If you don't specify, I'll build English."
 
-Running `/cc-user-autopsy` without an explicit request is a **self** audit by default. Never silently produce an HR version — that version will be shown to outsiders and the user may not want certain projects visible.
+Running `/cc-user-autopsy` without an explicit request is a **self** audit in **English** by default. Never silently produce an HR version — that version will be shown to outsiders and the user may not want certain projects visible.
 
 ### If the user picks B or C, collect BEFORE Step 1:
 
@@ -207,15 +213,44 @@ Then pass the HR-safe version via `--peer-review /tmp/cc-autopsy/peer-review-hr.
 when calling `build_html.py --audience hr`. The self audit can still use the
 original `peer-review.md` with full citations.
 
+## Step 4.5 — Locale rewrite (only when locale != en)
+
+**Skip this step entirely if the user picked `en` in Step 0.**
+
+**Cache check:** if `/tmp/cc-autopsy/peer-review.zh_TW.md` already exists and is newer than `/tmp/cc-autopsy/peer-review.md`, use it as-is and skip the rewrite. Re-running the skill should not re-spend tokens on rewriting unchanged peer-review prose.
+
+**Rewrite prompt** (run via the Task tool with `model=claude-sonnet-4-5` or newer, never haiku):
+
+> You are a native zh_TW peer reviewer of Claude Code workflow. Rewrite the following English peer-review report into Traditional Chinese.
+>
+> Rules:
+> - This is a REWRITE, not a translation. The voice should be a native zh_TW peer reviewer who happened to read the same data and write their own review. Avoid translation tone, avoid sentence-by-sentence parallelism with the source.
+> - Preserve every fact, number, and section heading structure. Do not invent claims, do not omit findings.
+> - No AI 公文體 connectors (然而, 值得注意的是, 此外). Let the logic carry the paragraph.
+> - No em-dash 濫用 (——). If you reach for one, restructure with a comma or a new sentence.
+> - The user is HEEACT 品保 background; technical terms can stay in English where natural (e.g. "Task agent", "MCP", "facet coverage").
+>
+> Source (English):
+> ```
+> <paste contents of peer-review.md here>
+> ```
+>
+> Output: pure markdown, same heading structure as the source.
+
+Save the output to `/tmp/cc-autopsy/peer-review.zh_TW.md`. In Step 4, pass `--peer-review /tmp/cc-autopsy/peer-review.zh_TW.md` to `build_html.py`.
+
 ## Step 4 — Build the HTML
 
 ### Default (self audit)
 
 ```bash
+# LOCALE=en (default) — use peer-review.md
+# LOCALE=zh_TW — use peer-review.zh_TW.md produced in Step 4.5
 python3 scripts/build_html.py \
   --input /tmp/cc-autopsy/analysis-data.json \
   --samples /tmp/cc-autopsy/samples.json \
   --peer-review /tmp/cc-autopsy/peer-review.md \
+  --locale en \
   --output ~/.claude/usage-data/cc-user-autopsy.html
 ```
 
@@ -241,11 +276,14 @@ they want to link.
   projects are aggregated to category buckets.
 
 ```bash
+# Replace --peer-review and --locale to match the user's Step 0 choices.
+# For zh_TW: --peer-review /tmp/cc-autopsy/peer-review.zh_TW.md --locale zh_TW
 python3 scripts/build_html.py \
   --input /tmp/cc-autopsy/analysis-data.json \
   --samples /tmp/cc-autopsy/samples.json \
   --peer-review /tmp/cc-autopsy/peer-review.md \
   --audience hr \
+  --locale en \
   --public-projects ~/.claude/cc-autopsy-public-projects.json \
   --artifacts ~/.claude/cc-autopsy-artifacts.json \
   --profile ~/.claude/cc-autopsy-profile.json \
