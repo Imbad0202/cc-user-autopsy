@@ -1137,8 +1137,8 @@ def compute_aggregates(sessions, rated, facets_coverage):
     for w in result["weekly"]:
         if w["sessions"] == 0:
             continue
-        rated = w["rated"]
-        insufficient = rated < GROWTH_MIN_RATED_PER_WEEK
+        week_rated_count = w["rated"]
+        insufficient = week_rated_count < GROWTH_MIN_RATED_PER_WEEK
         ta_rate_w = 100 * w["uses_task_agent"] / w["sessions"]
         good_rate_w = w["good_rate_pct"]
         fric_ratio = (w["friction"] / w["sessions"]) / max_fric_per_session if max_fric_per_session else 0
@@ -1151,7 +1151,7 @@ def compute_aggregates(sessions, rated, facets_coverage):
             "ta_rate": round(ta_rate_w, 1),  # uses sessions denominator, no gate
             "good_rate": None if insufficient else good_rate_w,
             "fric_score": round(fric_score, 1),
-            "rated_sessions": rated,
+            "rated_sessions": week_rated_count,
         })
     result["growth_curve"] = growth
 
