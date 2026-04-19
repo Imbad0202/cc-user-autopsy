@@ -22,6 +22,9 @@ FIXTURE_SID = "f831eb28-e1f9-43af-a5bb-1c216021d89f"
 FIXTURE_META = Path.home() / ".claude/usage-data/session-meta" / f"{FIXTURE_SID}.json"
 FIXTURE_TRANSCRIPT = Path.home() / ".claude/projects/-Users-imbad" / f"{FIXTURE_SID}.jsonl"
 
+sys.path.insert(0, str(SKILL_DIR / "scripts"))
+import aggregate  # noqa: E402
+
 
 def _run_scanner(projects_dir: Path, out: Path):
     return subprocess.run(
@@ -324,11 +327,6 @@ class HitOutputLimitTests(unittest.TestCase):
 
 class RedactedSchemaTests(unittest.TestCase):
     def test_redacted_keys_include_hit_output_limit(self):
-        import sys
-        from pathlib import Path
-        SKILL = Path(__file__).resolve().parent.parent
-        sys.path.insert(0, str(SKILL / "scripts"))
-        import aggregate
         self.assertIn("hit_output_limit", aggregate._REDACTED_META_KEYS)
 
 
