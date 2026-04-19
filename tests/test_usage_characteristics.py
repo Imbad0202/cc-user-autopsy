@@ -599,5 +599,49 @@ class ScoreD8PatternTests(unittest.TestCase):
         self.assertIsNone(result["score"])
 
 
+class UsageCharacteristicsTests(unittest.TestCase):
+    def test_block_emitted_when_10_plus_sessions(self):
+        """20 sessions → usage_characteristics block present with 5 items,
+        n_sessions=20, since/until, each item has pct/label/tip, pct is int."""
+        sessions = [_session(f"s{i}") for i in range(20)]
+        activity = aggregate.compute_activity(sessions)
+        self.assertIn("usage_characteristics", activity)
+        uc = activity["usage_characteristics"]
+        self.assertEqual(uc["n_sessions"], 20)
+        self.assertIn("since", uc)
+        self.assertIn("until", uc)
+        items = uc["items"]
+        self.assertEqual(len(items), 5)
+        for item in items:
+            self.assertIn("pct", item)
+            self.assertIn("label", item)
+            self.assertIn("tip", item)
+            self.assertIsInstance(item["pct"], int)
+
+    def test_block_omitted_below_10_sessions(self):
+        """8 sessions → usage_characteristics NOT in activity."""
+        sessions = [_session(f"s{i}") for i in range(8)]
+        activity = aggregate.compute_activity(sessions)
+        self.assertNotIn("usage_characteristics", activity)
+
+    def test_block_omitted_when_no_sessions(self):
+        """compute_activity([]) early return → usage_characteristics NOT in activity."""
+        activity = aggregate.compute_activity([])
+        self.assertNotIn("usage_characteristics", activity)
+
+    def test_since_until_span_session_dates(self):
+        """15 sessions with explicit start dates 2026-03-01 through 2026-03-15 →
+        since == '2026-03-01' and until == '2026-03-15'."""
+        sessions = [
+            _session(f"s{i}", start=f"2026-03-{i + 1:02d}T10:00:00Z")
+            for i in range(15)
+        ]
+        activity = aggregate.compute_activity(sessions)
+        self.assertIn("usage_characteristics", activity)
+        uc = activity["usage_characteristics"]
+        self.assertEqual(uc["since"], "2026-03-01")
+        self.assertEqual(uc["until"], "2026-03-15")
+
+
 if __name__ == "__main__":
     unittest.main()

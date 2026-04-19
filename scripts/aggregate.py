@@ -40,6 +40,7 @@ PRICING = {
 _FALLBACK_PRICING = PRICING["claude-opus-4-6"]
 
 _PATTERN_MIN_SAMPLE = 5  # minimum group size to emit a per-dimension pattern contrast sentence
+_USAGE_CHAR_MIN_SESSIONS = 10  # minimum session count to emit the usage_characteristics block
 
 
 def _normalize_model_id(m: str) -> str:
@@ -797,7 +798,7 @@ def compute_activity(sessions):
         for m, c in (s.get("model_counts", {}) or {}).items():
             models[m] += c
 
-    return {
+    result = {
         "total_sessions": len(sessions),
         "total_messages": total_msgs,
         "active_days": len(dates),
@@ -809,6 +810,84 @@ def compute_activity(sessions):
         "favorite_model": models.most_common(1)[0][0] if models else None,
         "api_equivalent_cost_usd": compute_api_equivalent_cost(sessions),
     }
+
+    # Build usage_characteristics block when enough sessions exist and dates are available.
+    # Guard: omit if < _USAGE_CHAR_MIN_SESSIONS or no valid session start dates.
+    uc_dates = [s["start"][:10] for s in sessions
+                if s.get("start") and len(s.get("start", "")) >= 10]
+    if len(sessions) >= _USAGE_CHAR_MIN_SESSIONS and uc_dates:
+        since = min(uc_dates)
+        until = max(uc_dates)
+        total = len(sessions)
+
+        # Item 1: sessions with hit_output_limit=True / total
+        hit_limit = sum(1 for s in sessions if s.get("hit_output_limit"))
+        pct1 = round(100 * hit_limit / total)
+
+        # Item 2: long-friction / total-friction
+        # "long" = duration_min > 20 AND friction_counts has at least one event
+        # "friction" = sessions with at least one friction event
+        friction_sessions = [s for s in sessions
+                             if sum((s.get("friction_counts") or {}).values()) > 0]
+        long_friction = sum(
+            1 for s in friction_sessions
+            if (s.get("duration_min") or 0) > 20
+        )
+        denom2 = len(friction_sessions)
+        pct2 = round(100 * long_friction / denom2) if denom2 > 0 else 0
+
+        # Item 3: good+task_agent / good-total
+        good_sessions = [s for s in sessions
+                         if s.get("outcome") in ("fully_achieved", "good")]
+        good_task_agent = sum(1 for s in good_sessions if s.get("uses_task_agent"))
+        denom3 = len(good_sessions)
+        pct3 = round(100 * good_task_agent / denom3) if denom3 > 0 else 0
+
+        # Item 4: sessions with 1-2 distinct tools / total
+        narrow_tool = sum(
+            1 for s in sessions
+            if len(s.get("tool_counts") or {}) <= 2
+        )
+        pct4 = round(100 * narrow_tool / total)
+
+        # Item 5: sessions hour >= 22 / total
+        late_night = sum(1 for s in sessions if (s.get("hour") or 0) >= 22)
+        pct5 = round(100 * late_night / total)
+
+        result["usage_characteristics"] = {
+            "since": since,
+            "until": until,
+            "n_sessions": total,
+            "items": [
+                {
+                    "pct": pct1,
+                    "label": "of your sessions hit output-token-limit",
+                    "tip": "Sessions that /compact mid-task rarely hit the wall.",
+                },
+                {
+                    "pct": pct2,
+                    "label": "of your high-friction sessions were long (>20min)",
+                    "tip": "Long sessions concentrate friction; consider /clear between subtasks.",
+                },
+                {
+                    "pct": pct3,
+                    "label": "of your good-outcome sessions delegated to Task agent",
+                    "tip": "Task-agent delegation correlates with ship-level outcomes.",
+                },
+                {
+                    "pct": pct4,
+                    "label": "of your sessions used only 1-2 distinct tools",
+                    "tip": "Narrow tool use is fine for focused work but misses MCP leverage.",
+                },
+                {
+                    "pct": pct5,
+                    "label": "of your sessions were after 10pm",
+                    "tip": "Evening sessions produce more tokens per friction event.",
+                },
+            ],
+        }
+
+    return result
 
 
 def compute_aggregates(sessions, rated, facets_coverage):
