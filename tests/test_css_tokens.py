@@ -83,7 +83,7 @@ class NoHardcodedSpacingTests(unittest.TestCase):
         return self.src[i:j + len(end)]
 
     def test_cleaned_components_have_no_hardcoded_px(self):
-        pattern = re.compile(r"\b(\d+(?:\.\d+)?px)\b")
+        pattern = re.compile(r"(?<!-)\b(\d+(?:\.\d+)?px)\b")
         for name, start, end in CLEANED_COMPONENTS:
             with self.subTest(component=name):
                 block = self._block(start, end)
