@@ -492,7 +492,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     border: 1px solid var(--rule);
     background: rgba(255,250,240,0.5);
     padding: var(--space-11) 26px;       /* 26px horizontal kept hardcode (component-unique) */
-    margin: 0 0 60px 0;                  /* 60px = double breathing room, kept hardcode */
+    margin: 0 0 calc(2 * var(--section-gap)) 0;   /* 60px = 2× section-gap */
     font-size: 15.5px;
     line-height: 1.6;
     position: relative;
@@ -500,7 +500,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .intro-card::before {
     content: "NOTE";
     position: absolute;
-    top: -9px; left: var(--space-11);
+    top: -9px; left: var(--space-11);   /* 22px — intentionally 4px inside the 26px horizontal padding */
     background: var(--paper);
     padding: 0 var(--space-4);
     font-family: var(--mono);

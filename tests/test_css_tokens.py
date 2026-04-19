@@ -49,7 +49,7 @@ CLEANED_COMPONENTS: list[tuple[str, str, str]] = [
     (
         ".method",
         "  /* §07 methodology */\n  .method {",
-        "  .method li { margin: var(--space-2) 0; }",
+        "  .method li { margin: var(--space-2) 0; }\n",
     ),
     (
         ".caveat",
@@ -91,7 +91,7 @@ HARDCODE_WHITELIST_PX = {
     "640px",                                 # mobile breakpoint (max-width)
 
     # --- Component-unique spacing (profile-card + small components) ---
-    "34px",                                  # profile-card horiz padding, evidence-header top margin
+    "34px",                                  # profile-card horiz padding + evidence-header top margin (coincident value, unrelated intent)
     "48px",                                  # profile-card bottom margin (not on 2px scale)
     "22px",                                  # profile-lede font-size (unique hero-ish)
     "12px",                                  # profile-cell .sub font-size (small-print)
@@ -100,7 +100,6 @@ HARDCODE_WHITELIST_PX = {
     "10px",                                  # intro-card ::before NOTE badge font-size
     "15.5px",                                # intro-card font-size (mirrors zh-Hant body baseline)
     "26px",                                  # intro-card horizontal padding
-    "60px",                                  # intro-card bottom margin (double breathing room)
 }
 
 
@@ -130,6 +129,9 @@ class TokenPrimitivesTests(unittest.TestCase):
             self.assertRegex(self.src, rf"--leading-{name}\s*:")
 
 
+# Note: --card-padding and --card-radius were originally planned but removed
+# in the YAGNI pass (no concrete downstream consumer). If future components
+# require them, restore the aliases in :root AND add matching tests here.
 class SemanticAliasTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
