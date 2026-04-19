@@ -36,6 +36,31 @@ CLEANED_COMPONENTS: list[tuple[str, str, str]] = [
         "  /* §06 evidence library */\n  details.evidence {",
         "    word-break: break-all;\n  }",
     ),
+    (
+        ".dek",
+        "  .dek {",
+        "    margin: 0 0 var(--section-gap) 0;\n  }",
+    ),
+    (
+        ".intro-card",
+        "  .intro-card {",
+        "    color: var(--accent);\n  }",
+    ),
+    (
+        ".method",
+        "  /* §07 methodology */\n  .method {",
+        "  .method li { margin: var(--space-2) 0; }",
+    ),
+    (
+        ".caveat",
+        "  .caveat {",
+        "    line-height: 1.6;\n  }",
+    ),
+    (
+        ".evidence-header",
+        "  .evidence-header {",
+        "    border-bottom: 1px solid var(--rule);\n  }",
+    ),
 ]
 
 # Hard-coded px values that are allowed inside cleaned component blocks.
@@ -60,16 +85,22 @@ HARDCODE_WHITELIST_PX = {
     "260px", "340px", "420px",              # .chart-box .short / default / .tall
 
     # --- Border indicator widths (used as visual accents, not spacing) ---
-    "4px",                                   # profile-card accent border-left
+    "3px", "4px",                            # caveat / profile-card accent border-left
 
     # --- Responsive breakpoints (shared across components) ---
     "640px",                                 # mobile breakpoint (max-width)
 
-    # --- .profile-card unique values (component-specific, not scale-worthy) ---
-    "34px",                                  # horizontal padding (asymmetric with vertical)
-    "48px",                                  # bottom margin (component-unique, not on 2px scale)
-    "22px",                                  # .profile-lede font-size (unique hero-ish)
-    "12px",                                  # .profile-cell .sub font-size (small-print)
+    # --- Component-unique spacing (profile-card + small components) ---
+    "34px",                                  # profile-card horiz padding, evidence-header top margin
+    "48px",                                  # profile-card bottom margin (not on 2px scale)
+    "22px",                                  # profile-lede font-size (unique hero-ish)
+    "12px",                                  # profile-cell .sub font-size (small-print)
+
+    # --- Small component unique values ---
+    "10px",                                  # intro-card ::before NOTE badge font-size
+    "15.5px",                                # intro-card font-size (mirrors zh-Hant body baseline)
+    "26px",                                  # intro-card horizontal padding
+    "60px",                                  # intro-card bottom margin (double breathing room)
 }
 
 

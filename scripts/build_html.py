@@ -481,18 +481,18 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
   .dek {
     font-family: var(--sans);
-    font-size: 15px;
-    line-height: 1.55;
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
     color: var(--ink-soft);
     max-width: 56ch;
-    margin: 0 0 30px 0;
+    margin: 0 0 var(--section-gap) 0;
   }
 
   .intro-card {
     border: 1px solid var(--rule);
     background: rgba(255,250,240,0.5);
-    padding: 22px 26px;
-    margin: 0 0 60px 0;
+    padding: var(--space-11) 26px;       /* 26px horizontal kept hardcode (component-unique) */
+    margin: 0 0 60px 0;                  /* 60px = double breathing room, kept hardcode */
     font-size: 15.5px;
     line-height: 1.6;
     position: relative;
@@ -500,9 +500,9 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .intro-card::before {
     content: "NOTE";
     position: absolute;
-    top: -9px; left: 22px;
+    top: -9px; left: var(--space-11);
     background: var(--paper);
-    padding: 0 8px;
+    padding: 0 var(--space-4);
     font-family: var(--mono);
     font-size: 10px;
     letter-spacing: 0.2em;
@@ -1104,8 +1104,8 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     letter-spacing: 0.22em;
     text-transform: uppercase;
     color: var(--accent);
-    margin: 34px 0 8px 0;
-    padding-bottom: 6px;
+    margin: 34px 0 var(--space-4) 0;     /* 34px = component-unique top gap */
+    padding-bottom: var(--space-3);
     border-bottom: 1px solid var(--rule);
   }
 
@@ -1128,14 +1128,14 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     font-size: 14.5px;
     line-height: 1.6;
   }
-  .method ul { padding-left: 20px; margin: 8px 0 14px 0; }
-  .method li { margin: 4px 0; }
+  .method ul { padding-left: var(--space-10); margin: var(--space-4) 0 var(--space-7) 0; }
+  .method li { margin: var(--space-2) 0; }
   .caveat {
     background: rgba(160, 67, 30, 0.06);
     border: 1px solid rgba(160, 67, 30, 0.2);
     border-left: 3px solid var(--accent);
-    padding: 14px 20px;
-    margin: 16px 0;
+    padding: var(--space-7) var(--space-10);
+    margin: var(--space-8) 0;
     font-size: 14px;
     line-height: 1.6;
   }
