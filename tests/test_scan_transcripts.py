@@ -272,5 +272,71 @@ class ScanTranscriptsTests(unittest.TestCase):
             self.assertEqual(row["project_path"], "/Users/imbad")
 
 
+class HitOutputLimitTests(unittest.TestCase):
+    def test_row_marks_hit_output_limit_when_max_tokens_seen(self):
+        """Any assistant row with stop_reason='max_tokens' anywhere in the
+        session should flip the session-level hit_output_limit flag True."""
+        import json, tempfile, os
+        from pathlib import Path
+        rows = [
+            {"type": "user", "sessionId": "abc12345-0000-0000-0000-000000000001",
+             "message": {"role": "user", "content": "hi"},
+             "timestamp": "2026-04-19T10:00:00Z"},
+            {"type": "assistant", "sessionId": "abc12345-0000-0000-0000-000000000001",
+             "message": {"role": "assistant", "content": "truncated...",
+                         "stop_reason": "max_tokens",
+                         "usage": {"input_tokens": 10, "output_tokens": 8000}},
+             "timestamp": "2026-04-19T10:00:05Z"},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            pdir = td / "projects" / "-proj"
+            pdir.mkdir(parents=True)
+            p = pdir / "abc12345-0000-0000-0000-000000000001.jsonl"
+            p.write_text("\n".join(json.dumps(r) for r in rows))
+            out = td / "out.jsonl"
+            result = subprocess.run(
+                [sys.executable, str(SCANNER),
+                 "--projects-dir", str(td / "projects"),
+                 "--output", str(out),
+                 "--min-assistant-msgs", "0"],
+                capture_output=True, text=True, check=True,
+            )
+            emitted = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            self.assertEqual(len(emitted), 1)
+            self.assertTrue(emitted[0].get("hit_output_limit"))
+
+    def test_row_hit_output_limit_false_when_no_max_tokens(self):
+        import json, tempfile
+        from pathlib import Path
+        rows = [
+            {"type": "user", "sessionId": "def45678-0000-0000-0000-000000000002",
+             "message": {"role": "user", "content": "hi"},
+             "timestamp": "2026-04-19T10:00:00Z"},
+            {"type": "assistant", "sessionId": "def45678-0000-0000-0000-000000000002",
+             "message": {"role": "assistant", "content": "done",
+                         "stop_reason": "end_turn",
+                         "usage": {"input_tokens": 10, "output_tokens": 20}},
+             "timestamp": "2026-04-19T10:00:05Z"},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            pdir = td / "projects" / "-proj"
+            pdir.mkdir(parents=True)
+            p = pdir / "def45678-0000-0000-0000-000000000002.jsonl"
+            p.write_text("\n".join(json.dumps(r) for r in rows))
+            out = td / "out.jsonl"
+            result = subprocess.run(
+                [sys.executable, str(SCANNER),
+                 "--projects-dir", str(td / "projects"),
+                 "--output", str(out),
+                 "--min-assistant-msgs", "0"],
+                capture_output=True, text=True, check=True,
+            )
+            emitted = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            self.assertEqual(len(emitted), 1)
+            self.assertFalse(emitted[0].get("hit_output_limit", False))
+
+
 if __name__ == "__main__":
     unittest.main()
