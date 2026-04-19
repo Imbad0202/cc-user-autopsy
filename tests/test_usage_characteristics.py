@@ -513,5 +513,91 @@ class ScoreD7PatternTests(unittest.TestCase):
         self.assertIsNotNone(result["score"])
 
 
+class ScoreD8PatternTests(unittest.TestCase):
+    """TDD for the morning-vs-after-10am pattern in score_d8_time_mgmt.
+
+    score_d8_time_mgmt(sessions, rated) requires:
+    - len(rated) >= 20  (first early-return guard)
+    - >= 3 distinct hours each with >= 5 sessions  (second early-return guard)
+
+    The pattern uses rated sessions only (not sessions), contrasting
+    good-outcome rate before-10am vs after-10am. This is a DIFFERENT metric
+    from the score (which uses friction-per-hour ratio) — complementary angle.
+
+    _session() defaults: hour=14, friction_counts={}, outcome="".
+    We pass rated twice for tests where sessions == rated.
+    """
+
+    def _d8_session(self, sid, hour=14, outcome="fully_achieved"):
+        """Minimal session for D8: hour, outcome, friction_counts (empty → ratio 0)."""
+        return _session(sid, hour=hour, outcome=outcome, friction_counts={})
+
+    def test_pattern_contrasts_morning_vs_after_10am(self):
+        """Happy path: 10 morning (hour=8) + 10 afternoon (hour=14) + 5 late (hour=16).
+        Morning: 5 fully_achieved, 5 failed → 50%.
+        After-10am total: 10 afternoon (8 good, 2 bad) + 5 late (4 good, 1 bad)
+          = 12 good out of 15 → 80%.
+        Total 25 rated sessions → both guards pass. Pattern must mention '50%',
+        '80%', and '10am'.
+        """
+        morning = (
+            [self._d8_session(f"m_good{i}", hour=8, outcome="fully_achieved") for i in range(5)]
+            + [self._d8_session(f"m_bad{i}", hour=8, outcome="failed") for i in range(5)]
+        )
+        afternoon = (
+            [self._d8_session(f"a_good{i}", hour=14, outcome="fully_achieved") for i in range(8)]
+            + [self._d8_session(f"a_bad{i}", hour=14, outcome="failed") for i in range(2)]
+        )
+        # 4 good + 1 bad at hour=16 → combined after-10am: 12/15 = 80%
+        late = (
+            [self._d8_session(f"l_good{i}", hour=16, outcome="fully_achieved") for i in range(4)]
+            + [self._d8_session("l_bad0", hour=16, outcome="failed")]
+        )
+        rated = morning + afternoon + late
+        result = aggregate.score_d8_time_mgmt(rated, rated)
+        self.assertIn("pattern", result)
+        self.assertIsNotNone(result["pattern"])
+        self.assertIn("50%", result["pattern"])
+        self.assertIn("80%", result["pattern"])
+        self.assertIn("10am", result["pattern"])
+
+    def test_pattern_none_when_before_group_too_small(self):
+        """>=20 sessions but < 5 before-10am → score computed, pattern is None.
+        3 morning (hour=8) + 22 afternoon spread over 3 hours.
+        """
+        morning = [self._d8_session(f"m{i}", hour=8, outcome="fully_achieved") for i in range(3)]
+        # Need >= 3 hours with >= 5 sessions each, and total >= 20.
+        # Use hours 14, 15, 16 with 7 sessions each = 21, plus 3 morning = 24 total.
+        afternoon = (
+            [self._d8_session(f"h14_{i}", hour=14, outcome="fully_achieved") for i in range(7)]
+            + [self._d8_session(f"h15_{i}", hour=15, outcome="fully_achieved") for i in range(7)]
+            + [self._d8_session(f"h16_{i}", hour=16, outcome="fully_achieved") for i in range(7)]
+        )
+        rated = morning + afternoon
+        result = aggregate.score_d8_time_mgmt(rated, rated)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+        self.assertIsNotNone(result["score"])
+
+    def test_pattern_none_when_rated_insufficient(self):
+        """< 20 rated sessions → first early return fires; pattern key present and None."""
+        rated = [self._d8_session(f"s{i}", hour=8) for i in range(15)]
+        result = aggregate.score_d8_time_mgmt(rated, rated)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+        self.assertIsNone(result["score"])
+
+    def test_pattern_none_when_too_few_hours(self):
+        """>=20 rated but < 3 hours with >= 5 sessions → second early return fires;
+        pattern key present and None.
+        20 sessions all at hour=14 → only 1 qualifying hour.
+        """
+        rated = [self._d8_session(f"s{i}", hour=14) for i in range(20)]
+        result = aggregate.score_d8_time_mgmt(rated, rated)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+        self.assertIsNone(result["score"])
+
+
 if __name__ == "__main__":
     unittest.main()

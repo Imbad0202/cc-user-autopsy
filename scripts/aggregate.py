@@ -653,8 +653,10 @@ def score_d7_writing(rated):
 
 def score_d8_time_mgmt(sessions, rated):
     # Use rated sessions for friction, but all sessions to count session volume
+    # Scoring eligibility guards — literal thresholds, NOT _PATTERN_MIN_SAMPLE.
+    # These control whether the score itself is computable, not the pattern floor.
     if len(rated) < 20:
-        return {"score": None, "reason": "<20 rated sessions"}
+        return {"score": None, "reason": "<20 rated sessions", "pattern": None}
     by_hour = defaultdict(lambda: {"n": 0, "fric": 0})
     for s in rated:
         h = s["hour"]
@@ -665,7 +667,7 @@ def score_d8_time_mgmt(sessions, rated):
         h: d["fric"] / d["n"] for h, d in by_hour.items() if d["n"] >= 5
     }
     if len(rates) < 3:
-        return {"score": None, "reason": "<3 hours with enough data"}
+        return {"score": None, "reason": "<3 hours with enough data", "pattern": None}
     hi = max(rates.values())
     lo = min(rates.values()) or 0.001
     ratio = hi / lo
@@ -681,12 +683,26 @@ def score_d8_time_mgmt(sessions, rated):
         score = 3
     worst_hour = max(rates, key=rates.get)
     best_hour = min(rates, key=rates.get)
+    # Pattern: good-outcome rate by time-of-day bucket (morning vs after-10am).
+    # This is a DIFFERENT metric from the score (friction ratio) — complementary
+    # angle. Uses rated only so unrated sessions can't skew is_good().
+    before_10 = [s for s in rated if s.get("hour", 12) < 10]
+    after_10  = [s for s in rated if s.get("hour", 12) >= 10]
+    pattern = None
+    if len(before_10) >= _PATTERN_MIN_SAMPLE and len(after_10) >= _PATTERN_MIN_SAMPLE:
+        before_good = 100 * sum(1 for s in before_10 if is_good(s["outcome"])) / len(before_10)
+        after_good  = 100 * sum(1 for s in after_10  if is_good(s["outcome"])) / len(after_10)
+        pattern = (
+            f"Sessions started before 10am had a {before_good:.0f}% good-outcome rate, "
+            f"versus {after_good:.0f}% for after-10am sessions."
+        )
     return {
         "score": score,
         "metric_friction_ratio_hi_lo": round(ratio, 2),
         "metric_worst_hour": {"hour": worst_hour, "friction_per_session": round(rates[worst_hour], 2)},
         "metric_best_hour": {"hour": best_hour, "friction_per_session": round(rates[best_hour], 2)},
         "explanation": f"Worst hour ({worst_hour:02d}:00) has {ratio:.1f}x the friction rate of best hour ({best_hour:02d}:00).",
+        "pattern": pattern,
     }
 
 
