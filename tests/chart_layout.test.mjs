@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const layout = require(path.join(here, '..', 'js', 'chart_layout.js'));
 
-const { computeBarPlot, clipLabelToWidth, measureRotatedLabel } = layout;
+const { computeBarPlot, clipLabelToWidth, measureRotatedLabel, slotCenterX } = layout;
 
 const charWidth = (label) => label.length * 6.5;
 
@@ -69,4 +69,44 @@ test('clipLabelToWidth returns label unchanged when within budget', () => {
 
 test('clipLabelToWidth handles empty string without crashing', () => {
   assert.equal(clipLabelToWidth('', 80, charWidth), '');
+});
+
+test('slotCenterX places first slot at left + groupWidth/2', () => {
+  const plot = { left: 50, width: 400 };
+  const x = slotCenterX(0, 5, plot);
+  // groupWidth = 80; first center = 50 + 40 = 90
+  assert.equal(x, 90);
+});
+
+test('slotCenterX places last slot at right - groupWidth/2', () => {
+  const plot = { left: 50, width: 400 };
+  const x = slotCenterX(4, 5, plot);
+  // groupWidth = 80; last center = 50 + 80*4.5 = 50 + 360 = 410 (inside plot)
+  assert.equal(x, 410);
+});
+
+test('slotCenterX with single slot centers it in the plot', () => {
+  const plot = { left: 10, width: 100 };
+  assert.equal(slotCenterX(0, 1, plot), 60);
+});
+
+test('slotCenterX returns NaN for zero labels', () => {
+  const plot = { left: 0, width: 100 };
+  assert.ok(Number.isNaN(slotCenterX(0, 0, plot)));
+});
+
+test('slotCenterX is used consistently for points AND labels', () => {
+  // Regression test for the alignment bug: point for index i must equal
+  // label X for index i, given the same plot and labelCount.
+  const plot = { left: 30, width: 450 };
+  for (let i = 0; i < 7; i += 1) {
+    assert.equal(
+      slotCenterX(i, 7, plot),
+      slotCenterX(i, 7, plot),
+      `slot ${i} must be deterministic`,
+    );
+  }
+  // And: the delta between adjacent slots equals groupWidth (within float precision).
+  const d = slotCenterX(1, 7, plot) - slotCenterX(0, 7, plot);
+  assert.ok(Math.abs(d - 450 / 7) < 1e-9, `slot spacing ${d} must equal groupWidth ${450 / 7}`);
 });

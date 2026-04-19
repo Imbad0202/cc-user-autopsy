@@ -1544,7 +1544,7 @@ function drawXAxisLabels(ctx, labels, plot) {
   const labelBudget = Math.max(40, (groupWidth / Math.SQRT1_2) * 0.95);
   for (let i = 0; i < labels.length; i += 1) {
     if (i % step !== 0 && i !== labels.length - 1) continue;
-    const x = plot.left + groupWidth * (i + 0.5);
+    const x = slotCenterX(i, labels.length, plot);
     const y = plot.top + plot.height + 14;
     ctx.save();
     ctx.translate(x, y);
@@ -1741,10 +1741,10 @@ function drawLineChart(id, labels, series, options = {}) {
     const yMax = options.maxValue !== undefined ? options.maxValue : niceMax(maxValue);
     const ticks = ticksFor(yMax).map((raw) => ({ raw, value: raw / yMax }));
     drawPlotFrame(ctx, plot, ticks, options.formatter || formatTick);
-    const step = labels.length > 1 ? plot.width / (labels.length - 1) : 0;
+    // uses centered slot math; same function used by drawXAxisLabels so points align with labels
     series.forEach((item) => {
       const points = item.data.map((value, index) => ({
-        x: plot.left + step * index,
+        x: slotCenterX(index, labels.length, plot),
         y: plot.top + plot.height - (value / yMax) * plot.height,
         baseY: plot.top + plot.height,
       }));
@@ -1784,9 +1784,9 @@ function drawDualChart(id, labels, bars, line, options = {}) {
       ctx.fillStyle = bars.color;
       ctx.fillRect(x, plot.top + plot.height - heightValue, barWidth, heightValue);
     });
-    const step = labels.length > 1 ? plot.width / (labels.length - 1) : 0;
+    // uses centered slot math; same function used by drawXAxisLabels so points align with labels
     const points = line.data.map((value, index) => ({
-      x: plot.left + step * index,
+      x: slotCenterX(index, labels.length, plot),
       y: plot.top + plot.height - (value / leftMax) * plot.height,
       baseY: plot.top + plot.height,
     }));
@@ -1817,14 +1817,14 @@ function drawDualLineChart(id, labels, leftSeries, rightSeries, options = {}) {
     const leftTicks = ticksFor(leftMax).map((raw) => ({ raw, value: raw / leftMax }));
     const rightTicks = ticksFor(rightMax).map((raw) => ({ raw, value: raw / rightMax }));
     drawPlotFrame(ctx, plot, leftTicks, options.leftFormatter || formatTick, rightTicks, options.rightFormatter || formatTick);
-    const step = labels.length > 1 ? plot.width / (labels.length - 1) : 0;
+    // uses centered slot math; same function used by drawXAxisLabels so points align with labels
     const leftPoints = leftSeries.data.map((value, index) => ({
-      x: plot.left + step * index,
+      x: slotCenterX(index, labels.length, plot),
       y: plot.top + plot.height - (value / leftMax) * plot.height,
       baseY: plot.top + plot.height,
     }));
     const rightPoints = rightSeries.data.map((value, index) => ({
-      x: plot.left + step * index,
+      x: slotCenterX(index, labels.length, plot),
       y: plot.top + plot.height - (value / rightMax) * plot.height,
       baseY: plot.top + plot.height,
     }));

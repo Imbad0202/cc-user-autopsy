@@ -41,6 +41,21 @@ function computeBarPlot({ width, height, legendBottom, labels, charWidth, yAxisM
   };
 }
 
+/**
+ * Return the X position of the center of the i-th slot in a chart plot.
+ * Used for both line-chart point X and x-axis label X so they always align.
+ *
+ * @param {number} index       - 0-based slot index
+ * @param {number} labelCount  - total slot count (>=1)
+ * @param {object} plot        - {left, width}
+ * @returns {number}           - pixel X position, NaN if labelCount <= 0
+ */
+function slotCenterX(index, labelCount, plot) {
+  if (labelCount <= 0) return NaN;
+  const groupWidth = plot.width / labelCount;
+  return plot.left + groupWidth * (index + 0.5);
+}
+
 function clipLabelToWidth(label, maxWidth, charWidth) {
   if (!label) return '';
   if (charWidth(label) <= maxWidth) return label;
@@ -60,5 +75,5 @@ function clipLabelToWidth(label, maxWidth, charWidth) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { computeBarPlot, clipLabelToWidth, measureRotatedLabel };
+  module.exports = { computeBarPlot, clipLabelToWidth, measureRotatedLabel, slotCenterX };
 }
