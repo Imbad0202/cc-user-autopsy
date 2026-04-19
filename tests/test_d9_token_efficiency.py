@@ -156,3 +156,36 @@ def test_metrics_present_in_return_dict():
     assert result["metric_tokens_per_not_good"] == 13_000
     assert result["metric_ratio"] == 1.30
     assert result["metric_cache_hit_pct"] == 60.0
+
+
+def test_explanation_ends_with_period_when_no_auxiliary_fragments():
+    """Grammar bug guard: when both per-turn and cache fragments are empty,
+    explanation should end with '.' not with bare ';'."""
+    rated = _pool(6, 10_000, 6, 11_000, user_msgs=0,
+                  cache_read=0, cache_create=0)
+    result = score_d9_token_efficiency(rated, rated)
+    # Must end with a period, not a semicolon
+    assert result["explanation"].endswith(".")
+    assert "more);" not in result["explanation"]
+    # Sanity: no trailing fragments
+    assert "per-turn" not in result["explanation"]
+    assert "Cache hit ratio" not in result["explanation"]
+
+
+def test_cache_hit_uses_sessions_arg_not_rated():
+    """When sessions and rated are different pools, cache hit must be
+    computed from sessions (all), not rated (subset)."""
+    # rated pool: 6 good + 6 not-good with ratio 1.10 → base=8, no cache data
+    rated = _pool(6, 10_000, 6, 11_000, cache_read=0, cache_create=0)
+    # sessions: larger pool including extra sessions with heavy cache activity.
+    # Cache hit ratio over sessions = 70% → adj=+1 → expected score 9.
+    extra_cache_sessions = [
+        _sess("fully_achieved", 5000, user_msgs=3,
+              cache_read=70, cache_create=30)
+        for _ in range(10)
+    ]
+    sessions = rated + extra_cache_sessions
+    result = score_d9_token_efficiency(sessions, rated)
+    # Base from rated ratio = 8; cache from sessions adds +1 → 9.
+    assert result["score"] == 9
+    assert result["metric_cache_hit_pct"] == 70.0

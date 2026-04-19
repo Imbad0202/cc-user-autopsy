@@ -780,11 +780,12 @@ def score_d9_token_efficiency(sessions, rated):
     cache_frag = (
         f" Cache hit ratio {cache_hit*100:.0f}%." if cache_hit is not None else ""
     )
+    trailer = f"{per_turn_frag}{cache_frag}"
     explanation = (
         f"Other rated sessions averaged {tokens_per_not_good:,.0f} tokens "
         f"versus {tokens_per_good:,.0f} for good outcomes "
-        f"({ratio:.2f}× more);"
-        f"{per_turn_frag}{cache_frag}"
+        f"({ratio:.2f}× more)"
+        + (f";{trailer}" if trailer else ".")
     )
     pattern = (
         f"Good-outcome sessions averaged {tokens_per_good:,.0f} tokens; "
