@@ -384,8 +384,6 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     --leading-loose: 1.7;
 
     /* --- Semantic aliases (design intent — add new ones as components need them) --- */
-    --card-padding: var(--space-12);
-    --card-radius: var(--radius-lg);
     --section-gap: var(--space-15);
     --tag-padding-y: var(--space-1);
     --tag-padding-x: var(--space-3);

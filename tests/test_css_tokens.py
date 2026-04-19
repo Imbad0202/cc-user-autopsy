@@ -44,18 +44,12 @@ class SemanticAliasTests(unittest.TestCase):
     def setUpClass(cls):
         cls.src = BUILD_HTML.read_text(encoding="utf-8")
 
-    def test_card_padding_defined(self):
-        self.assertRegex(self.src, r"--card-padding\s*:\s*var\(--space-")
-
-    def test_card_radius_defined(self):
-        self.assertRegex(self.src, r"--card-radius\s*:\s*var\(--radius-")
-
     def test_section_gap_defined(self):
         self.assertRegex(self.src, r"--section-gap\s*:\s*var\(--space-")
 
     def test_tag_padding_defined(self):
-        self.assertRegex(self.src, r"--tag-padding-y\s*:")
-        self.assertRegex(self.src, r"--tag-padding-x\s*:")
+        self.assertRegex(self.src, r"--tag-padding-y\s*:\s*var\(--space-")
+        self.assertRegex(self.src, r"--tag-padding-x\s*:\s*var\(--space-")
 
 
 if __name__ == "__main__":
