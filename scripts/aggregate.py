@@ -534,8 +534,8 @@ def score_d4_context_mgmt(sessions):
 
 def score_d5_interrupt(rated):
     interrupted = [s for s in rated if s["interrupts"] > 0]
-    if len(interrupted) < 5:
-        return {"score": None, "reason": "fewer than 5 interrupted rated sessions"}
+    if len(interrupted) < _PATTERN_MIN_SAMPLE:
+        return {"score": None, "reason": "fewer than 5 interrupted rated sessions", "pattern": None}
     good = [s for s in interrupted if is_good(s["outcome"])]
     P = 100 * len(good) / len(interrupted)
     thresholds = [(60, 10), (50, 9), (40, 8), (30, 7), (20, 5)]
@@ -544,11 +544,21 @@ def score_d5_interrupt(rated):
         if P >= thr:
             score = sc
             break
+    non_interrupted = [s for s in rated if s["interrupts"] == 0]
+    pattern = None
+    if len(interrupted) >= _PATTERN_MIN_SAMPLE and len(non_interrupted) >= _PATTERN_MIN_SAMPLE:
+        intr_good_rate = 100 * sum(1 for s in interrupted if is_good(s["outcome"])) / len(interrupted)
+        non_good_rate = 100 * sum(1 for s in non_interrupted if is_good(s["outcome"])) / len(non_interrupted)
+        pattern = (
+            f"Interrupted sessions reached good outcomes {intr_good_rate:.0f}% of the time, "
+            f"versus {non_good_rate:.0f}% for non-interrupted sessions."
+        )
     return {
         "score": score,
         "metric_interrupt_recovery_pct": round(P, 1),
         "metric_interrupted_sessions": len(interrupted),
         "explanation": f"{P:.0f}% of interrupted sessions still reached good outcome ({len(good)}/{len(interrupted)}).",
+        "pattern": pattern,
     }
 
 

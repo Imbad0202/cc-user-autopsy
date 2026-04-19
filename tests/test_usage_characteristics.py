@@ -251,5 +251,73 @@ class ScoreD4PatternTests(unittest.TestCase):
         self.assertIsNone(result["pattern"])
 
 
+class ScoreD5PatternTests(unittest.TestCase):
+    def _d5_session(self, sid, interrupts=0, outcome=""):
+        """Minimal session dict for score_d5_interrupt.
+
+        score_d5_interrupt accesses s["interrupts"] and s["outcome"] without
+        .get(), so both keys must be present. The base _session() does not
+        include 'interrupts', so we set it explicitly here.
+        """
+        return _session(sid, interrupts=interrupts, outcome=outcome)
+
+    def test_pattern_contrasts_interrupted_vs_non(self):
+        """6 interrupted (3 good → 50%) + 6 non-interrupted (5 good → 83%).
+        Pattern must contain '50%' AND '83%'.
+        """
+        interrupted = [
+            self._d5_session(f"intr{i}", interrupts=1,
+                             outcome="fully_achieved" if i % 2 == 0 else "partial")
+            for i in range(6)
+        ]
+        non_interrupted = [
+            self._d5_session(f"non{i}", interrupts=0,
+                             outcome="fully_achieved" if i < 5 else "failed")
+            for i in range(6)
+        ]
+        rated = interrupted + non_interrupted
+        result = aggregate.score_d5_interrupt(rated)
+        self.assertIn("pattern", result)
+        self.assertIsNotNone(result["pattern"])
+        self.assertIn("50%", result["pattern"])
+        self.assertIn("83%", result["pattern"])
+
+    def test_pattern_none_when_interrupted_group_too_small(self):
+        """3 interrupted + 9 non-interrupted → early return fires (< 5 interrupted).
+        Early-return dict must still carry 'pattern' key = None.
+        """
+        interrupted = [
+            self._d5_session(f"intr{i}", interrupts=1, outcome="fully_achieved")
+            for i in range(3)
+        ]
+        non_interrupted = [
+            self._d5_session(f"non{i}", interrupts=0, outcome="fully_achieved")
+            for i in range(9)
+        ]
+        rated = interrupted + non_interrupted
+        result = aggregate.score_d5_interrupt(rated)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+        self.assertIsNone(result["score"])
+
+    def test_pattern_none_when_non_interrupted_group_too_small(self):
+        """9 interrupted + 3 non-interrupted → score is set, but symmetric floor
+        on non-interrupted group means pattern is None.
+        """
+        interrupted = [
+            self._d5_session(f"intr{i}", interrupts=1, outcome="fully_achieved")
+            for i in range(9)
+        ]
+        non_interrupted = [
+            self._d5_session(f"non{i}", interrupts=0, outcome="fully_achieved")
+            for i in range(3)
+        ]
+        rated = interrupted + non_interrupted
+        result = aggregate.score_d5_interrupt(rated)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+        self.assertIsNotNone(result["score"])
+
+
 if __name__ == "__main__":
     unittest.main()
