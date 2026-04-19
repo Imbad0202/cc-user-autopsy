@@ -15,13 +15,29 @@ BUILD_HTML = REPO_ROOT / "scripts" / "build_html.py"
 # Components that have been refactored to use tokens. Each entry:
 # (name, start_marker, end_marker) — raw substrings bracketing the CSS rule set.
 # Tasks 5-9 add entries here as each component is cleaned.
-CLEANED_COMPONENTS: list[tuple[str, str, str]] = []
+CLEANED_COMPONENTS: list[tuple[str, str, str]] = [
+    (
+        ".profile-card",
+        "  .profile-card {",
+        "    margin-top: var(--space-1);\n  }",
+    ),
+]
 
 # Hard-coded px values that are allowed inside cleaned component blocks.
 # Each entry should have a reason documented in the plan or in later tasks.
-# - 1px: universal border width
-# - 9.5/10.5/11.5/14.5px: sparse typographic trim (mono caps, labels)
-HARDCODE_WHITELIST_PX = {"1px", "9.5px", "10.5px", "11.5px", "14.5px"}
+HARDCODE_WHITELIST_PX = {
+    # Universal
+    "1px",                                   # border width
+    "4px",                                   # accent border-left width (visual indicator, not spacing scale)
+    # Sparse typographic trim (mono caps labels)
+    "9.5px", "10.5px", "11.5px", "14.5px",
+    # .profile-card unique values (component-specific, not scale-worthy)
+    "34px",                                  # profile-card horizontal padding (asymmetric with vertical)
+    "48px",                                  # profile-card bottom margin (double section rhythm)
+    "22px",                                  # .profile-lede font-size (unique hero-ish)
+    "12px",                                  # .profile-cell .sub font-size (small-print)
+    "640px",                                 # responsive breakpoint (not a spacing value)
+}
 
 
 class TokenPrimitivesTests(unittest.TestCase):

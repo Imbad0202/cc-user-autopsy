@@ -773,8 +773,8 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
   /* ---- HR-facing additions ---- */
   .profile-card {
-    margin: 24px 0 48px 0;
-    padding: 30px 34px 34px 34px;
+    margin: var(--space-12) 0 48px 0;
+    padding: var(--space-15) 34px 34px 34px;
     background: linear-gradient(135deg, rgba(255,250,240,0.8) 0%, rgba(236,229,213,0.4) 100%);
     border: 1px solid var(--rule);
     border-left: 4px solid var(--accent);
@@ -783,9 +783,9 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .profile-card::before {
     content: "AT A GLANCE";
     position: absolute;
-    top: -10px; left: 30px;
+    top: -10px; left: var(--space-15);
     background: var(--paper);
-    padding: 0 10px;
+    padding: 0 var(--space-5);
     font-family: var(--mono);
     font-size: 10.5px;
     letter-spacing: 0.26em;
@@ -798,7 +798,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     line-height: 1.42;
     letter-spacing: -0.012em;
     color: var(--ink);
-    margin: 0 0 22px 0;
+    margin: 0 0 var(--space-11) 0;
   }
   .profile-lede em {
     color: var(--accent);
@@ -809,7 +809,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 0;
-    margin-top: 20px;
+    margin-top: var(--space-10);
     border-top: 1px solid var(--rule);
     border-left: 1px solid var(--rule);
   }
@@ -817,7 +817,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .profile-cell {
     border-right: 1px solid var(--rule);
     border-bottom: 1px solid var(--rule);
-    padding: 14px 16px 16px 16px;
+    padding: var(--space-7) var(--space-8) var(--space-8) var(--space-8);
   }
   .profile-cell .k {
     font-family: var(--mono);
@@ -825,12 +825,12 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--ink-muted);
-    margin-bottom: 6px;
+    margin-bottom: var(--space-3);
   }
   .profile-cell .v {
     font-family: var(--serif);
     font-variation-settings: "opsz" 72, "wght" 400;
-    font-size: 24px;
+    font-size: var(--text-2xl);
     line-height: 1.1;
     letter-spacing: -0.02em;
     color: var(--ink);
@@ -839,7 +839,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     font-family: var(--sans);
     font-size: 12px;
     color: var(--ink-muted);
-    margin-top: 3px;
+    margin-top: var(--space-1);
   }
 
   /* How to read */
