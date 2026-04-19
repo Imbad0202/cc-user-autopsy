@@ -2177,12 +2177,17 @@ def main():
         dim_key = key.split('_', 1)[0].lower()  # "D1_delegation" -> "d1"
         exp_fn = getattr(narrative, f"{dim_key}_explanation", None)
         pat_fn = getattr(narrative, f"{dim_key}_pattern", None)
-        if exp_fn and sc is not None:
-            reason = exp_fn(s)
-        else:
-            reason = s.get("reason", "")
+        if exp_fn is None:
+            raise AttributeError(
+                f"narrative module {narrative.__name__} missing {dim_key}_explanation"
+            )
+        if pat_fn is None:
+            raise AttributeError(
+                f"narrative module {narrative.__name__} missing {dim_key}_pattern"
+            )
+        reason = exp_fn(s) if sc is not None else s.get("reason", "")
         pattern_html = ""
-        if pat_fn and s.get("pattern_emit"):
+        if s.get("pattern_emit"):
             pattern_html = f'\n    <p class="pattern">{esc(pat_fn(s))}</p>'
         score_rows += f'''<div class="score-row {band}">
   <div class="dim">{esc(dim_label)}</div>
