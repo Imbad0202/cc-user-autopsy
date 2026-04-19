@@ -1789,10 +1789,11 @@ function drawDualChart(id, labels, bars, line, options = {}) {
     ctx.save();
     ctx.font = FONT_MONO_SMALL;
     const measure = (s) => ctx.measureText(s).width;
-    // For dual-axis: pick the formatter/max that yields the longer tick label for the left margin.
+    // For dual-axis: pick whichever tick label is WIDER in pixels (not char count —
+    // '%' and digits can have different widths in some fonts).
     const leftTickLabel = (options.leftFormatter || formatTick)(leftMax);
     const rightTickLabel = (options.rightFormatter || formatTick)(rightMax);
-    const yAxisMaxTickLabel = leftTickLabel.length >= rightTickLabel.length ? leftTickLabel : rightTickLabel;
+    const yAxisMaxTickLabel = measure(leftTickLabel) >= measure(rightTickLabel) ? leftTickLabel : rightTickLabel;
     const plot = computeBarPlot({ width, height, legendBottom, labels, charWidth: measure, yAxisMaxTickLabel });
     ctx.restore();
     const leftTicks = ticksFor(leftMax).map((raw) => ({ raw, value: raw / leftMax }));
@@ -1838,10 +1839,11 @@ function drawDualLineChart(id, labels, leftSeries, rightSeries, options = {}) {
     ctx.save();
     ctx.font = FONT_MONO_SMALL;
     const measure = (s) => ctx.measureText(s).width;
-    // For dual-axis: pick the formatter/max that yields the longer tick label for the left margin.
+    // For dual-axis: pick whichever tick label is WIDER in pixels (not char count —
+    // '%' and digits can have different widths in some fonts).
     const leftTickLabel = (options.leftFormatter || formatTick)(leftMax);
     const rightTickLabel = (options.rightFormatter || formatTick)(rightMax);
-    const yAxisMaxTickLabel = leftTickLabel.length >= rightTickLabel.length ? leftTickLabel : rightTickLabel;
+    const yAxisMaxTickLabel = measure(leftTickLabel) >= measure(rightTickLabel) ? leftTickLabel : rightTickLabel;
     const plot = computeBarPlot({ width, height, legendBottom, labels, charWidth: measure, yAxisMaxTickLabel });
     ctx.restore();
     const leftTicks = ticksFor(leftMax).map((raw) => ({ raw, value: raw / leftMax }));
