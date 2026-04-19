@@ -418,7 +418,7 @@ def score_d2_rootcause(sessions, rated, facets_coverage):
 
 def score_d3_prompt_quality(sessions):
     if not sessions:
-        return {"score": None}
+        return {"score": None, "pattern": None}
     plen_ge_100 = sum(1 for s in sessions if s["first_prompt_len"] >= 100)
     plen_lt_20 = sum(1 for s in sessions if s["first_prompt_len"] < 20)
     rate_100 = 100 * plen_ge_100 / len(sessions)
@@ -449,6 +449,19 @@ def score_d3_prompt_quality(sessions):
         score = 3
     else:
         score = 5
+
+    # Pattern: compare avg tokens/commit between long-prompt and short-prompt sessions
+    long_prompt = [s for s in sessions if s["first_prompt_len"] >= 100 and s["git_commits"] > 0]
+    short_prompt = [s for s in sessions if s["first_prompt_len"] <= 50 and s["git_commits"] > 0]
+    pattern = None
+    if len(long_prompt) >= _PATTERN_MIN_SAMPLE and len(short_prompt) >= _PATTERN_MIN_SAMPLE:
+        avg_long = sum(s["total_tokens"] / s["git_commits"] for s in long_prompt) / len(long_prompt)
+        avg_short = sum(s["total_tokens"] / s["git_commits"] for s in short_prompt) / len(short_prompt)
+        pattern = (
+            f"Sessions with prompts ≥100 chars averaged {avg_long:.0f} tokens "
+            f"per commit; ≤50-char prompts averaged {avg_short:.0f}."
+        )
+
     return {
         "score": score,
         "metric_pct_prompts_ge_100_chars": round(rate_100, 1),
@@ -458,6 +471,7 @@ def score_d3_prompt_quality(sessions):
         },
         "metric_most_efficient_bucket": best_bucket,
         "explanation": f"{rate_100:.0f}% of sessions used prompts ≥ 100 chars. Most efficient prompt-length bucket for tokens/commit: {best_bucket}.",
+        "pattern": pattern,
     }
 
 

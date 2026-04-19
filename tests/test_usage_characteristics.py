@@ -96,5 +96,71 @@ class ScoreD2PatternTests(unittest.TestCase):
         self.assertIsNone(result["pattern"])
 
 
+class ScoreD3PatternTests(unittest.TestCase):
+    def _d3_session(self, sid, first_prompt_len, total_tokens, git_commits):
+        """Minimal session dict for score_d3_prompt_quality."""
+        return {
+            "session_id": sid,
+            "first_prompt_len": first_prompt_len,
+            "total_tokens": total_tokens,
+            "git_commits": git_commits,
+        }
+
+    def test_pattern_contrasts_prompt_length_buckets(self):
+        """6 long-prompt + 6 short-prompt sessions with git_commits > 0 →
+        pattern string contrasts avg tokens/commit between the two groups.
+        long: 6 sessions each 2000 tokens / 2 commits = 1000 t/commit avg
+        short: 6 sessions each 600 tokens / 2 commits = 300 t/commit avg."""
+        sessions = (
+            [self._d3_session(f"L{i}", first_prompt_len=150, total_tokens=2000, git_commits=2)
+             for i in range(6)]
+            + [self._d3_session(f"S{i}", first_prompt_len=30, total_tokens=600, git_commits=2)
+               for i in range(6)]
+        )
+        result = aggregate.score_d3_prompt_quality(sessions)
+        self.assertIn("pattern", result)
+        self.assertIsNotNone(result["pattern"])
+        self.assertIn("≥100 chars", result["pattern"])
+        self.assertIn("≤50", result["pattern"])
+        # avg_long = 2000/2 = 1000, avg_short = 600/2 = 300
+        self.assertIn("1000", result["pattern"])
+        self.assertIn("300", result["pattern"])
+
+    def test_pattern_none_when_long_group_too_small(self):
+        """Fewer than _PATTERN_MIN_SAMPLE long-prompt sessions → pattern is None."""
+        sessions = (
+            # only 4 long-prompt sessions (below floor)
+            [self._d3_session(f"L{i}", first_prompt_len=150, total_tokens=2000, git_commits=2)
+             for i in range(4)]
+            # 6 short-prompt sessions (above floor)
+            + [self._d3_session(f"S{i}", first_prompt_len=30, total_tokens=600, git_commits=2)
+               for i in range(6)]
+        )
+        result = aggregate.score_d3_prompt_quality(sessions)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+
+    def test_pattern_none_when_short_group_too_small(self):
+        """Fewer than _PATTERN_MIN_SAMPLE short-prompt sessions → pattern is None.
+        Symmetric floor: long group being large doesn't compensate."""
+        sessions = (
+            # 6 long-prompt sessions (above floor)
+            [self._d3_session(f"L{i}", first_prompt_len=150, total_tokens=2000, git_commits=2)
+             for i in range(6)]
+            # only 4 short-prompt sessions (below floor)
+            + [self._d3_session(f"S{i}", first_prompt_len=30, total_tokens=600, git_commits=2)
+               for i in range(4)]
+        )
+        result = aggregate.score_d3_prompt_quality(sessions)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+
+    def test_pattern_key_present_when_no_sessions(self):
+        """Empty input: early-return path must still carry 'pattern' key = None."""
+        result = aggregate.score_d3_prompt_quality([])
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+
+
 if __name__ == "__main__":
     unittest.main()
