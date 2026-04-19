@@ -98,6 +98,30 @@ function segmentsWithoutNulls(points) {
   return runs;
 }
 
+/**
+ * Compute the legend layout for a donut chart given a set of labels.
+ * Returns an object that drawDonutChart can use to decide donut vs legend split
+ * and avoid clipping long label text.
+ *
+ * @param {string[]} labels    - Legend label strings (full form, e.g. "fully_achieved (63)")
+ * @param {function} charWidth - (string) → pixel width measurement
+ * @param {number} swatchWidth - Swatch circle diameter in pixels (e.g. 12)
+ * @param {number} gap         - Gap between swatch and label text in pixels (e.g. 8)
+ * @returns {{ labelWidth: number, rowHeight: number, totalHeight: number }}
+ */
+function computeLegendWidth(labels, charWidth, swatchWidth, gap) {
+  if (!labels || labels.length === 0) {
+    return { labelWidth: 0, rowHeight: 0, totalHeight: 0 };
+  }
+  const labelWidth = Math.max(...labels.map((l) => charWidth(l)));
+  const rowHeight = 22; // 22px gives breathing room between rows
+  return {
+    labelWidth,
+    rowHeight,
+    totalHeight: rowHeight * labels.length,
+  };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { computeBarPlot, clipLabelToWidth, measureRotatedLabel, slotCenterX, segmentsWithoutNulls };
+  module.exports = { computeBarPlot, clipLabelToWidth, measureRotatedLabel, slotCenterX, segmentsWithoutNulls, computeLegendWidth };
 }

@@ -1633,19 +1633,33 @@ function drawDonutChart(id, labels, values, colors) {
     ctx.font = FONT_MONO;
     ctx.fillText(I18N.chart_rated, cx, cy + 16);
 
-    const legendX = Math.max(cx + radius + 32, width * 0.54);
-    let legendY = Math.max(32, cy - (labels.length * 18) / 2);
+    const SWATCH_D = 12;  // swatch circle diameter (was ~10px fillRect)
+    const SWATCH_GAP = 8; // gap between swatch and label text
     ctx.textAlign = 'left';
     ctx.font = FONT_MONO_SMALL;
-    const legendBudget = Math.max(40, width - legendX - 16 - 8);
     const measure = (s) => ctx.measureText(s).width;
-    labels.forEach((label, index) => {
+    // Build the full label strings to measure them accurately.
+    const fullLabels = labels.map((label, i) => `${label} (${values[i]})`);
+    const layout = computeLegendWidth(fullLabels, measure, SWATCH_D, SWATCH_GAP);
+    // legendX: right of the donut + gap; never eat into the donut itself.
+    const legendX = Math.max(cx + radius + 32, width * 0.54);
+    // legendBudget: actual pixel space from legendX to canvas right edge,
+    // minus the swatch + gap overhead. Use the measured label width as the
+    // minimum so labels are never under-allocated.
+    const legendBudget = Math.max(
+      layout.labelWidth,
+      width - legendX - SWATCH_D - SWATCH_GAP - 8,
+    );
+    let legendY = Math.max(SWATCH_D, cy - layout.totalHeight / 2) + layout.rowHeight * 0.7;
+    fullLabels.forEach((full, index) => {
+      // Draw swatch as a filled circle for better visual clarity.
       ctx.fillStyle = colors[index % colors.length];
-      ctx.fillRect(legendX, legendY - 5, 10, 10);
+      ctx.beginPath();
+      ctx.arc(legendX + SWATCH_D / 2, legendY - SWATCH_D * 0.3, SWATCH_D / 2, 0, Math.PI * 2);
+      ctx.fill();
       ctx.fillStyle = INK_SOFT;
-      const full = `${label} (${values[index]})`;
-      ctx.fillText(clipLabelToWidth(full, legendBudget, measure), legendX + 16, legendY);
-      legendY += 18;
+      ctx.fillText(clipLabelToWidth(full, legendBudget, measure), legendX + SWATCH_D + SWATCH_GAP, legendY);
+      legendY += layout.rowHeight;
     });
   });
 }

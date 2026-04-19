@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const layout = require(path.join(here, '..', 'js', 'chart_layout.js'));
 
-const { computeBarPlot, clipLabelToWidth, measureRotatedLabel, slotCenterX, segmentsWithoutNulls } = layout;
+const { computeBarPlot, clipLabelToWidth, measureRotatedLabel, slotCenterX, segmentsWithoutNulls, computeLegendWidth } = layout;
 
 const charWidth = (label) => label.length * 6.5;
 
@@ -177,4 +177,53 @@ test('computeBarPlot gives enough right margin for rightmost rotated label', () 
     rightBudget >= rotatedHalf,
     `right budget ${rightBudget}px must fit half of longest rotated label ${rotatedHalf}px`,
   );
+});
+
+// Bug 4A: left margin must also fit the left-tail of the FIRST rotated label.
+// The bug manifests when canvas is narrow and labels are long enough that
+// rotatedHalf > plot.left + groupWidth/2.
+test('computeBarPlot gives left margin for leftmost rotated label', () => {
+  // Use a scenario that actually exposes the bug: many long labels on a narrow canvas,
+  // causing groupWidth to shrink until firstCenter < rotatedHalf without the fix.
+  const labels = Array.from({length: 52}, (_, i) => `deeply-nested-project-${String(i+1).padStart(2, '0')}`);
+  const plot = computeBarPlot({
+    width: 200, height: 260, legendBottom: 30, labels, charWidth,
+    yAxisMaxTickLabel: '100',
+  });
+  // First slot center = plot.left + groupWidth / 2.
+  // Under -45° rotation, the left tail of the label extends rotated/2 to the
+  // LEFT of the center, so the budget from canvas-left to center must be >= that.
+  const groupWidth = plot.width / labels.length;
+  const firstCenter = plot.left + groupWidth / 2;
+  const leftBudget = firstCenter; // distance from canvas left edge to first slot center
+  const rotatedHalf = Math.max(...labels.map(l => measureRotatedLabel(l, charWidth))) / 2;
+  assert.ok(
+    leftBudget >= rotatedHalf,
+    `left budget ${leftBudget.toFixed(1)}px must fit half of longest rotated label ${rotatedHalf.toFixed(1)}px`,
+  );
+});
+
+// Bug 2: computeLegendWidth helper for donut chart legend layout
+test('computeLegendWidth returns labelWidth at least as wide as longest label', () => {
+  const labels = ['fully_achieved (63)', 'mostly_achieved (12)', 'not_achieved (5)'];
+  const result = computeLegendWidth(labels, charWidth, 12, 8);
+  // labelWidth must accommodate the longest label in pixels
+  const longestPx = Math.max(...labels.map(l => charWidth(l)));
+  assert.ok(
+    result.labelWidth >= longestPx,
+    `labelWidth ${result.labelWidth}px must fit longest label ${longestPx}px`,
+  );
+});
+
+test('computeLegendWidth totalHeight equals rowHeight * labels.length', () => {
+  const labels = ['a (1)', 'b (2)', 'c (3)'];
+  const result = computeLegendWidth(labels, charWidth, 12, 8);
+  assert.ok(result.rowHeight > 0, 'rowHeight must be positive');
+  assert.equal(result.totalHeight, result.rowHeight * labels.length);
+});
+
+test('computeLegendWidth with empty labels returns zeroes', () => {
+  const result = computeLegendWidth([], charWidth, 12, 8);
+  assert.equal(result.totalHeight, 0);
+  assert.equal(result.labelWidth, 0);
 });
