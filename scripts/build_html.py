@@ -16,16 +16,10 @@ from locales import STRINGS, t
 
 WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-# Keys exposed to the inline JS I18N object.
-CHART_KEYS = (
-    # Existing
-    "chart_no_data", "chart_count", "chart_rated", "chart_models_label",
-    # Added: chart series labels (used in JS legend strings)
-    "series_session_count", "series_good_rate_pct", "series_composite_score",
-    "series_good_outcome_rate", "series_task_agent_adoption", "series_sessions",
-    "series_with_task_agent", "series_tokens_m", "series_commits",
-    "series_friction", "series_avg_prompt_length",
-)
+# Keys whose name starts with one of these prefixes are exposed to inline JS
+# via the `I18N` const. Naming convention is the contract: name a chart-side
+# key `chart_*` or `series_*` and it flows through automatically.
+JS_KEY_PREFIXES = ("chart_", "series_")
 
 
 def load_json_or_warn(path_arg, label, default):
@@ -981,7 +975,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
   @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
 
-  /* §06 evidence */
+  /* §06 evidence library */
   details.evidence {
     border-top: 1px solid var(--rule);
     padding: 14px 0;
@@ -1069,7 +1063,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   }
   footer a { color: var(--accent); }
 
-  /* §07 method */
+  /* §07 methodology */
   .method {
     font-family: var(--sans);
     font-size: 14.5px;
@@ -2256,12 +2250,15 @@ def main():
 
     # Assemble via string.Template to avoid CSS brace escaping
     subs = {
-        # Locale / i18n
         "html_lang": t(args.locale, "html_lang"),
         "report_title": t(args.locale, "report_title"),
         "footer_repo": t(args.locale, "footer_repo"),
         "footer_tagline": t(args.locale, "footer_tagline"),
-        "i18n_json": json_for_script({k: STRINGS[args.locale][k] for k in CHART_KEYS}),
+        "i18n_json": json_for_script({
+            k: t(args.locale, k)
+            for k in STRINGS[args.locale]
+            if k.startswith(JS_KEY_PREFIXES)
+        }),
         # projChart legend uses chart_count for both series (sessions & friction are both counts)
         "proj_legend": json_for_script([t(args.locale, "tile_sessions"), t(args.locale, "ev_high_friction")]),
         # Letterhead
