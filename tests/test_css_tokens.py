@@ -178,5 +178,30 @@ class NoHardcodedSpacingTests(unittest.TestCase):
                 )
 
 
+class ZhHantHeroWeightTests(unittest.TestCase):
+    """Verify zh-Hant hero title overrides font-weight to 500 (em to 600).
+    Reason: variable serif weight 300 renders fragile on CJK fallbacks
+    (PingFang, Noto Serif CJK) which lack a weight axis.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.src = BUILD_HTML.read_text(encoding="utf-8")
+
+    def test_hero_title_weight_override(self):
+        pattern = re.compile(
+            r'html\[lang="zh-Hant"\]\s+h1\.title\s*\{[^}]*font-weight:\s*500',
+            re.DOTALL,
+        )
+        self.assertRegex(self.src, pattern)
+
+    def test_hero_title_em_weight_override(self):
+        pattern = re.compile(
+            r'html\[lang="zh-Hant"\]\s+h1\.title\s+em\s*\{[^}]*font-weight:\s*600',
+            re.DOTALL,
+        )
+        self.assertRegex(self.src, pattern)
+
+
 if __name__ == "__main__":
     unittest.main()

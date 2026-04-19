@@ -434,6 +434,17 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   html[lang="zh-Hant"] .intro-card { font-size: 17px; }
   html[lang="zh-Hant"] .method,
   html[lang="zh-Hant"] .caveat { font-size: 15.5px; }
+  /* Variable serif weight 300 renders bony on CJK fallbacks (PingFang TC,
+     Noto Serif CJK). Bump to 500 (em to 600) so the Chinese hero reads
+     with intent, not fragility. English hero unaffected (lang="en"). */
+  html[lang="zh-Hant"] h1.title {
+    font-weight: 500;
+    font-variation-settings: "opsz" 144, "wght" 500;
+  }
+  html[lang="zh-Hant"] h1.title em {
+    font-weight: 600;
+    font-variation-settings: "opsz" 144, "wght" 600;
+  }
   @media (max-width: 720px) {
     html[lang="zh-Hant"] body { font-size: 17px; }
   }
