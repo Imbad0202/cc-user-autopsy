@@ -24,12 +24,26 @@ class StringsCatalogTests(unittest.TestCase):
     def test_supported_locales_are_exactly_en_and_zh_tw(self):
         self.assertEqual(set(locales.STRINGS.keys()), {"en", "zh_TW"})
 
-    def test_zh_tw_strings_have_no_ai_em_dash(self):
+    def test_zh_tw_strings_have_no_em_dash(self):
+        """zh_TW strings must use comma + clause continuation instead of em-dash.
+        Catches both AI double em-dash (——) and single em-dash (—) accidentally
+        pasted from English source."""
         offenders = [
-            (k, v) for k, v in locales.STRINGS["zh_TW"].items() if "——" in v
+            (k, v) for k, v in locales.STRINGS["zh_TW"].items() if "—" in v
         ]
         self.assertEqual(offenders, [],
-                         f"zh_TW strings must not use AI em-dash: {offenders}")
+                         f"zh_TW strings must not use em-dash: {offenders}")
+
+    def test_no_empty_values(self):
+        """A blank value would render as a missing tile / empty title with no
+        test-time signal — catch it here instead of at runtime."""
+        empties = [
+            (locale, key)
+            for locale, d in locales.STRINGS.items()
+            for key, v in d.items()
+            if not v.strip()
+        ]
+        self.assertEqual(empties, [], f"empty/whitespace values: {empties}")
 
 
 class LookupHelperTests(unittest.TestCase):

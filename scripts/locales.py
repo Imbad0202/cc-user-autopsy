@@ -150,4 +150,10 @@ def t(locale: str, key: str) -> str:
     not present in the chosen locale's dict. Silent fallback would let
     half-translated reports ship; we'd rather fail the build.
     """
+    if locale not in STRINGS:
+        raise KeyError(
+            f"unknown locale {locale!r}; supported: {sorted(STRINGS)}"
+        )
+    if key not in STRINGS[locale]:
+        raise KeyError(f"missing key {key!r} for locale {locale!r}")
     return STRINGS[locale][key]
