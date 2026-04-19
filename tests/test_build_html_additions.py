@@ -619,6 +619,53 @@ class PatternRenderTests(unittest.TestCase):
             self.assertNotIn("<script", block, "Raw <script tag in pattern block")
             self.assertNotIn("<img", block, "Raw <img tag in pattern block")
 
+    def test_reason_fallback_xss_escaped(self):
+        """XSS gate for the s.get('reason', '') fallback path in the score-row loop.
+
+        Background
+        ----------
+        The score-row loop in build_html.py has two branches for the explanation
+        text:
+
+            if exp_fn and sc is not None:
+                reason = exp_fn(s)      # narrative module — trusted
+            else:
+                reason = s.get("reason", "")  # ← fallback — potentially untrusted
+
+        When score is None (insufficient-data case), the fallback branch runs and
+        reads the raw "reason" string from the score dict.  Today that string is
+        hardcoded English from aggregate.py, but the test pins the esc() wrapper
+        to prevent a future regression where user-influenced text flows in.
+
+        Approach
+        --------
+        We build a minimal analysis fixture with D1_delegation having score=None
+        and a malicious "reason" string, then run build_html.py end-to-end via
+        _run_build() and assert the payload is HTML-escaped in the output.
+        """
+        PAYLOAD = "<script>alert(1)</script>"
+        analysis = _minimal_analysis()
+        analysis["scores"] = {
+            "_overall": {"avg": 0, "dimensions_scored": 0, "dimensions_total": 8},
+            "D1_delegation": {
+                "score": None,
+                "reason": PAYLOAD,
+                "pattern_emit": False,
+            },
+        }
+        rendered = _run_build(audience="self", analysis=analysis)
+
+        # Raw payload must NOT appear — that would be an XSS hole
+        self.assertNotIn(
+            PAYLOAD, rendered,
+            "Raw <script> tag leaked into output; esc() missing on reason fallback path",
+        )
+        # Escaped form MUST appear — confirms esc() is actually applied
+        self.assertIn(
+            "&lt;script&gt;alert(1)&lt;/script&gt;", rendered,
+            "Escaped payload not found; the reason fallback path may not render at all",
+        )
+
 
 class HowScoresRelateTests(unittest.TestCase):
     def test_how_to_read_hr_mode_includes_relate_entry(self):
