@@ -212,6 +212,95 @@ class HRLayoutTests(unittest.TestCase):
             self.assertIn('§ 01', html)
 
 
+class ChartLayoutInjectionTests(unittest.TestCase):
+    """The pure JS layout helpers in js/chart_layout.js must be inlined into
+    every generated report and used by the chart renderers — otherwise the
+    label-truncation regression returns silently."""
+
+    def _build_self(self):
+        import subprocess, tempfile, json as _json
+        skill_dir = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "a.json").write_text(_json.dumps({
+                "meta": {"total_sessions": 5, "sessions_with_facets": 3,
+                         "facets_coverage_pct": 60.0,
+                         "date_range": {"first": "2026-03-01T00:00:00Z",
+                                        "last": "2026-04-01T00:00:00Z"},
+                         "tz_offset_hours": 8.0, "data_thin_warning": False},
+                "aggregates": {
+                    "activity": {"total_sessions": 5, "total_messages": 100,
+                                 "active_days": 10, "current_streak": 2,
+                                 "longest_streak": 5, "cache_creation_tokens": 0,
+                                 "cache_read_tokens": 0, "models": {},
+                                 "favorite_model": None,
+                                 "api_equivalent_cost_usd": 0.0},
+                    "tokens": {"total": 1000, "median": 100, "p90": 500, "max": 800, "dist_buckets": {}},
+                    "tools": {"totals": {}, "sessions_using_task_agent": 0,
+                              "sessions_using_mcp": 0, "sessions_using_web_search": 0, "sessions_using_web_fetch": 0},
+                    "heatmap": {}, "projects": {}, "outcomes": {}, "friction": {"totals": {}, "by_outcome": {}},
+                    "interrupts": {"sessions_with_interrupt": 0, "total_interrupts": 0, "interrupt_rate_pct": 0},
+                    "prompt_len_vs_outcome": {}, "weekly": [],
+                    "extremes": {"top_tokens": [], "top_interrupts": [], "top_duration": [],
+                                 "highest_friction": [], "outcome_not_achieved": []},
+                    "session_types": {}, "helpfulness": {},
+                    "response_times": {"median_seconds": 10, "mean_seconds": 10, "p90_seconds": 10, "sample_count": 5},
+                    "goal_categories": {},
+                    "efficiency": {"tokens_per_commit_median": 0, "sessions_with_commits": 0,
+                                   "commits_per_hour": 0, "total_duration_hr": 1.0},
+                    "shipped_artifacts": [], "growth_curve": [],
+                    "profile_summary": {"scale_tier": "light", "total_duration_hr": 1.0,
+                                        "total_sessions": 5, "project_count_active": 1,
+                                        "top_project_share_pct": 100.0,
+                                        "top_project_label": "demo", "ta_pct": 0,
+                                        "mcp_pct": 0, "specialty": "x", "date_span_days": 30},
+                },
+                "scores": {"_overall": {"avg": 0, "dimensions_scored": 0, "dimensions_total": 8}},
+                "_sessions": [],
+            }))
+            (tmp / "s.json").write_text("{}")
+            out = tmp / "out.html"
+            r = subprocess.run([
+                "python3", str(skill_dir / "scripts" / "build_html.py"),
+                "--input", str(tmp / "a.json"),
+                "--samples", str(tmp / "s.json"),
+                "--audience", "self",
+                "--output", str(out),
+            ], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return out.read_text()
+
+    def test_chart_layout_helpers_inlined(self):
+        html = self._build_self()
+        self.assertIn("function computeBarPlot", html)
+        self.assertIn("function clipLabelToWidth", html)
+        self.assertIn("function measureRotatedLabel", html)
+        # Node-only export must be stripped before inlining (would crash browser).
+        self.assertNotIn("module.exports", html)
+
+    def test_donut_chart_clips_long_legend_labels(self):
+        """drawDonutChart must call clipLabelToWidth so long model/outcome
+        names don't shoot past the canvas right edge."""
+        html = self._build_self()
+        # Locate the donut renderer body (between drawDonutChart definition
+        # and the next top-level function) and assert it uses the clipper.
+        start = html.index("function drawDonutChart")
+        end = html.index("function drawGroupedBarChart", start)
+        donut_body = html[start:end]
+        self.assertIn("clipLabelToWidth", donut_body,
+                      "drawDonutChart must clip long legend labels")
+
+    def test_grouped_bar_uses_computed_plot(self):
+        """drawGroupedBarChart must derive its plot rect from computeBarPlot
+        so vertical/horizontal label space scales with actual label length."""
+        html = self._build_self()
+        start = html.index("function drawGroupedBarChart")
+        end = html.index("function drawHorizontalBarChart", start)
+        body = html[start:end]
+        self.assertIn("computeBarPlot", body,
+                      "drawGroupedBarChart must use computeBarPlot for layout")
+
+
 class FmtTests(unittest.TestCase):
     def test_billion_scale_uses_B_suffix(self):
         """Values >=1B must render with B suffix, not as thousands-of-M."""

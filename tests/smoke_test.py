@@ -158,6 +158,8 @@ def main() -> None:
                 script_lines.append(line)
         script_path.write_text("\n".join(script_lines))
         run(node, "--check", str(script_path))
+        # Run pure JS layout helper unit tests (node:test, no deps).
+        run(node, "--test", str(REPO_ROOT / "tests" / "chart_layout.test.mjs"))
 
     print(f"smoke test passed: {output_path}")
 
