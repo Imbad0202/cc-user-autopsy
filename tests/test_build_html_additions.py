@@ -316,5 +316,117 @@ class FmtTests(unittest.TestCase):
         self.assertEqual(build_html.fmt(1_500_000_000_000), "1.5T")
 
 
+class LocaleTests(unittest.TestCase):
+    """--locale must drive <html lang>, the doc title, and every chrome
+    string. zh_TW build must contain zero key English chrome — otherwise
+    a reader sees mixed languages, defeating the feature."""
+
+    def _build(self, locale=None):
+        import subprocess, tempfile, json as _json
+        skill_dir = Path(__file__).resolve().parent.parent
+        analysis = {
+            "meta": {"total_sessions": 5, "sessions_with_facets": 3,
+                     "facets_coverage_pct": 60.0,
+                     "date_range": {"first": "2026-03-01T00:00:00Z",
+                                    "last": "2026-04-01T00:00:00Z"},
+                     "tz_offset_hours": 8.0, "data_thin_warning": False},
+            "aggregates": {
+                "activity": {"total_sessions": 5, "total_messages": 100,
+                             "active_days": 10, "current_streak": 2,
+                             "longest_streak": 5,
+                             "cache_creation_tokens": 1_000_000,
+                             "cache_read_tokens": 50_000_000,
+                             "models": {"claude-opus-4-7": 50},
+                             "favorite_model": "claude-opus-4-7",
+                             "api_equivalent_cost_usd": 234.0},
+                "tokens": {"total": 1000, "median": 100, "p90": 500, "max": 800, "dist_buckets": {}},
+                "tools": {"totals": {}, "sessions_using_task_agent": 0,
+                          "sessions_using_mcp": 0, "sessions_using_web_search": 0,
+                          "sessions_using_web_fetch": 0},
+                "heatmap": {}, "projects": {}, "outcomes": {},
+                "friction": {"totals": {}, "by_outcome": {}},
+                "interrupts": {"sessions_with_interrupt": 0, "total_interrupts": 0, "interrupt_rate_pct": 0},
+                "prompt_len_vs_outcome": {}, "weekly": [],
+                "extremes": {"top_tokens": [], "top_interrupts": [], "top_duration": [],
+                             "highest_friction": [], "outcome_not_achieved": []},
+                "session_types": {}, "helpfulness": {},
+                "response_times": {"median_seconds": 10, "mean_seconds": 10, "p90_seconds": 10, "sample_count": 5},
+                "goal_categories": {},
+                "efficiency": {"tokens_per_commit_median": 0, "sessions_with_commits": 0,
+                               "commits_per_hour": 0, "total_duration_hr": 1.0},
+                "shipped_artifacts": [], "growth_curve": [],
+                "profile_summary": {"scale_tier": "light", "total_duration_hr": 1.0,
+                                    "total_sessions": 5, "project_count_active": 1,
+                                    "top_project_share_pct": 100.0,
+                                    "top_project_label": "demo", "ta_pct": 0,
+                                    "mcp_pct": 0, "specialty": "x", "date_span_days": 30},
+            },
+            "scores": {"_overall": {"avg": 0, "dimensions_scored": 0, "dimensions_total": 8}},
+            "_sessions": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "a.json").write_text(_json.dumps(analysis))
+            (tmp / "s.json").write_text("{}")
+            out = tmp / "out.html"
+            cmd = [
+                "python3", str(skill_dir / "scripts" / "build_html.py"),
+                "--input", str(tmp / "a.json"),
+                "--samples", str(tmp / "s.json"),
+                "--audience", "self",
+                "--output", str(out),
+            ]
+            if locale is not None:
+                cmd += ["--locale", locale]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return out.read_text()
+
+    def test_default_locale_is_en(self):
+        html = self._build(locale=None)
+        self.assertIn('<html lang="en">', html)
+        self.assertIn("Cache-read tokens", html)
+
+    def test_zh_tw_sets_html_lang_to_zh_hant(self):
+        html = self._build(locale="zh_TW")
+        self.assertIn('<html lang="zh-Hant">', html)
+
+    def test_zh_tw_build_has_no_english_chrome(self):
+        html = self._build(locale="zh_TW")
+        forbidden = [
+            "Cache-read tokens",
+            "Favorite model",
+            "Active days",
+            "Total messages",
+            "API-equivalent",
+        ]
+        present = [s for s in forbidden if s in html]
+        self.assertEqual(present, [],
+                         f"zh_TW build must not contain English chrome: {present}")
+
+    def test_zh_tw_build_contains_localized_strings(self):
+        html = self._build(locale="zh_TW")
+        self.assertIn("快取讀取 Token", html)
+        self.assertIn("最常用模型", html)
+
+    def test_unknown_locale_rejected(self):
+        import subprocess, tempfile
+        skill_dir = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "a.json").write_text("{}")
+            (tmp / "s.json").write_text("{}")
+            r = subprocess.run([
+                "python3", str(skill_dir / "scripts" / "build_html.py"),
+                "--input", str(tmp / "a.json"),
+                "--samples", str(tmp / "s.json"),
+                "--audience", "self",
+                "--locale", "ja",
+                "--output", str(tmp / "x.html"),
+            ], capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0,
+                                "build_html must reject unknown locales")
+
+
 if __name__ == "__main__":
     unittest.main()

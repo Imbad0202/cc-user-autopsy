@@ -12,8 +12,13 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
+from locales import STRINGS, t
+
 WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 REDACTED_LABEL = "Private project"
+
+# Keys exposed to the inline JS I18N object — keep this list small.
+CHART_KEYS = ("chart_no_data", "chart_count", "chart_rated", "chart_models_label")
 
 
 def load_json_or_warn(path_arg, label, default):
@@ -57,7 +62,7 @@ SAFE_URL_SCHEMES = {"http", "https"}
 SAFE_URL_SCHEMES_WITH_MAILTO = SAFE_URL_SCHEMES | {"mailto"}
 
 
-def _build_activity_panel(activity: dict) -> str:
+def _build_activity_panel(activity: dict, locale: str = "en") -> str:
     """Render the Desktop-style Activity overview if present. Empty string if not."""
     if not activity or not activity.get("total_sessions"):
         return ""
@@ -91,21 +96,21 @@ def _build_activity_panel(activity: dict) -> str:
     if cost > 0:
         cost_tile = (
             f'  <div class="metric"><div class="n">${_fmt_cost(cost)}</div>'
-            f'<div class="lbl">API-equivalent (pay-per-use)</div></div>\n'
+            f'<div class="lbl">{t(locale, "tile_api_equivalent")}</div></div>\n'
         )
 
-    chart = _build_models_chart(models) if models else ""
+    chart = _build_models_chart(models, locale=locale) if models else ""
 
     return f"""
 <div class="metrics" style="margin-bottom:16px">
-  <div class="metric"><div class="n">{total:,}</div><div class="lbl">Full sessions (transcripts)</div></div>
-  <div class="metric"><div class="n">{msgs:,}</div><div class="lbl">Total messages</div></div>
-  <div class="metric"><div class="n">{days}</div><div class="lbl">Active days</div></div>
-  <div class="metric"><div class="n">{cur}d</div><div class="lbl">Current streak</div></div>
-  <div class="metric"><div class="n">{lng}d</div><div class="lbl">Longest streak</div></div>
-  <div class="metric"><div class="n">{fmt(cache_r)}</div><div class="lbl">Cache-read tokens</div></div>
-  <div class="metric"><div class="n">{fmt(cache_c)}</div><div class="lbl">Cache-create tokens</div></div>
-{cost_tile}  <div class="metric"><div class="n">{esc(fav_short)}</div><div class="lbl">Favorite model</div></div>
+  <div class="metric"><div class="n">{total:,}</div><div class="lbl">{t(locale, "tile_full_sessions")}</div></div>
+  <div class="metric"><div class="n">{msgs:,}</div><div class="lbl">{t(locale, "tile_total_messages")}</div></div>
+  <div class="metric"><div class="n">{days}</div><div class="lbl">{t(locale, "tile_active_days")}</div></div>
+  <div class="metric"><div class="n">{cur}d</div><div class="lbl">{t(locale, "tile_current_streak")}</div></div>
+  <div class="metric"><div class="n">{lng}d</div><div class="lbl">{t(locale, "tile_longest_streak")}</div></div>
+  <div class="metric"><div class="n">{fmt(cache_r)}</div><div class="lbl">{t(locale, "tile_cache_read")}</div></div>
+  <div class="metric"><div class="n">{fmt(cache_c)}</div><div class="lbl">{t(locale, "tile_cache_create")}</div></div>
+{cost_tile}  <div class="metric"><div class="n">{esc(fav_short)}</div><div class="lbl">{t(locale, "tile_favorite_model")}</div></div>
 </div>
 {chart}
 {scope_note}
@@ -123,7 +128,7 @@ def _fmt_cost(n: float) -> str:
     return f"{int(round(n)):,}"
 
 
-def _build_models_chart(models: dict) -> str:
+def _build_models_chart(models: dict, locale: str = "en") -> str:
     """Stacked horizontal bar showing assistant-message share per model.
     Pure inline SVG — no external dependencies, renders in any static HTML."""
     items = sorted(models.items(), key=lambda kv: -kv[1])
@@ -153,7 +158,7 @@ def _build_models_chart(models: dict) -> str:
         x += w
     return f"""
 <div id="models-chart" style="margin-top:4px">
-  <div class="method" style="margin-bottom:6px">Assistant messages by model</div>
+  <div class="method" style="margin-bottom:6px">{t(locale, "chart_models_label")}</div>
   <svg width="{bar_w}" height="{bar_h}" role="img" aria-label="Models breakdown"
        style="max-width:100%;height:auto;display:block">{''.join(rects)}</svg>
   <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:10px;font-size:12px">
@@ -316,11 +321,11 @@ def _load_chart_layout_js() -> str:
 # ---- Big HTML template as a module-level string.
 # Uses string.Template's $placeholder style so CSS/JS braces don't need escaping.
 PAGE_TEMPLATE = r"""<!DOCTYPE html>
-<html lang="en">
+<html lang="$html_lang">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude Code — User Autopsy</title>
+<title>$report_title</title>
 
 <style>
   :root {
@@ -1218,12 +1223,13 @@ $peer_review_html
 </section>
 
 <footer>
-  <div>cc-user-autopsy · <a href="https://github.com/Imbad0202/cc-user-autopsy">repo</a> · rule-based + LLM-assisted · re-run the skill anytime</div>
+  <div>cc-user-autopsy · <a href="https://github.com/Imbad0202/cc-user-autopsy">$footer_repo</a> · $footer_tagline</div>
 </footer>
 
 </main>
 
 <script>
+const I18N = $i18n_json;
 const INK = '#1a1916';
 const INK_SOFT = '#464239';
 const MUTED = '#7a7363';
@@ -1271,11 +1277,11 @@ function setupCanvas(id) {
   return { canvas, ctx, width, height };
 }
 
-function drawNoData(ctx, width, height, text = 'No data') {
+function drawNoData(ctx, width, height, text) {
   ctx.fillStyle = MUTED;
   ctx.font = FONT_MONO;
   ctx.textAlign = 'center';
-  ctx.fillText(text, width / 2, height / 2);
+  ctx.fillText(text !== undefined ? text : I18N.chart_no_data, width / 2, height / 2);
 }
 
 function niceMax(value) {
@@ -1415,7 +1421,7 @@ function drawDonutChart(id, labels, values, colors) {
     ctx.fillText(String(total), cx, cy - 6);
     ctx.fillStyle = MUTED;
     ctx.font = FONT_MONO;
-    ctx.fillText('rated', cx, cy + 16);
+    ctx.fillText(I18N.chart_rated, cx, cy + 16);
 
     const legendX = Math.max(cx + radius + 32, width * 0.54);
     let legendY = Math.max(32, cy - (labels.length * 18) / 2);
@@ -1712,12 +1718,12 @@ function drawHeatmap(id, grid, rowLabels) {
 
 drawDonutChart('outcomeChart', $outcome_labels, $outcome_values, PAL);
 drawDonutChart('stypeChart', $stype_labels, $stype_values, PAL);
-drawGroupedBarChart('projChart', $proj_labels, [$proj_sessions, $proj_friction], [INK_SOFT, ACCENT], ['Sessions', 'Friction']);
+drawGroupedBarChart('projChart', $proj_labels, [$proj_sessions, $proj_friction], [INK_SOFT, ACCENT], $proj_legend);
 drawDualChart('plenChart', $plen_buckets, { label: 'Session count', data: $plen_n, color: INK_SOFT }, { label: 'Good rate %', data: $plen_good, color: FOREST, fill: false }, { leftMax: 100, leftFormatter: (value) => `${value}%` });
 drawHorizontalBarChart('fricChart', $fric_labels, $fric_counts, OXBLOOD);
 drawHorizontalBarChart('toolChart', $tool_labels, $tool_counts, INK);
 drawHeatmap('heatChart', $heat_grid, $heat_labels);
-drawGroupedBarChart('helpChart', $help_labels, [$help_values], PAL, ['Count']);
+drawGroupedBarChart('helpChart', $help_labels, [$help_values], PAL, [I18N.chart_count]);
 drawLineChart('growthChart', $growth_labels, [
   { label: 'Composite score', data: $growth_composite, color: ACCENT, fill: true },
   { label: 'Good-outcome rate', data: $growth_good, color: FOREST, dashed: true },
@@ -1767,6 +1773,12 @@ def main():
                     "Schema: {name, role, location, tagline, contact: {email, github, "
                     "twitter, website}, links: [{label, url}]}. HR version shows a full "
                     "letterhead; self version shows a subtle signature.")
+    ap.add_argument(
+        "--locale", choices=sorted(STRINGS.keys()), default="en",
+        help="Output language for chrome and prose. en = canonical English; "
+             "zh_TW = Traditional Chinese (peer-review prose must be rewritten "
+             "natively, see SKILL.md Step 4.5).",
+    )
     args = ap.parse_args()
 
     data = json.loads(Path(args.input).expanduser().read_text())
@@ -1835,14 +1847,14 @@ def main():
 
     # Score rows
     dim_titles = {
-        "D1_delegation": "Delegation (Task agent usage)",
-        "D2_root_cause": "Root-cause debugging",
-        "D3_prompt_quality": "Prompt quality",
-        "D4_context_mgmt": "Context management",
-        "D5_interrupt_judgment": "Interrupt judgment",
-        "D6_tool_breadth": "Tool breadth",
-        "D7_writing_consistency": "Writing consistency",
-        "D8_time_mgmt": "Time-of-day management",
+        "D1_delegation": t(args.locale, "score_d1"),
+        "D2_root_cause": t(args.locale, "score_d2"),
+        "D3_prompt_quality": t(args.locale, "score_d3"),
+        "D4_context_mgmt": t(args.locale, "score_d4"),
+        "D5_interrupt_judgment": t(args.locale, "score_d5"),
+        "D6_tool_breadth": t(args.locale, "score_d6"),
+        "D7_writing_consistency": t(args.locale, "score_d7"),
+        "D8_time_mgmt": t(args.locale, "score_d8"),
     }
     score_rows = ""
     for key, title in dim_titles.items():
@@ -1870,18 +1882,18 @@ def main():
             f'{overall["dimensions_scored"]} of {overall["dimensions_total"]} dimensions scored'
         )
     else:
-        overall_line = "Not enough data for an overall score."
+        overall_line = t(args.locale, "score_overall_low_data")
 
     # Evidence
     tag_labels = {
-        "high_friction": "Highest friction",
-        "top_token": "Highest token count",
-        "top_interrupt": "Most interrupts",
-        "not_achieved": "Not achieved",
-        "partial": "Partially achieved",
-        "control_good": "Control · fully achieved + essential",
-        "user_rejected": "You rejected Claude's action",
-        "long_duration": "Longest duration · fallback",
+        "high_friction": t(args.locale, "ev_high_friction"),
+        "top_token": t(args.locale, "ev_top_token"),
+        "top_interrupt": t(args.locale, "ev_top_interrupt"),
+        "not_achieved": t(args.locale, "ev_not_achieved"),
+        "partial": t(args.locale, "ev_partial"),
+        "control_good": t(args.locale, "ev_control_good"),
+        "user_rejected": t(args.locale, "ev_user_rejected"),
+        "long_duration": t(args.locale, "ev_long_duration"),
     }
     by_tag = {}
     for sid, info in samples.items():
@@ -2213,7 +2225,7 @@ def main():
     # HR version hides Overview (§ 01) entirely — profile-card + activity
     # panel cover the same ground without duplicating 8 more tiles and 3
     # charts. Self audit keeps Overview as the unfiltered raw-numbers view.
-    activity_panel_html = _build_activity_panel(agg.get("activity", {}))
+    activity_panel_html = _build_activity_panel(agg.get("activity", {}), locale=args.locale)
     if args.audience == "hr":
         overview_section = ""
         # Drop the activity panel directly under the profile card so readers
@@ -2225,20 +2237,20 @@ def main():
     else:
         hr_activity_block = ""
         overview_section = f'''<section id="overview">
-  <h2 class="sec" data-num="§ 01">Overview</h2>
-  <h2 class="sec-title">The raw numbers, before interpretation.</h2>
+  <h2 class="sec" data-num="§ 01">{t(args.locale, "section_overview")}</h2>
+  <h2 class="sec-title">{t(args.locale, "section_overview_subtitle")}</h2>
 
   {activity_panel_html}
 
   <div class="metrics">
-    <div class="metric"><div class="n">{total}</div><div class="lbl">Sessions</div></div>
-    <div class="metric"><div class="n">{fmt(total_tok)}</div><div class="lbl">Total tokens</div></div>
-    <div class="metric"><div class="n">{commits_total}</div><div class="lbl">Git commits</div></div>
-    <div class="metric"><div class="n">{duration_hr}h</div><div class="lbl">Interactive time</div></div>
-    <div class="metric"><div class="n">{ta_rate}%</div><div class="lbl">Used Task agent</div></div>
-    <div class="metric"><div class="n">{mcp_rate}%</div><div class="lbl">Used MCP</div></div>
-    <div class="metric"><div class="n">{meta["facets_coverage_pct"]}%</div><div class="lbl">Facet coverage</div></div>
-    <div class="metric"><div class="n">{int(agg["response_times"]["median_seconds"])}s</div><div class="lbl">Median think time</div></div>
+    <div class="metric"><div class="n">{total}</div><div class="lbl">{t(args.locale, "tile_sessions")}</div></div>
+    <div class="metric"><div class="n">{fmt(total_tok)}</div><div class="lbl">{t(args.locale, "tile_total_tokens")}</div></div>
+    <div class="metric"><div class="n">{commits_total}</div><div class="lbl">{t(args.locale, "tile_git_commits")}</div></div>
+    <div class="metric"><div class="n">{duration_hr}h</div><div class="lbl">{t(args.locale, "tile_interactive_time")}</div></div>
+    <div class="metric"><div class="n">{ta_rate}%</div><div class="lbl">{t(args.locale, "tile_used_task_agent")}</div></div>
+    <div class="metric"><div class="n">{mcp_rate}%</div><div class="lbl">{t(args.locale, "tile_used_mcp")}</div></div>
+    <div class="metric"><div class="n">{meta["facets_coverage_pct"]}%</div><div class="lbl">{t(args.locale, "tile_facet_coverage")}</div></div>
+    <div class="metric"><div class="n">{int(agg["response_times"]["median_seconds"])}s</div><div class="lbl">{t(args.locale, "tile_median_think_time")}</div></div>
   </div>
 
   <div class="two-col">
@@ -2250,6 +2262,15 @@ def main():
 
     # Assemble via string.Template to avoid CSS brace escaping
     subs = {
+        # Locale / i18n
+        "html_lang": t(args.locale, "html_lang"),
+        "report_title": t(args.locale, "report_title"),
+        "footer_repo": t(args.locale, "footer_repo"),
+        "footer_tagline": t(args.locale, "footer_tagline"),
+        "i18n_json": json_for_script({k: STRINGS[args.locale][k] for k in CHART_KEYS}),
+        # projChart legend uses chart_count for both series (sessions & friction are both counts)
+        "proj_legend": json_for_script([t(args.locale, "tile_sessions"), t(args.locale, "ev_high_friction")]),
+        # Template blocks
         "chart_layout_js": _load_chart_layout_js(),
         "identity_block": identity_block,
         "hero_block": hero_block,
@@ -2285,8 +2306,8 @@ def main():
         "plen_n": json_for_script(plen_n),
         "fric_labels": json_for_script([f[0] for f in fric_top]),
         "fric_counts": json_for_script([f[1] for f in fric_top]),
-        "tool_labels": json_for_script([re.sub(r"mcp__[^_]+__", "", t[0])[:28] for t in tool_top]),
-        "tool_counts": json_for_script([t[1] for t in tool_top]),
+        "tool_labels": json_for_script([re.sub(r"mcp__[^_]+__", "", tt[0])[:28] for tt in tool_top]),
+        "tool_counts": json_for_script([tt[1] for tt in tool_top]),
         "heat_grid": json_for_script(grid),
         "heat_labels": json_for_script(WEEKDAY_LABELS),
         "help_labels": json_for_script(list(agg["helpfulness"].keys())),
