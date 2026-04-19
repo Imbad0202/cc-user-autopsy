@@ -729,6 +729,12 @@ class D9RenderTests(unittest.TestCase):
         self.assertNotIn("Eight dimensions", html)
         self.assertNotIn("eight dimensions", html)
 
+    def test_zh_tw_subtitle_says_nine(self):
+        """zh_TW subtitle should say 九個面向 after D9 wiring."""
+        html = _run_build(locale="zh_TW")
+        self.assertIn("九個面向", html)
+        self.assertNotIn("八個面向", html)
+
 
 if __name__ == "__main__":
     unittest.main()

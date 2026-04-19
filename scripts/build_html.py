@@ -2340,7 +2340,7 @@ def main():
     <div class="profile-cell">
       <div class="k">Self-audit</div>
       <div class="v">{scores_overall if scores_overall else "n/a"}<span style="font-size:14px;color:var(--ink-muted);"> / 10</span></div>
-      <div class="sub">8-dim rule-based</div>
+      <div class="sub">9-dim rule-based</div>
     </div>
     <div class="profile-cell">
       <div class="k">Focus</div>
