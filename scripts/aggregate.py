@@ -534,6 +534,9 @@ def score_d4_context_mgmt(sessions):
 
 def score_d5_interrupt(rated):
     interrupted = [s for s in rated if s["interrupts"] > 0]
+    # score guard uses literal 5: the scoring eligibility threshold is independent
+    # from _PATTERN_MIN_SAMPLE (the pattern-floor constant). Keep separate so future
+    # tuning of pattern floor doesn't silently move scoring.
     if len(interrupted) < 5:
         return {"score": None, "reason": "fewer than 5 interrupted rated sessions", "pattern": None}
     good = [s for s in interrupted if is_good(s["outcome"])]
@@ -547,10 +550,9 @@ def score_d5_interrupt(rated):
     non_interrupted = [s for s in rated if s["interrupts"] == 0]
     pattern = None
     if len(interrupted) >= _PATTERN_MIN_SAMPLE and len(non_interrupted) >= _PATTERN_MIN_SAMPLE:
-        intr_good_rate = 100 * sum(1 for s in interrupted if is_good(s["outcome"])) / len(interrupted)
         non_good_rate = 100 * sum(1 for s in non_interrupted if is_good(s["outcome"])) / len(non_interrupted)
         pattern = (
-            f"Interrupted sessions reached good outcomes {intr_good_rate:.0f}% of the time, "
+            f"Interrupted sessions reached good outcomes {P:.0f}% of the time, "
             f"versus {non_good_rate:.0f}% for non-interrupted sessions."
         )
     return {
