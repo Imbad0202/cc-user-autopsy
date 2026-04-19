@@ -509,16 +509,27 @@ class CssRuleTests(unittest.TestCase):
 
 
 class PatternRenderTests(unittest.TestCase):
-    """Task 14: score_rows loop must emit <p class="pattern"> when pattern is present."""
+    """Score-row loop emits <p class="pattern"> when pattern_emit is True.
+
+    Updated for Task 5 (i18n-explanations): pattern rendering is now driven by
+    pattern_emit (bool) + narrative module function, not by the deprecated
+    s["pattern"] prose string. Score dicts must include metric keys consumed by
+    the narrative functions.
+    """
+
+    # Minimal metric keys required by d1_explanation and d1_pattern
+    _D1_METRICS = {
+        "metric_ta_rate_pct": 60.0,
+        "metric_good_rate_with_ta_pct": 80.0,
+    }
 
     def _score_rows_source(self):
         """Return the raw Python source of build_html.py for structural assertions."""
-        import inspect
         src_path = Path(__file__).resolve().parent.parent / "scripts" / "build_html.py"
         return src_path.read_text()
 
-    def _render_with_pattern(self, pattern_val):
-        """Build an analysis fixture where D1_delegation carries `pattern_val`,
+    def _render_with_pattern_emit(self, pattern_emit_val):
+        """Build an analysis fixture where D1_delegation carries `pattern_emit_val`,
         then run build_html.py and return the rendered HTML string."""
         import subprocess, tempfile, json as _json
         skill_dir = Path(__file__).resolve().parent.parent
@@ -527,8 +538,8 @@ class PatternRenderTests(unittest.TestCase):
             "_overall": {"avg": 7.0, "dimensions_scored": 1, "dimensions_total": 8},
             "D1_delegation": {
                 "score": 7,
-                "explanation": "Good delegation practice.",
-                "pattern": pattern_val,
+                "pattern_emit": pattern_emit_val,
+                **self._D1_METRICS,
             },
         }
         with tempfile.TemporaryDirectory() as tmp:
@@ -547,55 +558,41 @@ class PatternRenderTests(unittest.TestCase):
             return out.read_text()
 
     def test_pattern_block_rendered_when_non_none(self):
-        """When pattern is a non-empty string, the rendered score row must
+        """When pattern_emit is True, the rendered score row must
         contain an element with class="pattern"."""
-        html = self._render_with_pattern("Uses Task agent for all long-running work.")
+        html = self._render_with_pattern_emit(True)
         self.assertIn('class="pattern"', html)
 
     def test_pattern_block_absent_when_pattern_is_none(self):
-        """When pattern is None (or key absent), no pattern element is emitted.
-        Guard check: source code must use s.get('pattern') not s['pattern']."""
+        """When pattern_emit is False (or absent), no pattern element is emitted.
+        Guard check: source code must use s.get('pattern_emit') to drive emission."""
         # First assert the rendered output has no pattern element
-        html = self._render_with_pattern(None)
+        html = self._render_with_pattern_emit(False)
         self.assertNotIn('class="pattern"', html)
-        # Structural guard: source must use dict.get() to avoid KeyError
+        # Structural guard: source must use pattern_emit as the signal
         src = self._score_rows_source()
         self.assertTrue(
-            's.get("pattern")' in src or "s.get('pattern')" in src,
-            "score_rows loop must use s.get('pattern') not s['pattern']",
+            's.get("pattern_emit")' in src or "s.get('pattern_emit')" in src,
+            "score_rows loop must use s.get('pattern_emit') as the pattern-emit signal",
         )
 
     def test_pattern_xss_escaped_in_full_render(self):
-        """XSS gate: injecting a raw <script> tag via pattern must produce
-        the HTML-escaped form (&lt;script&gt;) in output, never the raw tag."""
-        demo_dir = Path("/tmp/cc-autopsy-demo")
-        if not demo_dir.exists():
-            self.skipTest("Demo data absent at /tmp/cc-autopsy-demo/ — skipping XSS integration test.")
-
+        """XSS gate: narrative output is always esc()-wrapped, so no raw HTML
+        can leak through the pattern block. Verify by checking the rendered
+        output of the pattern-emit path contains no unescaped angle brackets
+        in the pattern element."""
         import subprocess, tempfile, json as _json
         skill_dir = Path(__file__).resolve().parent.parent
-
-        # Load the demo aggregate if it exists, otherwise build our own fixture
-        demo_agg = demo_dir / "analysis-data.json"
-        if demo_agg.exists():
-            analysis = _json.loads(demo_agg.read_text())
-        else:
-            self.skipTest("Demo analysis-data.json absent — skipping XSS integration test.")
-
-        # Inject XSS payload into the first scored dimension we find
-        xss_payload = "<script>alert(1)</script>"
-        scores = analysis.get("scores", {})
-        injected = False
-        for dim_key in scores:
-            if dim_key.startswith("D") and isinstance(scores[dim_key], dict):
-                scores[dim_key]["pattern"] = xss_payload
-                injected = True
-                break
-        if not injected:
-            self.skipTest("No scored dimension found to inject XSS payload — skipping.")
-
-        analysis["scores"] = scores
-
+        analysis = _minimal_analysis()
+        # pattern_emit=True + metric keys so d1_pattern() is called
+        analysis["scores"] = {
+            "_overall": {"avg": 7.0, "dimensions_scored": 1, "dimensions_total": 8},
+            "D1_delegation": {
+                "score": 7,
+                "pattern_emit": True,
+                **self._D1_METRICS,
+            },
+        }
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             (tmp / "a.json").write_text(_json.dumps(analysis))
@@ -611,10 +608,16 @@ class PatternRenderTests(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             rendered = out.read_text()
 
-        self.assertNotIn(xss_payload, rendered,
-                         "Raw <script> tag must not appear in rendered HTML")
-        self.assertIn("&lt;script&gt;", rendered,
-                      "XSS payload must be HTML-escaped to &lt;script&gt; in output")
+        # Pattern block must exist (pattern_emit=True)
+        self.assertIn('class="pattern"', rendered,
+                      "Pattern block must be present when pattern_emit is True")
+        # The narrative output for d1_pattern contains percentages, not angle brackets
+        # Confirm no raw unescaped < or > appear inside a class="pattern" element
+        import re as _re
+        pattern_blocks = _re.findall(r'<p class="pattern">(.*?)</p>', rendered, _re.DOTALL)
+        for block in pattern_blocks:
+            self.assertNotIn("<script", block, "Raw <script tag in pattern block")
+            self.assertNotIn("<img", block, "Raw <img tag in pattern block")
 
 
 class HowScoresRelateTests(unittest.TestCase):

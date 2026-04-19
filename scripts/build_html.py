@@ -14,6 +14,22 @@ from urllib.parse import urlparse
 
 from locales import STRINGS, t
 
+
+def _load_narrative(locale: str):
+    """Return the narrative module for the given locale."""
+    if locale == "zh_TW":
+        try:
+            from scripts import narrative_zh as narrative
+        except ImportError:
+            import narrative_zh as narrative  # type: ignore[no-redef]
+    else:
+        try:
+            from scripts import narrative_en as narrative
+        except ImportError:
+            import narrative_en as narrative  # type: ignore[no-redef]
+    return narrative
+
+
 WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 # Keys whose name starts with one of these prefixes are exposed to inline JS
@@ -2150,6 +2166,7 @@ def main():
         "D8_time_mgmt": t(args.locale, "score_d8"),
         "D9_token_efficiency": t(args.locale, "score_d9"),
     }
+    narrative = _load_narrative(args.locale)
     score_rows = ""
     for key, title in dim_titles.items():
         s = scores.get(key, {})
@@ -2157,11 +2174,16 @@ def main():
         band = score_band(sc)
         display = f'<span class="num">{sc}</span><span class="out">/ 10</span>' if sc is not None else 'n/a'
         dim_label = f"{key.split('_', 1)[0]} · {key.split('_', 1)[1].replace('_', ' ')}"
-        reason = s.get("explanation") or s.get("reason", "")
+        dim_key = key.split('_', 1)[0].lower()  # "D1_delegation" -> "d1"
+        exp_fn = getattr(narrative, f"{dim_key}_explanation", None)
+        pat_fn = getattr(narrative, f"{dim_key}_pattern", None)
+        if exp_fn and sc is not None:
+            reason = exp_fn(s)
+        else:
+            reason = s.get("reason", "")
         pattern_html = ""
-        pattern_val = s.get("pattern")
-        if pattern_val:
-            pattern_html = f'\n    <p class="pattern">{esc(pattern_val)}</p>'
+        if pat_fn and s.get("pattern_emit"):
+            pattern_html = f'\n    <p class="pattern">{esc(pat_fn(s))}</p>'
         score_rows += f'''<div class="score-row {band}">
   <div class="dim">{esc(dim_label)}</div>
   <div class="body">
@@ -2218,12 +2240,13 @@ def main():
                 summary = m.get("brief_summary", "") or "(no summary)"
                 frictxt = m.get("friction_detail", "") or "(none)"
                 proj = m.get('project', '?')
-                outcome = m.get('outcome', '') or '(no facet)'
+                raw_outcome = m.get('outcome', '')
+                outcome = narrative.outcome_label(raw_outcome) if raw_outcome else narrative.no_facet_label()
                 tok_str = fmt(m.get('total_tokens', 0))
                 dur = m.get('duration_min', 0)
                 evidence_html += f'''<details class="evidence">
   <summary>
-    <span class="tag {tag}">{esc(tag.replace('_', ' '))}</span>
+    <span class="tag {tag}">{esc(narrative.evidence_badge(tag))}</span>
     <span><span class="sid">{esc(s["sid"][:8])}</span> · <span class="proj">{esc(proj)}</span> · {esc(outcome)}</span>
     <span class="right">{esc(tok_str)} tok · {esc(dur)}m</span>
   </summary>
@@ -2588,7 +2611,7 @@ def main():
         "section_evidence_subtitle": t(args.locale, "section_evidence_subtitle"),
         "section_evidence_method": t(args.locale, "section_evidence_method"),
         "section_method": t(args.locale, "section_method"),
-        "section_method_subtitle": t(args.locale, "section_method_subtitle"),
+        "section_method_subtitle": narrative.methodology_subtitle(),
         # §04 sub-headers
         "patterns_h_plen": t(args.locale, "patterns_h_plen"),
         "patterns_h_friction": t(args.locale, "patterns_h_friction"),
@@ -2606,9 +2629,9 @@ def main():
         "method_src_facets": t(args.locale, "method_src_facets"),
         "method_src_transcripts": t(args.locale, "method_src_transcripts"),
         "method_h_sampling": t(args.locale, "method_h_sampling"),
-        "method_sampling_body": t(args.locale, "method_sampling_body"),
+        "method_sampling_body": narrative.methodology_sampling_body(),
         "method_h_caveats": t(args.locale, "method_h_caveats"),
-        "method_caveats_body": t(args.locale, "method_caveats_body"),
+        "method_caveats_body": narrative.methodology_caveats_body(),
         # Template blocks
         "chart_layout_js": _load_chart_layout_js(),
         "identity_block": identity_block,
