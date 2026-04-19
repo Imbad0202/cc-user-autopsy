@@ -447,6 +447,11 @@ class LocaleTests(unittest.TestCase):
             "Tokens (M)", "Avg prompt length",
             "sessions analyzed",
             "Data sources", "Sampling strategy", "Caveats",
+            # Hero block (was leaking — title, dek, intro-card)
+            "A diagnostic letter", "your Claude Code practice",
+            "No sandwiching", "tends to celebrate",
+            # Letterhead unsubstituted placeholders (pre-existing bug)
+            "$total_sessions", "$facets_coverage",
         ]
         present = [s for s in forbidden if s in self._html_zh]
         self.assertEqual(present, [],

@@ -94,6 +94,30 @@ STRINGS = {
             "The peer review depends on there being enough data to say specific things; "
             "if your data is thin, the review should be short, not padded."
         ),
+        # --- Hero block (self audience) ---
+        "hero_self_title_line1": "A diagnostic letter",
+        "hero_self_title_line2_pre": "on",
+        "hero_self_title_line2_em": "your",
+        "hero_self_title_line2_post": "Claude Code practice",
+        "hero_self_dek": (
+            "This report is the output of a skill that reads your local usage data and "
+            "gives you a direct, evidence-backed peer review of your workflow. Eight "
+            "rule-based scores, thirteen figures, twenty-four session citations. No sandwiching."
+        ),
+        "hero_self_intro_card": (
+            "The built-in <code>/insights</code> report is helpful but tends to celebrate. "
+            "This one tries to be honest. Every score below has a threshold you can audit, "
+            "and every claim in the peer review cites a number from your own data. "
+            "If a dimension lacks data, it says so."
+        ),
+        # --- Hero block (HR audience) ---
+        "hero_hr_title_line1": "Claude Code",
+        "hero_hr_title_line2_em": "practice summary",
+        "hero_hr_dek": (
+            "An automated, evidence-backed summary of how this user works with "
+            "Claude Code, generated from their local session data, not self-reported. "
+            "Structured for hiring managers reviewing AI-native engineering candidates."
+        ),
         # --- Letterhead ---
         "letterhead_sessions_analyzed": "sessions analyzed",
         "letterhead_facet_coverage": "Facet coverage",
@@ -247,6 +271,28 @@ STRINGS = {
             "outcome 規則才可靠；30% 以下，某些面向會回 n/a。"
             "評分門檻只是經驗法則，不是科學。"
             "同行檢視倚賴足夠資料才有具體結論；資料量薄時，回饋應該短，而不是被填滿。"
+        ),
+        # --- Hero block (self audience) ---
+        "hero_self_title_line1": "一份診斷信",
+        "hero_self_title_line2_pre": "寫給",
+        "hero_self_title_line2_em": "你",
+        "hero_self_title_line2_post": "的 Claude Code 工作流",
+        "hero_self_dek": (
+            "這份報告由一個 skill 自動產出，會讀取你本機的 usage data，"
+            "給你一份有實據、不打高空的同行檢視。八個規則式分數、十三張圖、"
+            "二十四個 session 引用，不三明治、不灌水。"
+        ),
+        "hero_self_intro_card": (
+            "內建的 <code>/insights</code> 報告有用，但偏向稱讚。這份試圖說實話。"
+            "下面每個分數都有可審視的門檻，同行檢視裡的每個論點都會引用你資料裡的數字。"
+            "若某個面向資料不足，會明說。"
+        ),
+        # --- Hero block (HR audience) ---
+        "hero_hr_title_line1": "Claude Code",
+        "hero_hr_title_line2_em": "工作實況摘要",
+        "hero_hr_dek": (
+            "這份摘要由系統自動產出，從本機 session 資料還原這位使用者實際"
+            "如何用 Claude Code，並非自述。設計給審視 AI 原生工程候選人的招募主管使用。"
         ),
         # --- Letterhead ---
         "letterhead_sessions_analyzed": "個 session 已分析",

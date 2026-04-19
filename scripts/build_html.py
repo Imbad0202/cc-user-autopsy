@@ -379,6 +379,20 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     body { font-size: 16px; }
   }
 
+  /* CJK characters render visually smaller than Latin at the same px size
+     (lower x-height, denser strokes). Bump base + key prose contexts so the
+     zh_TW report doesn't feel cramped. Latin runs inside Chinese paragraphs
+     (model names, code samples) inherit the bigger size, which is what we
+     want — they should match the surrounding type, not snap back to 17px. */
+  html[lang="zh-Hant"] body { font-size: 18.5px; line-height: 1.7; }
+  html[lang="zh-Hant"] .dek { font-size: 17.5px; }
+  html[lang="zh-Hant"] .intro-card { font-size: 17px; }
+  html[lang="zh-Hant"] .method,
+  html[lang="zh-Hant"] .caveat { font-size: 15.5px; }
+  @media (max-width: 720px) {
+    html[lang="zh-Hant"] body { font-size: 17px; }
+  }
+
   /* Letterhead */
   .letterhead {
     border-bottom: 1px solid var(--rule);
@@ -2034,12 +2048,11 @@ def main():
 
     # Build hero + profile section depending on audience
     if args.audience == "hr":
-        hero_block = f'''<h1 class="title">Claude Code<br><em>practice summary</em></h1>
-<p class="dek">
-  An automated, evidence-backed summary of how this user works with Claude Code —
-  generated from their local session data, not self-reported. Structured for
-  hiring managers reviewing AI-native engineering candidates.
-</p>'''
+        hero_block = (
+            f'<h1 class="title">{t(args.locale, "hero_hr_title_line1")}<br>'
+            f'<em>{t(args.locale, "hero_hr_title_line2_em")}</em></h1>\n'
+            f'<p class="dek">{t(args.locale, "hero_hr_dek")}</p>'
+        )
         profile_section = f'''<div class="profile-card">
   <div class="profile-lede">{profile_lede_html}</div>
   <div class="profile-grid">
@@ -2177,18 +2190,16 @@ def main():
         )
     else:
         # --- SELF audience (default, original layout) ---
-        hero_block = f'''<h1 class="title">A diagnostic letter<br>on <em>your</em> Claude Code practice</h1>
-<p class="dek">
-  This report is the output of a skill that reads your local usage data and gives you
-  a direct, evidence-backed peer review of your workflow. Eight rule-based scores,
-  thirteen figures, twenty-four session citations. No sandwiching.
-</p>
-<div class="intro-card">
-  The built-in <code>/insights</code> report is helpful but tends to celebrate. This one tries
-  to be honest. Every score below has a threshold you can audit, and every claim in
-  the peer review cites a number from your own data. If a dimension lacks data, it says so.
-  {preliminary_warning}
-</div>'''
+        hero_block = (
+            f'<h1 class="title">{t(args.locale, "hero_self_title_line1")}<br>'
+            f'{t(args.locale, "hero_self_title_line2_pre")} '
+            f'<em>{t(args.locale, "hero_self_title_line2_em")}</em> '
+            f'{t(args.locale, "hero_self_title_line2_post")}</h1>\n'
+            f'<p class="dek">{t(args.locale, "hero_self_dek")}</p>\n'
+            f'<div class="intro-card">{t(args.locale, "hero_self_intro_card")}\n'
+            f'  {preliminary_warning}\n'
+            f'</div>'
+        )
         profile_section = ""
         shipped_section = ""
         artifacts_section = ""
@@ -2317,6 +2328,8 @@ def main():
         "growth_ta": growth_ta,
         "date_first": meta["date_range"]["first"][:10],
         "date_last": meta["date_range"]["last"][:10],
+        "total_sessions": meta.get("total_sessions", 0),
+        "facets_coverage": f'{meta.get("facets_coverage_pct", 0):.0f}',
         "preliminary_warning": preliminary_warning,
         "overall_line": overall_line,
         "score_rows": score_rows,
