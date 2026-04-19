@@ -416,6 +416,7 @@ def main():
                     "model_counts": {},
                     "git_commits": 0, "git_pushes": 0,
                     "user_interruptions": 0, "tool_errors": 0,
+                    "hit_output_limit": False,
                     "uses_task_agent": False, "uses_subagent": True,
                     "uses_mcp": False, "uses_web_search": False, "uses_web_fetch": False,
                     "first_prompt": "",

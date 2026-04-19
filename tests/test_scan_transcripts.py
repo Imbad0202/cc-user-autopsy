@@ -276,8 +276,6 @@ class HitOutputLimitTests(unittest.TestCase):
     def test_row_marks_hit_output_limit_when_max_tokens_seen(self):
         """Any assistant row with stop_reason='max_tokens' anywhere in the
         session should flip the session-level hit_output_limit flag True."""
-        import json, tempfile, os
-        from pathlib import Path
         rows = [
             {"type": "user", "sessionId": "abc12345-0000-0000-0000-000000000001",
              "message": {"role": "user", "content": "hi"},
@@ -307,8 +305,6 @@ class HitOutputLimitTests(unittest.TestCase):
             self.assertTrue(emitted[0].get("hit_output_limit"))
 
     def test_row_hit_output_limit_false_when_no_max_tokens(self):
-        import json, tempfile
-        from pathlib import Path
         rows = [
             {"type": "user", "sessionId": "def45678-0000-0000-0000-000000000002",
              "message": {"role": "user", "content": "hi"},
