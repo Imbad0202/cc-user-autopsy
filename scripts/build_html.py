@@ -2211,14 +2211,11 @@ def main():
 
     # Evidence
     tag_labels = {
-        "high_friction": t(args.locale, "ev_high_friction"),
-        "top_token": t(args.locale, "ev_top_token"),
-        "top_interrupt": t(args.locale, "ev_top_interrupt"),
-        "not_achieved": t(args.locale, "ev_not_achieved"),
-        "partial": t(args.locale, "ev_partial"),
-        "control_good": t(args.locale, "ev_control_good"),
-        "user_rejected": t(args.locale, "ev_user_rejected"),
-        "long_duration": t(args.locale, "ev_long_duration"),
+        tag: narrative.evidence_badge(tag)
+        for tag in (
+            "high_friction", "top_token", "top_interrupt", "not_achieved",
+            "partial", "control_good", "user_rejected", "long_duration",
+        )
     }
     by_tag = {}
     for sid, info in samples.items():
@@ -2597,7 +2594,7 @@ def main():
             if k.startswith(JS_KEY_PREFIXES)
         }),
         # projChart legend uses chart_count for both series (sessions & friction are both counts)
-        "proj_legend": json_for_script([t(args.locale, "tile_sessions"), t(args.locale, "ev_high_friction")]),
+        "proj_legend": json_for_script([t(args.locale, "tile_sessions"), narrative.evidence_badge("high_friction")]),
         # Letterhead
         "letterhead_sessions_analyzed": t(args.locale, "letterhead_sessions_analyzed"),
         "letterhead_facet_coverage": t(args.locale, "letterhead_facet_coverage"),

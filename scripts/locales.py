@@ -66,7 +66,6 @@ STRINGS = {
             "raw context the scoring and peer review were built from."
         ),
         "section_method": "Methodology",
-        "section_method_subtitle": "What this report is, and what it is not.",
         "method_h_sources": "Data sources",
         "method_src_session_meta": (
             "<code>~/.claude/usage-data/session-meta/*.json</code>: auto-recorded by Claude Code."
@@ -80,20 +79,7 @@ STRINGS = {
             "the evidence library only."
         ),
         "method_h_sampling": "Sampling strategy",
-        "method_sampling_body": (
-            "Up to 24 sessions across 7 buckets: 5 highest-friction, 5 top-tokens, 5 "
-            "most-interrupts, 4 not_achieved, 3 partially_achieved, 4 control "
-            "(fully_achieved + essential), 2 user_rejected. When facets are absent, "
-            "fallback is by session duration."
-        ),
         "method_h_caveats": "Caveats",
-        "method_caveats_body": (
-            "Facet labels come from an LLM and may be miscategorized. Above roughly 50% "
-            "facet coverage, outcome-based rules are reliable; below 30%, some "
-            "dimensions return n/a. Scoring thresholds are rules of thumb, not science. "
-            "The peer review depends on there being enough data to say specific things; "
-            "if your data is thin, the review should be short, not padded."
-        ),
         # --- Hero block (self audience) ---
         "hero_self_title_line1": "A diagnostic letter",
         "hero_self_title_line2_pre": "on",
@@ -202,15 +188,6 @@ STRINGS = {
         "d9_band_2": "Not-good sessions cost >2.0× of good ones — tokens burning without results",
         "d9_insufficient": "Not enough rated good/not-good sessions to compare (need ≥5 of each).",
         "score_overall_low_data": "Not enough data for an overall score.",
-        # --- Evidence categories ---
-        "ev_high_friction": "Highest friction",
-        "ev_top_token": "Highest token count",
-        "ev_top_interrupt": "Most interrupts",
-        "ev_not_achieved": "Not achieved",
-        "ev_partial": "Partially achieved",
-        "ev_control_good": "Control · fully achieved + essential",
-        "ev_user_rejected": "You rejected Claude's action",
-        "ev_long_duration": "Longest duration · fallback",
         # --- Privacy / redaction ---
         "redacted_project": "Private project",
         # --- Footer ---
@@ -278,7 +255,6 @@ STRINGS = {
             "從七個分桶最多取 24 個 session。展開任何一列可看當初評分與同行檢視所依據的原始脈絡。"
         ),
         "section_method": "方法論",
-        "section_method_subtitle": "報告限制。",
         "method_h_sources": "資料來源",
         "method_src_session_meta": (
             "<code>~/.claude/usage-data/session-meta/*.json</code>：Claude Code 自動記錄。"
@@ -291,21 +267,7 @@ STRINGS = {
             "<code>~/.claude/projects/**/*.jsonl</code>：原始逐字稿，僅用於證據庫抽樣。"
         ),
         "method_h_sampling": "抽樣策略",
-        "method_sampling_body": (
-            "最多抽 24 個 session 進證據庫，分七類：摩擦最高 5 筆、Token 用量最多 5 筆、"
-            "中斷次數最多 5 筆、未達成 4 筆、部分達成 3 筆、"
-            "對照組（完全達成＋關鍵任務）4 筆、你否決 Claude 動作 2 筆。"
-            "沒有 facet 資料時改看 session 長度。"
-        ),
         "method_h_caveats": "注意事項",
-        "method_caveats_body": (
-            "Facet 標籤是 LLM 分類出來的，會有誤判。"
-            "Facet 覆蓋率要超過 50%，outcome 相關規則才站得住；"
-            "低於 30% 時部分面向會顯示 n/a。"
-            "評分門檻是經驗值，不是科學公式。"
-            "同行檢視要有足夠資料才做得出具體判斷；"
-            "資料量薄的時候，回饋要精簡，不是硬湊滿版。"
-        ),
         # --- Hero block (self audience) ---
         "hero_self_title_line1": "一份診斷信",
         "hero_self_title_line2_pre": "寫給",
@@ -410,15 +372,6 @@ STRINGS = {
         "d9_band_2": "未達成的 session 平均 Token 超過達成組 2 倍，Token 在沒結果的地方燒掉",
         "d9_insufficient": "達成與未達成的 rated session 樣本不足（各需至少 5 筆）。",
         "score_overall_low_data": "資料量不足，無法給整體分數。",
-        # --- Evidence categories ---
-        "ev_high_friction": "摩擦最高",
-        "ev_top_token": "Token 用量最多",
-        "ev_top_interrupt": "中斷次數最多",
-        "ev_not_achieved": "未達成",
-        "ev_partial": "部分達成",
-        "ev_control_good": "對照組：完全達成且關鍵",
-        "ev_user_rejected": "你否決了 Claude 的動作",
-        "ev_long_duration": "持續最久（後備樣本）",
         # --- Privacy / redaction ---
         "redacted_project": "私人專案",
         # --- Footer ---
