@@ -1009,6 +1009,8 @@ def main():
     source_by_sid = {sid: "local" for sid in metas}
 
     # Merge each --extra-redacted jsonl. Local wins on sid collision.
+    # These rows also augment activity_metas when they carry the scanner extras
+    # (cache tokens, model_counts) — that's the point of the extended schema.
     for p in args.extra_redacted:
         rp = Path(p).expanduser()
         rm, rf, rsrc = load_redacted(rp)
@@ -1021,8 +1023,20 @@ def main():
         for sid, f in rf.items():
             if sid not in facets:
                 facets[sid] = f
-        print(f"merged {added} sessions from {rp.name} ({len(rm) - added} skipped as duplicates)",
-              file=sys.stderr)
+        # Also grow activity universe with these redacted rows so cache
+        # tokens + model breakdown + active_days reflect all machines, not
+        # just the local transcript scan.
+        if activity_metas is not None:
+            activity_added = 0
+            for sid, m in rm.items():
+                if sid not in activity_metas:
+                    activity_metas[sid] = m
+                    activity_added += 1
+            print(f"merged {added} sessions (+{activity_added} into activity pool) "
+                  f"from {rp.name}", file=sys.stderr)
+        else:
+            print(f"merged {added} sessions from {rp.name} "
+                  f"({len(rm) - added} skipped as duplicates)", file=sys.stderr)
 
     if len(metas) == 0:
         # If transcript-rows supplied data but no meta, fall back to using

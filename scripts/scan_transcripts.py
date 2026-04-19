@@ -56,10 +56,23 @@ def _parse_ts(s: str):
 _INTERRUPT_RE = re.compile(r"(cancelled|interrupted)", re.IGNORECASE)
 
 
+import re as _re
+_UUID_RE = _re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", _re.I)
+
+
 def scan_one(path: Path):
     """Return a session-meta-equivalent dict, or None if the file isn't a
-    session transcript (e.g. skill-injections.jsonl).
+    user-facing session transcript.
+
+    Only UUID-named files are real user sessions. Filenames like 'agent-*'
+    are subagent internal runs (each Task/Agent tool invocation creates one)
+    and 'skill-injections.jsonl' / others are metadata logs. Including them
+    would inflate session counts by ~20× and double-count tokens already
+    folded into the parent session via the Task tool's usage reporting.
     """
+    if not _UUID_RE.match(path.stem):
+        return None
+
     lines = []
     with path.open(encoding="utf-8", errors="replace") as fh:
         for line in fh:
