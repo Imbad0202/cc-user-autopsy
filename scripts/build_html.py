@@ -376,6 +376,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     --text-md: 16px;
     --text-lg: 17px;
     --text-xl: 18px;
+    --text-2xl: 24px;
 
     /* --- Line-height primitives --- */
     --leading-tight: 1.2;

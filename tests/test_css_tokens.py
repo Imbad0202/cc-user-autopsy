@@ -42,7 +42,7 @@ class TokenPrimitivesTests(unittest.TestCase):
             self.assertRegex(self.src, rf"--radius-{name}\s*:")
 
     def test_text_primitives_defined(self):
-        for name in ("xs", "sm", "base", "md", "lg", "xl"):
+        for name in ("xs", "sm", "base", "md", "lg", "xl", "2xl"):
             self.assertRegex(self.src, rf"--text-{name}\s*:")
 
     def test_leading_primitives_defined(self):
