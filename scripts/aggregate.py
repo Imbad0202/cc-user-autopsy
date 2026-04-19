@@ -534,7 +534,7 @@ def score_d4_context_mgmt(sessions):
 
 def score_d5_interrupt(rated):
     interrupted = [s for s in rated if s["interrupts"] > 0]
-    if len(interrupted) < _PATTERN_MIN_SAMPLE:
+    if len(interrupted) < 5:
         return {"score": None, "reason": "fewer than 5 interrupted rated sessions", "pattern": None}
     good = [s for s in interrupted if is_good(s["outcome"])]
     P = 100 * len(good) / len(interrupted)
