@@ -21,6 +21,86 @@ WRITING_GOALS = {
 }
 
 
+# Public API pricing in USD per 1M tokens. cache_write uses the 1h ephemeral
+# tier (2× base input) as a conservative upper bound — Claude Code doesn't
+# expose which TTL its caching layer actually picks, and 1h dominates system
+# prompts. Pricing snapshot: 2026-04. Update when anthropic.com/pricing changes.
+PRICING = {
+    "claude-opus-4-7":   {"input": 15.0, "output": 75.0, "cache_write": 30.0, "cache_read": 1.50},
+    "claude-opus-4-6":   {"input": 15.0, "output": 75.0, "cache_write": 30.0, "cache_read": 1.50},
+    "claude-opus-4-5":   {"input": 15.0, "output": 75.0, "cache_write": 30.0, "cache_read": 1.50},
+    "claude-sonnet-4-6": {"input":  3.0, "output": 15.0, "cache_write":  6.0, "cache_read": 0.30},
+    "claude-sonnet-4-5": {"input":  3.0, "output": 15.0, "cache_write":  6.0, "cache_read": 0.30},
+    "claude-haiku-4-5":  {"input": 0.80, "output":  4.0, "cache_write":  1.6, "cache_read": 0.08},
+}
+# Fallback used when model_counts references a model not in PRICING. We
+# choose Opus over cheaper tiers so missing-model cases over-report rather
+# than silently drop to $0 — a recently-released Opus variant is the most
+# likely gap.
+_FALLBACK_PRICING = PRICING["claude-opus-4-6"]
+
+
+def _normalize_model_id(m: str) -> str:
+    """Strip Anthropic date suffixes so 'claude-haiku-4-5-20251001' matches
+    the PRICING table key 'claude-haiku-4-5'."""
+    import re
+    return re.sub(r"-2\d{7}$", "", m)
+
+
+def compute_api_equivalent_cost(sessions):
+    """Estimate what these sessions would have cost at pay-per-use API rates.
+
+    Rationale: Claude Code Max Plan has a flat monthly fee regardless of
+    usage, so this number is informational — useful for understanding the
+    order of magnitude of work done, not for billing.
+
+    Pricing is blended by assistant-message share across models in
+    `model_counts`, since that's the closest proxy we have for the actual
+    per-token billing-model mix. (We don't have per-token model attribution
+    in transcripts — only per-assistant-message.)
+    """
+    if not sessions:
+        return 0.0
+
+    # Aggregate model-message counts to derive weights.
+    model_msgs = Counter()
+    for s in sessions:
+        for m, c in (s.get("model_counts") or {}).items():
+            model_msgs[_normalize_model_id(m)] += c
+    total_msgs = sum(model_msgs.values())
+    if total_msgs == 0:
+        # No model info — assume opus (conservative upper bound).
+        weights = {"claude-opus-4-6": 1.0}
+    else:
+        weights = {m: c / total_msgs for m, c in model_msgs.items()}
+
+    # Blended rate per token-type = Σ weight_m × rate_m
+    def blended(token_type):
+        total = 0.0
+        for m, w in weights.items():
+            p = PRICING.get(m, _FALLBACK_PRICING)
+            total += w * p[token_type]
+        return total
+
+    in_rate = blended("input")
+    out_rate = blended("output")
+    cw_rate = blended("cache_write")
+    cr_rate = blended("cache_read")
+
+    total_in = sum(s.get("input_tokens", 0) or 0 for s in sessions)
+    total_out = sum(s.get("output_tokens", 0) or 0 for s in sessions)
+    total_cw = sum(s.get("cache_create_tokens", 0) or 0 for s in sessions)
+    total_cr = sum(s.get("cache_read_tokens", 0) or 0 for s in sessions)
+
+    return round(
+        (total_in / 1e6) * in_rate +
+        (total_out / 1e6) * out_rate +
+        (total_cw / 1e6) * cw_rate +
+        (total_cr / 1e6) * cr_rate,
+        2,
+    )
+
+
 def parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
@@ -541,6 +621,7 @@ def compute_activity(sessions):
             "current_streak": 0, "longest_streak": 0,
             "cache_creation_tokens": 0, "cache_read_tokens": 0,
             "models": {}, "favorite_model": None,
+            "api_equivalent_cost_usd": 0.0,
         }
 
     total_msgs = sum((s.get("user_msgs", 0) or 0) + (s.get("assistant_msgs", 0) or 0)
@@ -607,6 +688,7 @@ def compute_activity(sessions):
         "cache_read_tokens": cache_read,
         "models": dict(models),
         "favorite_model": models.most_common(1)[0][0] if models else None,
+        "api_equivalent_cost_usd": compute_api_equivalent_cost(sessions),
     }
 
 

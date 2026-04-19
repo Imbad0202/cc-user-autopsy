@@ -58,6 +58,65 @@ _INTERRUPT_RE = re.compile(r"(cancelled|interrupted)", re.IGNORECASE)
 
 import re as _re
 _UUID_RE = _re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", _re.I)
+_AGENT_RE = _re.compile(r"^agent-", _re.I)
+
+
+def _load_jsonl(path: Path):
+    lines = []
+    with path.open(encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                lines.append(json.loads(line))
+            except Exception:
+                continue
+    return lines
+
+
+def _scan_usage(records):
+    """Return usage totals across assistant records: input/output/cache tokens
+    plus a model_counts Counter. Shared by uuid-session and subagent scanning."""
+    asst = [r for r in records if r.get("type") == "assistant"]
+    in_tok = out_tok = cache_create = cache_read = 0
+    model_counts = Counter()
+    for r in asst:
+        msg = r.get("message", {}) if isinstance(r.get("message"), dict) else {}
+        model = msg.get("model")
+        if model:
+            model_counts[model] += 1
+        u = msg.get("usage", {}) or {}
+        in_tok += u.get("input_tokens", 0) or 0
+        out_tok += u.get("output_tokens", 0) or 0
+        cache_create += u.get("cache_creation_input_tokens", 0) or 0
+        cache_read += u.get("cache_read_input_tokens", 0) or 0
+    return {
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+        "cache_creation_input_tokens": cache_create,
+        "cache_read_input_tokens": cache_read,
+        "model_counts": model_counts,
+    }
+
+
+def _parent_sid(records):
+    """Subagent jsonl records carry the parent session's UUID in the
+    `sessionId` field. Return the first one seen, or None."""
+    for r in records:
+        sid = r.get("sessionId")
+        if sid:
+            return sid
+    return None
+
+
+def _earliest_timestamp(records):
+    """Return the first timestamp string across records, or empty if none."""
+    for r in records:
+        ts = r.get("timestamp")
+        if ts:
+            return ts
+    return ""
 
 
 def scan_one(path: Path):
@@ -289,22 +348,110 @@ def main():
     out = Path(args.output).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
 
+    # Pass 1: scan every uuid-named jsonl (one row per real session) and
+    # every agent-* jsonl (subagent fragments). Keep them in memory because
+    # we need to merge subagents into their parent session before emitting.
+    rows_by_sid = {}        # parent_sid -> row dict
+    subagent_usages = []    # list of (parent_sid, usage_dict)
     n_scanned = 0
-    n_emitted = 0
-    n_filtered = 0
-    with out.open("w", encoding="utf-8") as fh:
-        for f in projects_dir.glob("**/*.jsonl"):
-            n_scanned += 1
+    for f in projects_dir.glob("**/*.jsonl"):
+        n_scanned += 1
+        stem = f.stem
+        if _UUID_RE.match(stem):
             row = scan_one(f)
             if row is None:
                 continue
-            if row["assistant_message_count"] < args.min_assistant_msgs:
+            rows_by_sid[row["session_id"]] = row
+        elif _AGENT_RE.match(stem):
+            records = _load_jsonl(f)
+            if not records:
+                continue
+            parent = _parent_sid(records)
+            if not parent:
+                continue
+            usage = _scan_usage(records)
+            usage["_earliest_ts"] = _earliest_timestamp(records)
+            subagent_usages.append((parent, usage))
+
+    # Pass 2: merge subagent usage into parent rows; orphans (parent
+    # transcript absent from disk) get a synthetic row so their tokens are
+    # still visible to downstream cost/activity aggregation.
+    n_merged = 0
+    n_orphan = 0
+    for parent, usage in subagent_usages:
+        row = rows_by_sid.get(parent)
+        if row is not None:
+            row["input_tokens"] += usage["input_tokens"]
+            row["output_tokens"] += usage["output_tokens"]
+            row["cache_creation_input_tokens"] += usage["cache_creation_input_tokens"]
+            row["cache_read_input_tokens"] += usage["cache_read_input_tokens"]
+            mc = Counter(row["model_counts"])
+            mc.update(usage["model_counts"])
+            row["model_counts"] = dict(mc)
+            n_merged += 1
+        else:
+            # Synthetic orphan row — minimal fields; downstream aggregate.py
+            # uses these for activity token/model pool only, not scoring.
+            orphan = rows_by_sid.get(parent)
+            if orphan is None:
+                # Orphan start_time = earliest subagent record timestamp, so
+                # aggregate.py can place it on the timeline / active-day
+                # accounting instead of silently dropping the row.
+                orphan = {
+                    "session_id": parent,
+                    "project_path": "",
+                    "start_time": usage.get("_earliest_ts", ""),
+                    "duration_minutes": 0,
+                    "user_message_count": 0,
+                    "assistant_message_count": sum(usage["model_counts"].values()),
+                    "tool_counts": {},
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "model_counts": {},
+                    "git_commits": 0, "git_pushes": 0,
+                    "user_interruptions": 0, "tool_errors": 0,
+                    "uses_task_agent": False, "uses_subagent": True,
+                    "uses_mcp": False, "uses_web_search": False, "uses_web_fetch": False,
+                    "first_prompt": "",
+                    "user_response_times": [],
+                    "message_hours": [],
+                    "lines_added": 0, "lines_removed": 0, "files_modified": 0,
+                    "orphan_subagent_only": True,
+                }
+                rows_by_sid[parent] = orphan
+            orphan["input_tokens"] += usage["input_tokens"]
+            orphan["output_tokens"] += usage["output_tokens"]
+            orphan["cache_creation_input_tokens"] += usage["cache_creation_input_tokens"]
+            orphan["cache_read_input_tokens"] += usage["cache_read_input_tokens"]
+            mc = Counter(orphan["model_counts"])
+            mc.update(usage["model_counts"])
+            orphan["model_counts"] = dict(mc)
+            orphan["assistant_message_count"] = sum(mc.values())
+            # Keep the earliest ts seen across fragments as the canonical start.
+            ts = usage.get("_earliest_ts", "")
+            if ts and (not orphan.get("start_time") or ts < orphan["start_time"]):
+                orphan["start_time"] = ts
+            n_orphan += 1
+
+    # Pass 3: write out, honoring --min-assistant-msgs. Orphan rows are
+    # exempt from that filter because their purpose is to carry tokens, not
+    # to be scored.
+    n_emitted = 0
+    n_filtered = 0
+    with out.open("w", encoding="utf-8") as fh:
+        for row in rows_by_sid.values():
+            if (not row.get("orphan_subagent_only")) and \
+                    row["assistant_message_count"] < args.min_assistant_msgs:
                 n_filtered += 1
                 continue
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             n_emitted += 1
 
-    msg = f"scanned {n_scanned} jsonl files, emitted {n_emitted} session rows to {out}"
+    msg = (f"scanned {n_scanned} jsonl files, emitted {n_emitted} session rows "
+           f"to {out} (merged {n_merged} subagent runs into parents, "
+           f"{n_orphan} orphan subagent fragments)")
     if n_filtered:
         msg += f" ({n_filtered} filtered by --min-assistant-msgs={args.min_assistant_msgs})"
     print(msg, file=sys.stderr)
