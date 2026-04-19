@@ -399,7 +399,7 @@ def score_d2_rootcause(sessions, rated, facets_coverage):
     iter_sessions = [s for s in rated if s["session_type"] == "iterative_refinement"]
     non_iter_sessions = [s for s in rated if s["session_type"] != "iterative_refinement"]
     pattern = None
-    if len(non_iter_sessions) >= _PATTERN_MIN_SAMPLE and len(iter_sessions) >= 1:
+    if len(non_iter_sessions) >= _PATTERN_MIN_SAMPLE and len(iter_sessions) >= _PATTERN_MIN_SAMPLE:
         non_iter_good = 100 * sum(1 for s in non_iter_sessions if is_good(s["outcome"])) / len(non_iter_sessions)
         iter_good = 100 * sum(1 for s in iter_sessions if is_good(s["outcome"])) / len(iter_sessions)
         pattern = (

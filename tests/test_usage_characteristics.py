@@ -56,18 +56,36 @@ class ScoreD1PatternTests(unittest.TestCase):
 
 class ScoreD2PatternTests(unittest.TestCase):
     def test_pattern_contrasts_non_iterative_vs_iterative(self):
-        """Mixed session_type values with >= 5 non-iterative rated →
-        pattern contrasts good-outcome rates between the two groups."""
+        """Mixed session_type values, both groups >= 5 (after floor raise) →
+        pattern contrasts good-outcome rates between the two groups.
+        Non-iterative floor must also be >= _PATTERN_MIN_SAMPLE."""
+        # 6 iterative + 6 non-iterative, alternating outcomes → 50% good rate each
         sessions = [_session(f"s{i}",
-                             session_type="iterative_refinement" if i < 5 else "fresh_work",
-                             outcome="fully_achieved" if i % 2 else "failed",
-                             friction_counts={"buggy_code": 1} if i < 3 else {})
+                             session_type="iterative_refinement" if i < 6 else "fresh_work",
+                             outcome="fully_achieved" if i % 2 else "failed")
                     for i in range(12)]
         rated = sessions
         result = aggregate.score_d2_rootcause(sessions, rated, facets_coverage=80)
         self.assertIn("pattern", result)
         self.assertIsNotNone(result["pattern"])
+        # Both groups should produce 50% good-outcome rate under alternating outcomes
+        self.assertIn("50%", result["pattern"])
         self.assertIn("iterative_refinement", result["pattern"])
+        # Confirm the sentence structure: "without ... X% ... versus Y% for iterative"
+        self.assertIn("without iterative_refinement", result["pattern"])
+        self.assertIn("versus", result["pattern"])
+
+    def test_pattern_none_when_iterative_group_too_small(self):
+        """Iterative sub-group < _PATTERN_MIN_SAMPLE → pattern is None even
+        if non-iterative group is large. Symmetric floor prevents noise."""
+        sessions = [_session(f"s{i}",
+                             session_type="iterative_refinement" if i < 3 else "fresh_work",
+                             outcome="fully_achieved" if i % 2 else "failed")
+                    for i in range(12)]
+        rated = sessions
+        result = aggregate.score_d2_rootcause(sessions, rated, facets_coverage=80)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
 
     def test_pattern_none_when_facets_coverage_insufficient(self):
         """Low facet coverage → score is None AND pattern is None (key still present)."""
