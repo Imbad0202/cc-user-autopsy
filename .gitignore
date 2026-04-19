@@ -44,3 +44,14 @@ evals/iteration-*/
 session-meta/
 facets/
 usage-data/
+
+# Defensive: credentials / secrets patterns. Nothing currently matches these,
+# but the rules guard against accidental commits of ad-hoc credential files.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json
+auth.json
