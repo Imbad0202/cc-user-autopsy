@@ -1746,8 +1746,13 @@ function drawLineChart(id, labels, series, options = {}) {
       return;
     }
     const legendBottom = drawLegend(ctx, series.map((item) => ({ label: item.label, color: item.color })), 18, 18, width - 36);
-    const plot = { left: 48, top: legendBottom + 8, width: width - 70, height: height - legendBottom - 72 };
     const yMax = options.maxValue !== undefined ? options.maxValue : niceMax(maxValue);
+    ctx.save();
+    ctx.font = FONT_MONO_SMALL;
+    const measure = (s) => ctx.measureText(s).width;
+    const yAxisMaxTickLabel = (options.formatter || formatTick)(yMax);
+    const plot = computeBarPlot({ width, height, legendBottom, labels, charWidth: measure, yAxisMaxTickLabel });
+    ctx.restore();
     const ticks = ticksFor(yMax).map((raw) => ({ raw, value: raw / yMax }));
     drawPlotFrame(ctx, plot, ticks, options.formatter || formatTick);
     // uses centered slot math; same function used by drawXAxisLabels so points align with labels
@@ -1781,7 +1786,15 @@ function drawDualChart(id, labels, bars, line, options = {}) {
       18,
       width - 36,
     );
-    const plot = { left: 48, top: legendBottom + 8, width: width - 90, height: height - legendBottom - 72 };
+    ctx.save();
+    ctx.font = FONT_MONO_SMALL;
+    const measure = (s) => ctx.measureText(s).width;
+    // For dual-axis: pick the formatter/max that yields the longer tick label for the left margin.
+    const leftTickLabel = (options.leftFormatter || formatTick)(leftMax);
+    const rightTickLabel = (options.rightFormatter || formatTick)(rightMax);
+    const yAxisMaxTickLabel = leftTickLabel.length >= rightTickLabel.length ? leftTickLabel : rightTickLabel;
+    const plot = computeBarPlot({ width, height, legendBottom, labels, charWidth: measure, yAxisMaxTickLabel });
+    ctx.restore();
     const leftTicks = ticksFor(leftMax).map((raw) => ({ raw, value: raw / leftMax }));
     const rightTicks = ticksFor(rightMax).map((raw) => ({ raw, value: raw / rightMax }));
     drawPlotFrame(ctx, plot, leftTicks, options.leftFormatter || formatTick, rightTicks, options.rightFormatter || formatTick);
@@ -1822,7 +1835,15 @@ function drawDualLineChart(id, labels, leftSeries, rightSeries, options = {}) {
       18,
       width - 36,
     );
-    const plot = { left: 48, top: legendBottom + 8, width: width - 90, height: height - legendBottom - 72 };
+    ctx.save();
+    ctx.font = FONT_MONO_SMALL;
+    const measure = (s) => ctx.measureText(s).width;
+    // For dual-axis: pick the formatter/max that yields the longer tick label for the left margin.
+    const leftTickLabel = (options.leftFormatter || formatTick)(leftMax);
+    const rightTickLabel = (options.rightFormatter || formatTick)(rightMax);
+    const yAxisMaxTickLabel = leftTickLabel.length >= rightTickLabel.length ? leftTickLabel : rightTickLabel;
+    const plot = computeBarPlot({ width, height, legendBottom, labels, charWidth: measure, yAxisMaxTickLabel });
+    ctx.restore();
     const leftTicks = ticksFor(leftMax).map((raw) => ({ raw, value: raw / leftMax }));
     const rightTicks = ticksFor(rightMax).map((raw) => ({ raw, value: raw / rightMax }));
     drawPlotFrame(ctx, plot, leftTicks, options.leftFormatter || formatTick, rightTicks, options.rightFormatter || formatTick);

@@ -142,3 +142,39 @@ test('segmentsWithoutNulls handles leading/trailing nulls', () => {
   assert.equal(runs.length, 1);
   assert.equal(runs[0].length, 2);
 });
+
+// Regression tests: computeBarPlot contract for line-chart label budgets
+// (Fig 13 labels like "2026-W15" must not clip at bottom or right edge)
+test('computeBarPlot gives line charts enough bottom margin for long rotated labels', () => {
+  // Regression: Fig 13-style labels like "2026-W15" (~52px text) must fit.
+  const labels = Array.from({length: 14}, (_, i) => `2026-W${String(i+1).padStart(2, '0')}`);
+  const plot = computeBarPlot({
+    width: 780, height: 260, legendBottom: 30, labels, charWidth,
+    yAxisMaxTickLabel: '100',
+  });
+  const longest = Math.max(...labels.map(l => measureRotatedLabel(l, charWidth)));
+  const bottomBudget = plot.canvasHeight - (plot.top + plot.height);
+  assert.ok(
+    bottomBudget >= longest,
+    `labelBand ${bottomBudget}px must fit longest rotated label ${longest}px`,
+  );
+});
+
+test('computeBarPlot gives enough right margin for rightmost rotated label', () => {
+  const labels = Array.from({length: 14}, (_, i) => `2026-W${String(i+1).padStart(2, '0')}`);
+  const plot = computeBarPlot({
+    width: 780, height: 260, legendBottom: 30, labels, charWidth,
+    yAxisMaxTickLabel: '100',
+  });
+  // Last slot center sits at plot.left + groupWidth * (labels.length - 0.5).
+  // Label extends leftward from center under -45° rotate; the right half
+  // of rotated label width must stay inside canvas.
+  const groupWidth = plot.width / labels.length;
+  const lastCenter = plot.left + groupWidth * (labels.length - 0.5);
+  const rightBudget = plot.canvasWidth - lastCenter;
+  const rotatedHalf = Math.max(...labels.map(l => measureRotatedLabel(l, charWidth))) / 2;
+  assert.ok(
+    rightBudget >= rotatedHalf,
+    `right budget ${rightBudget}px must fit half of longest rotated label ${rotatedHalf}px`,
+  );
+});
