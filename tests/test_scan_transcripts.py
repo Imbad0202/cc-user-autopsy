@@ -42,6 +42,21 @@ def _setup_fixture(root: Path):
     return pdir
 
 
+def _run_single_row_session(rows, sid):
+    """Write a synthetic jsonl with `rows` at `sid`, invoke scanner, return the first emitted row.
+    Raises AssertionError if the scanner didn't emit exactly one row."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        pdir = td / "projects" / "-proj"
+        pdir.mkdir(parents=True)
+        (pdir / f"{sid}.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+        out = td / "out.jsonl"
+        _run_scanner(td / "projects", out)
+        emitted = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+        assert len(emitted) == 1, f"expected 1 row, got {len(emitted)}: {emitted}"
+        return emitted[0]
+
+
 class ScanTranscriptsTests(unittest.TestCase):
     def test_reproduces_meta_counts(self):
         """Scanner output for fixture must be close to ground-truth session-meta.
@@ -274,64 +289,37 @@ class ScanTranscriptsTests(unittest.TestCase):
 
 class HitOutputLimitTests(unittest.TestCase):
     def test_row_marks_hit_output_limit_when_max_tokens_seen(self):
-        """Any assistant row with stop_reason='max_tokens' anywhere in the
-        session should flip the session-level hit_output_limit flag True."""
+        """stop_reason lives on the inner `message` dict, not the outer transcript
+        record — easy to miss, so both polarities are asserted."""
+        sid = "abc12345-0000-0000-0000-000000000001"
         rows = [
-            {"type": "user", "sessionId": "abc12345-0000-0000-0000-000000000001",
+            {"type": "user", "sessionId": sid,
              "message": {"role": "user", "content": "hi"},
              "timestamp": "2026-04-19T10:00:00Z"},
-            {"type": "assistant", "sessionId": "abc12345-0000-0000-0000-000000000001",
+            {"type": "assistant", "sessionId": sid,
              "message": {"role": "assistant", "content": "truncated...",
                          "stop_reason": "max_tokens",
                          "usage": {"input_tokens": 10, "output_tokens": 8000}},
              "timestamp": "2026-04-19T10:00:05Z"},
         ]
-        with tempfile.TemporaryDirectory() as td:
-            td = Path(td)
-            pdir = td / "projects" / "-proj"
-            pdir.mkdir(parents=True)
-            p = pdir / "abc12345-0000-0000-0000-000000000001.jsonl"
-            p.write_text("\n".join(json.dumps(r) for r in rows))
-            out = td / "out.jsonl"
-            result = subprocess.run(
-                [sys.executable, str(SCANNER),
-                 "--projects-dir", str(td / "projects"),
-                 "--output", str(out),
-                 "--min-assistant-msgs", "0"],
-                capture_output=True, text=True, check=True,
-            )
-            emitted = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
-            self.assertEqual(len(emitted), 1)
-            self.assertTrue(emitted[0].get("hit_output_limit"))
+        emitted = _run_single_row_session(rows, sid)
+        self.assertTrue(emitted.get("hit_output_limit"))
 
     def test_row_hit_output_limit_false_when_no_max_tokens(self):
+        """Complementary polarity: non-max-tokens stop must not flip the flag."""
+        sid = "def45678-0000-0000-0000-000000000002"
         rows = [
-            {"type": "user", "sessionId": "def45678-0000-0000-0000-000000000002",
+            {"type": "user", "sessionId": sid,
              "message": {"role": "user", "content": "hi"},
              "timestamp": "2026-04-19T10:00:00Z"},
-            {"type": "assistant", "sessionId": "def45678-0000-0000-0000-000000000002",
+            {"type": "assistant", "sessionId": sid,
              "message": {"role": "assistant", "content": "done",
                          "stop_reason": "end_turn",
                          "usage": {"input_tokens": 10, "output_tokens": 20}},
              "timestamp": "2026-04-19T10:00:05Z"},
         ]
-        with tempfile.TemporaryDirectory() as td:
-            td = Path(td)
-            pdir = td / "projects" / "-proj"
-            pdir.mkdir(parents=True)
-            p = pdir / "def45678-0000-0000-0000-000000000002.jsonl"
-            p.write_text("\n".join(json.dumps(r) for r in rows))
-            out = td / "out.jsonl"
-            result = subprocess.run(
-                [sys.executable, str(SCANNER),
-                 "--projects-dir", str(td / "projects"),
-                 "--output", str(out),
-                 "--min-assistant-msgs", "0"],
-                capture_output=True, text=True, check=True,
-            )
-            emitted = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
-            self.assertEqual(len(emitted), 1)
-            self.assertFalse(emitted[0].get("hit_output_limit", False))
+        emitted = _run_single_row_session(rows, sid)
+        self.assertFalse(emitted.get("hit_output_limit", False))
 
 
 if __name__ == "__main__":
