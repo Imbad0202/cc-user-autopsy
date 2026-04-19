@@ -438,5 +438,80 @@ class ScoreD6PatternTests(unittest.TestCase):
         self.assertNotIn("30%", result["pattern"])
 
 
+class ScoreD7PatternTests(unittest.TestCase):
+    def _d7_session(self, sid, goal_cats=None, friction_counts=None):
+        """Minimal session dict for score_d7_writing.
+
+        score_d7_writing accesses s.get("goal_cats", {}) and
+        s["friction_counts"].get("misunderstood_request", 0).
+        The base _session() provides friction_counts={}, but not goal_cats,
+        so we set both explicitly here.
+        """
+        return _session(
+            sid,
+            goal_cats=goal_cats if goal_cats is not None else {},
+            friction_counts=friction_counts if friction_counts is not None else {},
+        )
+
+    def test_pattern_contrasts_writing_vs_non_writing(self):
+        """6 writing sessions (avg 2.0 misunderstood_request) +
+        6 non-writing sessions (avg 1.0 misunderstood_request) →
+        pattern mentions '2.0', '1.0', and 'Writing'.
+        """
+        writing = [
+            self._d7_session(f"w{i}",
+                             goal_cats={"writing": 1},
+                             friction_counts={"misunderstood_request": 2})
+            for i in range(6)
+        ]
+        non_writing = [
+            self._d7_session(f"nw{i}",
+                             goal_cats={"code_development": 1},
+                             friction_counts={"misunderstood_request": 1})
+            for i in range(6)
+        ]
+        rated = writing + non_writing
+        result = aggregate.score_d7_writing(rated)
+        self.assertIn("pattern", result)
+        self.assertIsNotNone(result["pattern"])
+        self.assertIn("2.0", result["pattern"])
+        self.assertIn("1.0", result["pattern"])
+        self.assertIn("Writing", result["pattern"])
+
+    def test_pattern_none_when_writing_group_too_small(self):
+        """<5 writing sessions → early return fires (score is None), pattern key present = None."""
+        writing = [
+            self._d7_session(f"w{i}", goal_cats={"writing": 1},
+                             friction_counts={"misunderstood_request": 2})
+            for i in range(4)
+        ]
+        non_writing = [
+            self._d7_session(f"nw{i}", goal_cats={"code_development": 1},
+                             friction_counts={"misunderstood_request": 1})
+            for i in range(6)
+        ]
+        result = aggregate.score_d7_writing(writing + non_writing)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+        self.assertIsNone(result["score"])
+
+    def test_pattern_none_when_non_writing_group_too_small(self):
+        """≥5 writing + <5 non-writing → score is set, but symmetric floor means pattern is None."""
+        writing = [
+            self._d7_session(f"w{i}", goal_cats={"writing": 1},
+                             friction_counts={"misunderstood_request": 2})
+            for i in range(6)
+        ]
+        non_writing = [
+            self._d7_session(f"nw{i}", goal_cats={"code_development": 1},
+                             friction_counts={"misunderstood_request": 1})
+            for i in range(4)
+        ]
+        result = aggregate.score_d7_writing(writing + non_writing)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+        self.assertIsNotNone(result["score"])
+
+
 if __name__ == "__main__":
     unittest.main()

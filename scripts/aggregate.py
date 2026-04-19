@@ -619,8 +619,8 @@ def score_d7_writing(rated):
         s for s in rated
         if any(g in WRITING_GOALS for g in s.get("goal_cats", {}).keys())
     ]
-    if len(writing) < 5:
-        return {"score": None, "reason": "fewer than 5 writing sessions"}
+    if len(writing) < _PATTERN_MIN_SAMPLE:
+        return {"score": None, "reason": "fewer than 5 writing sessions", "pattern": None}
     misu = sum(s["friction_counts"].get("misunderstood_request", 0) for s in writing)
     W = misu / len(writing)
     thresholds = [(0.1, 10), (0.3, 8), (0.6, 7), (1.0, 5)]
@@ -629,11 +629,22 @@ def score_d7_writing(rated):
         if W <= thr:
             score = sc
             break
+    non_writing = [s for s in rated
+                   if not any(g in WRITING_GOALS for g in s.get("goal_cats", {}).keys())]
+    pattern = None
+    if len(writing) >= _PATTERN_MIN_SAMPLE and len(non_writing) >= _PATTERN_MIN_SAMPLE:
+        w_avg = sum(s["friction_counts"].get("misunderstood_request", 0) for s in writing) / len(writing)
+        nw_avg = sum(s["friction_counts"].get("misunderstood_request", 0) for s in non_writing) / len(non_writing)
+        pattern = (
+            f"Writing-related sessions averaged {w_avg:.1f} misunderstood_request "
+            f"events per session, versus {nw_avg:.1f} for other sessions."
+        )
     return {
         "score": score,
         "metric_misunderstood_per_writing_session": round(W, 2),
         "metric_writing_sessions": len(writing),
         "explanation": f"Across {len(writing)} writing-related sessions, avg misunderstood_request per session is {W:.2f}.",
+        "pattern": pattern,
     }
 
 
