@@ -619,6 +619,17 @@ class PatternRenderTests(unittest.TestCase):
                       "XSS payload must be HTML-escaped to &lt;script&gt; in output")
 
 
+class HowScoresRelateTests(unittest.TestCase):
+    def test_how_to_read_hr_mode_includes_relate_entry(self):
+        """build_html.py source must reference both locale keys for the new
+        HOW SCORES RELATE dt/dd entry in the HR how-to-read block."""
+        src = (Path(__file__).resolve().parent.parent / "scripts" / "build_html.py").read_text()
+        self.assertIn('how_to_read_key_relate', src,
+                      "build_html.py must reference locale key 'how_to_read_key_relate'")
+        self.assertIn('how_to_read_val_relate', src,
+                      "build_html.py must reference locale key 'how_to_read_val_relate'")
+
+
 class ScoreDisclaimerTests(unittest.TestCase):
     def test_disclaimer_placeholder_in_template(self):
         """Template source must contain both the $score_disclaimer placeholder
