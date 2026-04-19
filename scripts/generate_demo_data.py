@@ -5,6 +5,7 @@ No identifiable information; all projects/sids/summaries are fabricated.
 """
 import json
 import random
+import shutil
 import string
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -16,7 +17,12 @@ OUT_DIR = Path("/tmp/cc-autopsy-demo")
 META_DIR = OUT_DIR / "usage-data/session-meta"
 FACETS_DIR = OUT_DIR / "usage-data/facets"
 PROJECTS_DIR = OUT_DIR / "projects"
+# Wipe stale outputs from previous runs — without this, transcript files
+# accumulate across regenerations and metrics drift toward whichever schema
+# was most recent (e.g. half the assistant records lack `model`).
 for d in (META_DIR, FACETS_DIR, PROJECTS_DIR):
+    if d.exists():
+        shutil.rmtree(d)
     d.mkdir(parents=True, exist_ok=True)
 
 PROJECTS = [
@@ -32,7 +38,20 @@ PROJECTS = [
     "design-lab",
     "design-lab",
     "prod-monitor",
+    # Long-named project to stress horizontal-bar / chart label rendering.
+    "internal-platform-observability-toolkit",
 ]
+
+# Realistic Claude Code model mix as of 2026-04. Heavy users see Opus 4.7
+# dominate, with some Sonnet 4.6 for cheaper subagent-style work and a tiny
+# fraction of Haiku 4.5 (now banned in this user's setup, but historical
+# data still surfaces it). Weights drive both meta.input_model_counts and
+# the per-assistant `model` field on transcripts.
+MODEL_MIX = {
+    "claude-opus-4-7": 0.62,
+    "claude-sonnet-4-6": 0.30,
+    "claude-haiku-4-5": 0.08,
+}
 
 SESSION_TYPES = {
     "multi_task": 0.35,
@@ -298,10 +317,52 @@ def gen_session(sid, start_time, project):
     return meta, facet
 
 
+def _gen_usage(intensity):
+    """Synthesize an assistant `usage` dict resembling real Claude Code data.
+    Cache-read dominates input volume (typical hit rate >95%), so the totals
+    we emit must reflect that for downstream reports to look realistic."""
+    in_tok = max(50, int(random.gauss(800 * intensity, 300)))
+    out_tok = max(50, int(random.gauss(2500 * intensity, 1200)))
+    cache_create = max(0, int(random.gauss(40_000 * intensity, 15_000)))
+    cache_read = max(0, int(random.gauss(450_000 * intensity, 180_000)))
+    return {
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+        "cache_creation_input_tokens": cache_create,
+        "cache_read_input_tokens": cache_read,
+    }
+
+
 def gen_transcript(sid, meta, facet):
-    """Minimal .jsonl — enough for sample_sessions.py to parse."""
+    """Minimal .jsonl — enough for sample_sessions.py and scan_transcripts.py
+    to parse. Each assistant record carries a `model` and a `usage` dict so
+    the cache-token / model-mix / API-equivalent-cost panels render."""
     lines = []
     start = datetime.fromisoformat(meta["start_time"].replace("Z", "+00:00"))
+    intensity = max(0.2, sum(meta["tool_counts"].values()) / 30)
+    # Pick a primary model for this session — heavy users tend to stick to
+    # one per session — with occasional secondary usage on iterative work.
+    primary_model = weighted_choice(MODEL_MIX)
+    secondary_model = (
+        weighted_choice({m: w for m, w in MODEL_MIX.items() if m != primary_model})
+        if random.random() < 0.25 else None
+    )
+
+    def asst_record(text_or_content, ts, model):
+        if isinstance(text_or_content, str):
+            content = [{"type": "text", "text": text_or_content}]
+        else:
+            content = text_or_content
+        return {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "model": model,
+                "content": content,
+                "usage": _gen_usage(intensity),
+            },
+            "timestamp": ts,
+        }
 
     # Record 1: user message
     lines.append({
@@ -317,14 +378,7 @@ def gen_transcript(sid, meta, facet):
     content = [{"type": "text", "text": "I'll get started on that."}]
     for tn in tool_names:
         content.append({"type": "tool_use", "name": tn, "id": f"t_{random.randint(1,99999)}", "input": {}})
-    lines.append({
-        "type": "assistant",
-        "message": {
-            "role": "assistant",
-            "content": content,
-        },
-        "timestamp": (start + timedelta(seconds=30)).isoformat(),
-    })
+    lines.append(asst_record(content, (start + timedelta(seconds=30)).isoformat(), primary_model))
     # Some back-and-forth
     for i in range(random.randint(2, 8)):
         lines.append({
@@ -340,14 +394,14 @@ def gen_transcript(sid, meta, facet):
             },
             "timestamp": (start + timedelta(minutes=i + 1)).isoformat(),
         })
-        lines.append({
-            "type": "assistant",
-            "message": {
-                "role": "assistant",
-                "content": [{"type": "text", "text": "Understood, revising."}],
-            },
-            "timestamp": (start + timedelta(minutes=i + 1, seconds=40)).isoformat(),
-        })
+        # Most turns use the primary model; if a secondary is set, rotate
+        # in occasionally to mimic a subagent dispatch.
+        model = secondary_model if (secondary_model and random.random() < 0.3) else primary_model
+        lines.append(asst_record(
+            "Understood, revising.",
+            (start + timedelta(minutes=i + 1, seconds=40)).isoformat(),
+            model,
+        ))
     return lines
 
 
