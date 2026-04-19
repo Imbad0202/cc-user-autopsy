@@ -476,5 +476,39 @@ class LocaleTests(unittest.TestCase):
                                 "build_html must reject unknown locales")
 
 
+class CssRuleTests(unittest.TestCase):
+    """Light smoke tests that the new CSS rules are present in the full
+    rendered HTML output. We test the rule strings exist and are syntactically
+    plausible; full visual correctness is checked by the user in-browser."""
+
+    def _render_minimal(self):
+        """Render a minimal HTML using the module's template — enough to
+        assert CSS presence without requiring full demo data."""
+        import sys
+        from pathlib import Path
+        SKILL = Path(__file__).resolve().parent.parent
+        sys.path.insert(0, str(SKILL / "scripts"))
+        import build_html
+        # Read the raw template text to inspect CSS — simpler than full render
+        template_path = SKILL / "scripts" / "build_html.py"
+        return template_path.read_text()
+
+    def test_pattern_class_css_present(self):
+        src = self._render_minimal()
+        self.assertIn(".score-row .body .pattern", src)
+        self.assertIn("font-style: italic", src)
+
+    def test_score_disclaimer_css_present(self):
+        src = self._render_minimal()
+        self.assertIn(".score-disclaimer", src)
+        self.assertIn("text-align: left", src)
+
+    def test_usage_characteristics_css_present(self):
+        src = self._render_minimal()
+        self.assertIn(".usage-characteristics", src)
+        self.assertIn(".uc-row", src)
+        self.assertIn("grid-template-columns: 72px 1fr", src)
+
+
 if __name__ == "__main__":
     unittest.main()

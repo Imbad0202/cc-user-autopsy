@@ -662,6 +662,83 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .score-row.weak .score { color: var(--oxblood); }
   .score-row.na .score { color: var(--ink-muted); font-size: 22px; padding-top: 12px; }
 
+  .score-row .body .pattern {
+    font-family: var(--sans);
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--ink-muted);
+    font-style: italic;
+    margin: 6px 0 0 0;
+  }
+
+  .score-disclaimer {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    margin: 0 0 14px 0;
+    text-align: left;
+  }
+
+  .usage-characteristics {
+    margin: 28px 0 0 0;
+    padding: 20px 0 0 0;
+    border-top: 1px solid var(--rule);
+  }
+  .uc-header {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    margin: 0 0 4px 0;
+  }
+  .uc-note {
+    font-family: var(--sans);
+    font-size: 12.5px;
+    color: var(--ink-muted);
+    margin: 0 0 14px 0;
+  }
+  .uc-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .uc-row {
+    display: grid;
+    grid-template-columns: 72px 1fr;
+    gap: 16px;
+    padding: 8px 0;
+    border-bottom: 1px dotted var(--rule);
+    align-items: baseline;
+  }
+  .uc-row:last-child { border-bottom: none; }
+  .uc-row .pct {
+    font-family: var(--serif);
+    font-variation-settings: "opsz" 24, "wght" 400;
+    font-size: 24px;
+    line-height: 1;
+    color: var(--ink);
+    text-align: right;
+    letter-spacing: -0.01em;
+  }
+  .uc-body .label {
+    font-family: var(--sans);
+    font-size: 14.5px;
+    line-height: 1.45;
+    color: var(--ink);
+    margin: 0 0 2px 0;
+  }
+  .uc-body .tip {
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--ink-muted);
+    font-style: italic;
+    margin: 0;
+  }
+
   /* ---- Identity header ---- */
   .identity-header {
     margin: 0 0 48px 0;
