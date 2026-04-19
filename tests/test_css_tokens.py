@@ -31,6 +31,11 @@ CLEANED_COMPONENTS: list[tuple[str, str, str]] = [
         "  /* Charts */\n  .chart-box {",
         "    text-transform: uppercase;\n  }",
     ),
+    (
+        "details.evidence",
+        "  /* §06 evidence library */\n  details.evidence {",
+        "    word-break: break-all;\n  }",
+    ),
 ]
 
 # Hard-coded px values that are allowed inside cleaned component blocks.
@@ -39,11 +44,14 @@ HARDCODE_WHITELIST_PX = {
     # --- Universal ---
     "1px",                                   # border width
 
-    # --- Sparse typographic trim (mono caps labels) ---
-    "9.5px", "10.5px", "11.5px", "14.5px",
+    # --- Sparse typographic trim (mono caps labels + evidence prose) ---
+    "9.5px", "10.5px", "11.5px", "13px", "14px", "14.5px",
 
     # --- Display-size typography (unique hero numerics) ---
     "32px",                                  # .metric .n display-size number
+
+    # --- Evidence summary grid layout constants (tri-column summary) ---
+    "80px", "90px", "106px",                 # grid cols + p padding-left alignment
 
     # --- Fixed chart canvas heights (not spacing) ---
     "260px", "340px", "420px",              # .chart-box .short / default / .tall

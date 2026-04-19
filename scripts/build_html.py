@@ -1037,7 +1037,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   /* §06 evidence library */
   details.evidence {
     border-top: 1px solid var(--rule);
-    padding: 14px 0;
+    padding: var(--space-7) 0;
     margin: 0;
   }
   details.evidence:last-of-type { border-bottom: 1px solid var(--rule); }
@@ -1049,8 +1049,8 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     line-height: 1.4;
     color: var(--ink);
     display: grid;
-    grid-template-columns: 90px 1fr 80px;
-    gap: 16px;
+    grid-template-columns: 90px 1fr 80px;   /* summary tri-column layout */
+    gap: var(--space-8);
     align-items: center;
   }
   details.evidence summary::-webkit-details-marker { display: none; }
@@ -1060,7 +1060,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--ink-muted);
-    padding: 3px 8px;
+    padding: var(--tag-padding-y) var(--tag-padding-x);
     border: 1px solid var(--rule);
     text-align: center;
     border-radius: 1px;
@@ -1082,14 +1082,14 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     font-size: 11.5px;
     color: var(--ink-muted);
   }
-  details.evidence[open] summary { margin-bottom: 14px; }
+  details.evidence[open] summary { margin-bottom: var(--space-7); }
   details.evidence[open] summary .sid { color: var(--accent); }
   details.evidence p {
     font-family: var(--sans);
     font-size: 14px;
     line-height: 1.55;
-    margin: 6px 0;
-    padding-left: 106px;
+    margin: var(--space-3) 0;
+    padding-left: 106px;     /* aligns after summary's 90px col + space-8 gap */
   }
   details.evidence p code {
     font-size: 0.85em;
