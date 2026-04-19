@@ -164,20 +164,22 @@ class ScoreD3PatternTests(unittest.TestCase):
 
 class ScoreD4PatternTests(unittest.TestCase):
     def _d4_session(self, sid, duration_min=10, git_commits=1,
-                    hit_output_limit=False, interrupts=0, project_key="proj-a"):
+                    friction_counts=None, interrupts=0, project_key="proj-a"):
         """Minimal session dict for score_d4_context_mgmt.
 
         score_d4 accesses friction_counts, duration_min, interrupts,
         project_key, and git_commits without .get() — all must be present.
+        The "hit output limit" signal is read from friction_counts (same source
+        as the score and explanation), not from the top-level hit_output_limit
+        field populated by a different scanner code path.
         """
         return _session(
             sid,
             duration_min=duration_min,
             git_commits=git_commits,
-            hit_output_limit=hit_output_limit,
             interrupts=interrupts,
             project_key=project_key,
-            friction_counts={},
+            friction_counts=friction_counts if friction_counts is not None else {},
         )
 
     def test_pattern_contrasts_long_no_commit_vs_other(self):
@@ -185,15 +187,24 @@ class ScoreD4PatternTests(unittest.TestCase):
         3 of the long-no-commit sessions hit output limit → 50%.
         1 of the other sessions hits output limit → ~17%.
         Pattern must contain '50%' AND '17%'.
+
+        The "hit output limit" signal must come from friction_counts
+        (key 'output_token_limit_exceeded'), the same source used by the
+        score and explanation — not from hit_output_limit, which is a
+        separate scanner field that can diverge.
         """
         long_no_commit = [
-            self._d4_session(f"lnc{i}", duration_min=25, git_commits=0,
-                             hit_output_limit=(i < 3))
+            self._d4_session(
+                f"lnc{i}", duration_min=25, git_commits=0,
+                friction_counts={"output_token_limit_exceeded": 1} if i < 3 else {},
+            )
             for i in range(6)
         ]
         other = [
-            self._d4_session(f"oth{i}", duration_min=10, git_commits=2,
-                             hit_output_limit=(i == 0))
+            self._d4_session(
+                f"oth{i}", duration_min=10, git_commits=2,
+                friction_counts={"output_token_limit_exceeded": 1} if i == 0 else {},
+            )
             for i in range(6)
         ]
         sessions = long_no_commit + other

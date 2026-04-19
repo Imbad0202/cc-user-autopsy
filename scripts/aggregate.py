@@ -513,8 +513,9 @@ def score_d4_context_mgmt(sessions):
     other          = [s for s in sessions if not (s.get("duration_min", 0) > 20 and s.get("git_commits", 0) == 0)]
     pattern = None
     if len(long_no_commit) >= _PATTERN_MIN_SAMPLE and len(other) >= _PATTERN_MIN_SAMPLE:
-        lnc_rate   = 100 * sum(1 for s in long_no_commit if s.get("hit_output_limit", False)) / len(long_no_commit)
-        other_rate = 100 * sum(1 for s in other         if s.get("hit_output_limit", False)) / len(other)
+        otl_ids    = {id(s) for s in otl}
+        lnc_rate   = 100 * sum(1 for s in long_no_commit if id(s) in otl_ids) / len(long_no_commit)
+        other_rate = 100 * sum(1 for s in other         if id(s) in otl_ids) / len(other)
         pattern = (
             f"Sessions over 20 minutes without a commit hit output-token-limit "
             f"{lnc_rate:.0f}% of the time, versus {other_rate:.0f}% for other sessions."
