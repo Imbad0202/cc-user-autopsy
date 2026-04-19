@@ -1060,7 +1060,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--ink-muted);
-    padding: var(--tag-padding-y) var(--tag-padding-x);
+    padding: var(--tag-padding-y) var(--tag-padding-x);   /* 2px 6px, intentional -1/-2px from orig 3/8 */
     border: 1px solid var(--rule);
     text-align: center;
     border-radius: 1px;
@@ -1072,7 +1072,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   details.evidence summary .tag.top_token { color: var(--plum); border-color: var(--plum); }
   details.evidence summary .sid {
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: var(--text-sm);
     color: var(--ink-soft);
   }
   details.evidence summary .proj { color: var(--ink); }

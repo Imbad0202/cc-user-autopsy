@@ -44,8 +44,11 @@ HARDCODE_WHITELIST_PX = {
     # --- Universal ---
     "1px",                                   # border width
 
-    # --- Sparse typographic trim (mono caps labels + evidence prose) ---
-    "9.5px", "10.5px", "11.5px", "13px", "14px", "14.5px",
+    # --- Sparse typographic trim (mono caps labels, no token home) ---
+    "9.5px", "10.5px", "11.5px", "14.5px",
+
+    # --- Evidence prose font-size (no --text-* step between 13 and 15) ---
+    "14px",                                  # details.evidence p — body text
 
     # --- Display-size typography (unique hero numerics) ---
     "32px",                                  # .metric .n display-size number
@@ -130,9 +133,10 @@ class NoHardcodedSpacingTests(unittest.TestCase):
 
     def test_cleaned_components_have_no_hardcoded_px(self):
         pattern = re.compile(r"(?<!-)\b(\d+(?:\.\d+)?px)\b")
+        css_comment = re.compile(r"/\*.*?\*/", re.DOTALL)
         for name, start, end in CLEANED_COMPONENTS:
             with self.subTest(component=name):
-                block = self._block(start, end)
+                block = css_comment.sub("", self._block(start, end))
                 hits = [m.group(1) for m in pattern.finditer(block)]
                 leaked = [h for h in hits if h not in HARDCODE_WHITELIST_PX]
                 self.assertEqual(
