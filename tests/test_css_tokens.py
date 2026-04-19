@@ -26,17 +26,23 @@ CLEANED_COMPONENTS: list[tuple[str, str, str]] = [
 # Hard-coded px values that are allowed inside cleaned component blocks.
 # Each entry should have a reason documented in the plan or in later tasks.
 HARDCODE_WHITELIST_PX = {
-    # Universal
+    # --- Universal ---
     "1px",                                   # border width
-    "4px",                                   # accent border-left width (visual indicator, not spacing scale)
-    # Sparse typographic trim (mono caps labels)
+
+    # --- Sparse typographic trim (mono caps labels) ---
     "9.5px", "10.5px", "11.5px", "14.5px",
-    # .profile-card unique values (component-specific, not scale-worthy)
-    "34px",                                  # profile-card horizontal padding (asymmetric with vertical)
-    "48px",                                  # profile-card bottom margin (double section rhythm)
+
+    # --- Border indicator widths (used as visual accents, not spacing) ---
+    "4px",                                   # profile-card accent border-left
+
+    # --- Responsive breakpoints (shared across components) ---
+    "640px",                                 # mobile breakpoint (max-width)
+
+    # --- .profile-card unique values (component-specific, not scale-worthy) ---
+    "34px",                                  # horizontal padding (asymmetric with vertical)
+    "48px",                                  # bottom margin (component-unique, not on 2px scale)
     "22px",                                  # .profile-lede font-size (unique hero-ish)
     "12px",                                  # .profile-cell .sub font-size (small-print)
-    "640px",                                 # responsive breakpoint (not a spacing value)
 }
 
 

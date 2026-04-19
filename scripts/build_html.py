@@ -384,7 +384,9 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     --leading-normal: 1.55;
     --leading-loose: 1.7;
 
-    /* --- Semantic aliases (design intent — add new ones as components need them) --- */
+    /* --- Semantic aliases (design intent — add new ones as components need them).
+       --card-padding / --card-radius were considered but removed pending a concrete
+       consumer; .profile-card currently uses primitives directly. --- */
     --section-gap: var(--space-15);
     --tag-padding-y: var(--space-1);
     --tag-padding-x: var(--space-3);
