@@ -39,6 +39,8 @@ PRICING = {
 # likely gap.
 _FALLBACK_PRICING = PRICING["claude-opus-4-6"]
 
+_PATTERN_MIN_SAMPLE = 5  # minimum group size to emit a per-dimension pattern contrast sentence
+
 
 def _normalize_model_id(m: str) -> str:
     """Strip Anthropic date suffixes so 'claude-haiku-4-5-20251001' matches
@@ -323,6 +325,14 @@ def is_good(outcome):
     return outcome in ("fully_achieved", "mostly_achieved")
 
 
+def _overall_good_rate(rated):
+    """Overall good-outcome rate across rated sessions, as a 0-100 float.
+    Returns 0.0 when rated is empty — keeps arithmetic contexts safe."""
+    if not rated:
+        return 0.0
+    return 100 * sum(1 for s in rated if is_good(s["outcome"])) / len(rated)
+
+
 # -------- Scoring rules --------
 
 def score_d1_delegation(sessions, rated):
@@ -352,15 +362,11 @@ def score_d1_delegation(sessions, rated):
         score = 3
     else:
         score = 1
-    # Pattern string (descriptive contrast). None when TA sample < 5.
-    overall_good_rate = (
-        100 * sum(1 for s in rated if is_good(s["outcome"])) / len(rated)
-        if rated else 0
-    )
-    if len(ta_rated) >= 5:
+    # Pattern string (descriptive contrast). None when TA sample < _PATTERN_MIN_SAMPLE.
+    if len(ta_rated) >= _PATTERN_MIN_SAMPLE:
         pattern = (
             f"Sessions that used Task agent had a {good_rate_ta:.0f}% "
-            f"good-outcome rate, versus {overall_good_rate:.0f}% overall."
+            f"good-outcome rate, versus {_overall_good_rate(rated):.0f}% overall."
         )
     else:
         pattern = None
