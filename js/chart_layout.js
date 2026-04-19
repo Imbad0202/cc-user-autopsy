@@ -74,6 +74,30 @@ function clipLabelToWidth(label, maxWidth, charWidth) {
   return lo > 0 ? label.slice(0, lo) + ELLIPSIS : '';
 }
 
+/**
+ * Split a list of points into contiguous runs of non-null points.
+ * A point is "null" when its y is null or undefined or NaN.
+ * Used by drawLinePath so line charts break (not dive to 0) on missing data.
+ *
+ * @param {Array<{x:number,y:number|null}>} points
+ * @returns {Array<Array<{x:number,y:number}>>}  - array of runs; each run has >=1 points
+ */
+function segmentsWithoutNulls(points) {
+  const runs = [];
+  let current = [];
+  for (const p of points) {
+    const hasValue = p.y !== null && p.y !== undefined && !Number.isNaN(p.y);
+    if (hasValue) {
+      current.push(p);
+    } else if (current.length) {
+      runs.push(current);
+      current = [];
+    }
+  }
+  if (current.length) runs.push(current);
+  return runs;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { computeBarPlot, clipLabelToWidth, measureRotatedLabel, slotCenterX };
+  module.exports = { computeBarPlot, clipLabelToWidth, measureRotatedLabel, slotCenterX, segmentsWithoutNulls };
 }

@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const layout = require(path.join(here, '..', 'js', 'chart_layout.js'));
 
-const { computeBarPlot, clipLabelToWidth, measureRotatedLabel, slotCenterX } = layout;
+const { computeBarPlot, clipLabelToWidth, measureRotatedLabel, slotCenterX, segmentsWithoutNulls } = layout;
 
 const charWidth = (label) => label.length * 6.5;
 
@@ -109,4 +109,36 @@ test('slotCenterX is used consistently for points AND labels', () => {
   // And: the delta between adjacent slots equals groupWidth (within float precision).
   const d = slotCenterX(1, 7, plot) - slotCenterX(0, 7, plot);
   assert.ok(Math.abs(d - 450 / 7) < 1e-9, `slot spacing ${d} must equal groupWidth ${450 / 7}`);
+});
+
+// segmentsWithoutNulls — null-gap handling for growth curve line drawing
+test('segmentsWithoutNulls splits on null y', () => {
+  const pts = [{x:0,y:10},{x:1,y:null},{x:2,y:30},{x:3,y:40}];
+  const runs = segmentsWithoutNulls(pts);
+  assert.equal(runs.length, 2);
+  assert.deepEqual(runs[0].map(p => p.x), [0]);
+  assert.deepEqual(runs[1].map(p => p.x), [2, 3]);
+});
+
+test('segmentsWithoutNulls handles NaN as null', () => {
+  const runs = segmentsWithoutNulls([{x:0,y:5},{x:1,y:NaN},{x:2,y:7}]);
+  assert.equal(runs.length, 2);
+});
+
+test('segmentsWithoutNulls handles all nulls', () => {
+  assert.deepEqual(segmentsWithoutNulls([{x:0,y:null},{x:1,y:null}]), []);
+});
+
+test('segmentsWithoutNulls handles all valid as one run', () => {
+  const pts = [{x:0,y:1},{x:1,y:2},{x:2,y:3}];
+  const runs = segmentsWithoutNulls(pts);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].length, 3);
+});
+
+test('segmentsWithoutNulls handles leading/trailing nulls', () => {
+  const pts = [{x:0,y:null},{x:1,y:10},{x:2,y:20},{x:3,y:null}];
+  const runs = segmentsWithoutNulls(pts);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].length, 2);
 });

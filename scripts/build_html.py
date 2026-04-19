@@ -1699,29 +1699,37 @@ function drawHorizontalBarChart(id, labels, values, color) {
 
 function drawLinePath(ctx, points, color, dashed = false, fill = false) {
   if (!points.length) return;
+  const runs = segmentsWithoutNulls(points);
+  if (!runs.length) return;
   ctx.save();
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
   ctx.setLineDash(dashed ? [6, 4] : []);
   if (fill) {
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].baseY);
-    points.forEach((point) => ctx.lineTo(point.x, point.y));
-    ctx.lineTo(points[points.length - 1].x, points[points.length - 1].baseY);
-    ctx.closePath();
-    ctx.fillStyle = color + '22';
-    ctx.fill();
+    runs.forEach((run) => {
+      ctx.beginPath();
+      ctx.moveTo(run[0].x, run[0].baseY);
+      run.forEach((point) => ctx.lineTo(point.x, point.y));
+      ctx.lineTo(run[run.length - 1].x, run[run.length - 1].baseY);
+      ctx.closePath();
+      ctx.fillStyle = color + '22';
+      ctx.fill();
+    });
   }
-  ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  points.forEach((point) => ctx.lineTo(point.x, point.y));
-  ctx.stroke();
+  runs.forEach((run) => {
+    ctx.beginPath();
+    ctx.moveTo(run[0].x, run[0].y);
+    run.forEach((point) => ctx.lineTo(point.x, point.y));
+    ctx.stroke();
+  });
   ctx.setLineDash([]);
   ctx.fillStyle = color;
-  points.forEach((point) => {
-    ctx.beginPath();
-    ctx.arc(point.x, point.y, 2.5, 0, Math.PI * 2);
-    ctx.fill();
+  runs.forEach((run) => {
+    run.forEach((point) => {
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    });
   });
   ctx.restore();
 }
@@ -1731,7 +1739,8 @@ function drawLineChart(id, labels, series, options = {}) {
     const setup = setupCanvas(id);
     if (!setup) return;
     const { ctx, width, height } = setup;
-    const maxValue = options.maxValue !== undefined ? options.maxValue : Math.max(0, ...series.flatMap((item) => item.data));
+    const allValues = series.flatMap((item) => item.data.filter((v) => v !== null && v !== undefined && !Number.isNaN(v)));
+    const maxValue = options.maxValue !== undefined ? options.maxValue : Math.max(0, ...allValues);
     if (!maxValue) {
       drawNoData(ctx, width, height);
       return;
@@ -1759,8 +1768,8 @@ function drawDualChart(id, labels, bars, line, options = {}) {
     const setup = setupCanvas(id);
     if (!setup) return;
     const { ctx, width, height } = setup;
-    const leftMax = options.leftMax !== undefined ? options.leftMax : niceMax(Math.max(0, ...line.data));
-    const rightMax = options.rightMax !== undefined ? options.rightMax : niceMax(Math.max(0, ...bars.data));
+    const leftMax = options.leftMax !== undefined ? options.leftMax : niceMax(Math.max(0, ...line.data.filter((v) => v !== null && v !== undefined && !Number.isNaN(v))));
+    const rightMax = options.rightMax !== undefined ? options.rightMax : niceMax(Math.max(0, ...bars.data.filter((v) => v !== null && v !== undefined && !Number.isNaN(v))));
     if (!leftMax && !rightMax) {
       drawNoData(ctx, width, height);
       return;
@@ -1800,8 +1809,8 @@ function drawDualLineChart(id, labels, leftSeries, rightSeries, options = {}) {
     const setup = setupCanvas(id);
     if (!setup) return;
     const { ctx, width, height } = setup;
-    const leftMax = options.leftMax !== undefined ? options.leftMax : niceMax(Math.max(0, ...leftSeries.data));
-    const rightMax = options.rightMax !== undefined ? options.rightMax : niceMax(Math.max(0, ...rightSeries.data));
+    const leftMax = options.leftMax !== undefined ? options.leftMax : niceMax(Math.max(0, ...leftSeries.data.filter((v) => v !== null && v !== undefined && !Number.isNaN(v))));
+    const rightMax = options.rightMax !== undefined ? options.rightMax : niceMax(Math.max(0, ...rightSeries.data.filter((v) => v !== null && v !== undefined && !Number.isNaN(v))));
     if (!leftMax && !rightMax) {
       drawNoData(ctx, width, height);
       return;
