@@ -381,14 +381,14 @@ def score_d1_delegation(sessions, rated):
 
 def score_d2_rootcause(sessions, rated, facets_coverage):
     if facets_coverage < 30:
-        return {"score": None, "reason": "insufficient facet coverage"}
+        return {"score": None, "reason": "insufficient facet coverage", "pattern": None}
     iter_buggy = [
         s for s in rated
         if s["session_type"] == "iterative_refinement"
         and s["friction_counts"].get("buggy_code", 0) > 0
     ]
     if not rated:
-        return {"score": None, "reason": "no rated sessions"}
+        return {"score": None, "reason": "no rated sessions", "pattern": None}
     R = 100 * len(iter_buggy) / len(rated)
     thresholds = [(2, 10), (4, 9), (7, 8), (10, 7), (15, 6), (20, 5), (25, 4)]
     score = 3
@@ -396,11 +396,23 @@ def score_d2_rootcause(sessions, rated, facets_coverage):
         if R <= thr:
             score = sc
             break
+    iter_sessions = [s for s in rated if s["session_type"] == "iterative_refinement"]
+    non_iter_sessions = [s for s in rated if s["session_type"] != "iterative_refinement"]
+    pattern = None
+    if len(non_iter_sessions) >= _PATTERN_MIN_SAMPLE and len(iter_sessions) >= 1:
+        non_iter_good = 100 * sum(1 for s in non_iter_sessions if is_good(s["outcome"])) / len(non_iter_sessions)
+        iter_good = 100 * sum(1 for s in iter_sessions if is_good(s["outcome"])) / len(iter_sessions)
+        pattern = (
+            f"Sessions without iterative_refinement friction reached good outcomes "
+            f"{non_iter_good:.0f}% of the time, versus {iter_good:.0f}% for "
+            f"iterative_refinement sessions."
+        )
     return {
         "score": score,
         "metric_iter_buggy_pct": round(R, 1),
         "metric_iter_buggy_count": len(iter_buggy),
         "explanation": f"{len(iter_buggy)} sessions ({R:.0f}%) were iterative_refinement with buggy_code friction — a marker for symptom-level patching.",
+        "pattern": pattern,
     }
 
 

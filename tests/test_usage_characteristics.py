@@ -54,5 +54,29 @@ class ScoreD1PatternTests(unittest.TestCase):
         self.assertIsNone(result["pattern"])
 
 
+class ScoreD2PatternTests(unittest.TestCase):
+    def test_pattern_contrasts_non_iterative_vs_iterative(self):
+        """Mixed session_type values with >= 5 non-iterative rated →
+        pattern contrasts good-outcome rates between the two groups."""
+        sessions = [_session(f"s{i}",
+                             session_type="iterative_refinement" if i < 5 else "fresh_work",
+                             outcome="fully_achieved" if i % 2 else "failed",
+                             friction_counts={"buggy_code": 1} if i < 3 else {})
+                    for i in range(12)]
+        rated = sessions
+        result = aggregate.score_d2_rootcause(sessions, rated, facets_coverage=80)
+        self.assertIn("pattern", result)
+        self.assertIsNotNone(result["pattern"])
+        self.assertIn("iterative_refinement", result["pattern"])
+
+    def test_pattern_none_when_facets_coverage_insufficient(self):
+        """Low facet coverage → score is None AND pattern is None (key still present)."""
+        sessions = [_session(f"s{i}") for i in range(12)]
+        rated = sessions
+        result = aggregate.score_d2_rootcause(sessions, rated, facets_coverage=10)
+        self.assertIn("pattern", result)
+        self.assertIsNone(result["pattern"])
+
+
 if __name__ == "__main__":
     unittest.main()
