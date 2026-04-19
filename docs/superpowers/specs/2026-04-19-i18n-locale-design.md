@@ -111,4 +111,4 @@ Untouched: `aggregate.py`, `sample_sessions.py`, `scan_transcripts.py`, `js/char
 
 ## Out of scope (separately tracked)
 
-- **Codex CLI support.** Logged in `~/.claude/projects/-Users-imbad/memory/reference_codex_autopsy_decision.md`. If pursued, will be a sibling skill, not a `--source` flag on this one — Codex transcripts have no cache_token / facets / scoring layer to align.
+- **Codex CLI support.** Decision tracked in the author's private memory notes. If pursued, will be a sibling skill, not a `--source` flag on this one — Codex transcripts have no cache_token / facets / scoring layer to align.

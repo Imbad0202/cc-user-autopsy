@@ -1,10 +1,17 @@
 """TDD for scripts/scan_transcripts.py.
 
-Ground truth: the session-meta file for session f831eb28 (which exists because
-a past Claude Code run auto-produced it). We scan the matching transcript and
-assert our derived numbers match the meta's numbers within tolerance.
+Ground truth: a locally-present session-meta file paired with its transcript.
+We scan the transcript and assert our derived numbers match the meta's numbers
+within tolerance. The fixture session id + projects-dir name are
+environment-specific, so set them via env vars when running locally:
+
+    CCUA_FIXTURE_SID=<uuid> CCUA_FIXTURE_PROJECTS_DIR=-Users-<you> \\
+        python3 -m unittest tests.test_scan_transcripts
+
+Tests that need the fixture skip when the referenced file is absent.
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -14,13 +21,12 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).resolve().parent.parent
 SCANNER = SKILL_DIR / "scripts" / "scan_transcripts.py"
 
-# Known-good session with both meta and transcript locally.
-# If this file disappears, pick another. The test hard-codes the
-# ground-truth values so CI reproducibility is possible even if the
-# local fixture changes — we copy the fixture into the test dir below.
-FIXTURE_SID = "f831eb28-e1f9-43af-a5bb-1c216021d89f"
+# Fixture config — env-overridable so the repo carries no owner-specific data.
+# Placeholders cause the fixture-dependent tests to skip cleanly when unset.
+FIXTURE_SID = os.environ.get("CCUA_FIXTURE_SID", "00000000-0000-0000-0000-000000000000")
+FIXTURE_PROJECTS_DIR = os.environ.get("CCUA_FIXTURE_PROJECTS_DIR", "-Users-demo")
 FIXTURE_META = Path.home() / ".claude/usage-data/session-meta" / f"{FIXTURE_SID}.json"
-FIXTURE_TRANSCRIPT = Path.home() / ".claude/projects/-Users-imbad" / f"{FIXTURE_SID}.jsonl"
+FIXTURE_TRANSCRIPT = Path.home() / ".claude/projects" / FIXTURE_PROJECTS_DIR / f"{FIXTURE_SID}.jsonl"
 
 sys.path.insert(0, str(SKILL_DIR / "scripts"))
 import aggregate  # noqa: E402
@@ -39,7 +45,7 @@ def _setup_fixture(root: Path):
     """Copy fixture transcript into a mock projects dir, return row for that sid."""
     if not FIXTURE_TRANSCRIPT.exists():
         raise unittest.SkipTest(f"Fixture transcript missing: {FIXTURE_TRANSCRIPT}")
-    pdir = root / "projects" / "-Users-imbad"
+    pdir = root / "projects" / FIXTURE_PROJECTS_DIR
     pdir.mkdir(parents=True)
     (pdir / f"{FIXTURE_SID}.jsonl").write_bytes(FIXTURE_TRANSCRIPT.read_bytes())
     return pdir
@@ -279,15 +285,18 @@ class ScanTranscriptsTests(unittest.TestCase):
             self.assertEqual(out.read_text().strip(), "")
 
     def test_project_path_decoded(self):
-        """Parent-dir-encoded path ('-Users-imbad-Projects-HEEACT') must round-trip
-        back to '/Users/imbad/Projects/HEEACT'."""
+        """Parent-dir-encoded path ('-Users-alice-Projects-app') must round-trip
+        back to '/Users/alice/Projects/app'. Uses the FIXTURE_PROJECTS_DIR, which
+        decodes to the leading segments of the original path."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             _setup_fixture(tmp)
             out = tmp / "out.jsonl"
             _run_scanner(tmp / "projects", out)
             row = json.loads(out.read_text().splitlines()[0])
-            self.assertEqual(row["project_path"], "/Users/imbad")
+            # FIXTURE_PROJECTS_DIR = "-Users-<name>" decodes to "/Users/<name>".
+            expected = "/" + FIXTURE_PROJECTS_DIR.lstrip("-").replace("-", "/")
+            self.assertEqual(row["project_path"], expected)
 
 
 class HitOutputLimitTests(unittest.TestCase):

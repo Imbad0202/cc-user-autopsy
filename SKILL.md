@@ -228,7 +228,7 @@ original `peer-review.md` with full citations.
 > - Preserve every fact, number, and section heading structure. Do not invent claims, do not omit findings.
 > - No AI 公文體 connectors (然而, 值得注意的是, 此外). Let the logic carry the paragraph.
 > - No em-dash 濫用 (——). If you reach for one, restructure with a comma or a new sentence.
-> - The user is HEEACT 品保 background; technical terms can stay in English where natural (e.g. "Task agent", "MCP", "facet coverage").
+> - The user has a QA / 品保 background; technical terms can stay in English where natural (e.g. "Task agent", "MCP", "facet coverage").
 >
 > Source (English):
 > ```
