@@ -20,9 +20,19 @@ function computeBarPlot({ width, height, legendBottom, labels, charWidth, yAxisM
   // Vertical band must hold the rotated label projection plus a small gap.
   // Use ceil to avoid sub-pixel under-budgeting.
   const labelBand = Math.ceil(longestRotated + 12);
-  // Left margin must hold the widest y-axis tick label plus 12px gap.
+  // Left margin must hold:
+  //   a) the widest y-axis tick label plus 12px gap, AND
+  //   b) half of the leftmost rotated label's diagonal projection plus a 6px gap.
+  // (b) mirrors the rightMargin logic: the first slot center sits at
+  // plot.left + groupWidth/2, and the label extends rotatedHalf to the LEFT
+  // of that center. Without this, the label's left tail clips into the y-axis
+  // line or the canvas border on narrow charts with long labels.
   const tickWidth = yAxisMaxTickLabel ? charWidth(yAxisMaxTickLabel) : 0;
-  const left = Math.max(48, Math.ceil(tickWidth + 12));
+  const left = Math.max(
+    48,
+    Math.ceil(tickWidth + 12),
+    Math.ceil(longestRotated / 2 + 6),
+  );
   // Right margin must hold half of the rightmost rotated label so it
   // doesn't fall off the canvas. Bar centers sit at (i+0.5)*groupWidth
   // from plot.left, so the rightmost center extends `rotated/2` past it.

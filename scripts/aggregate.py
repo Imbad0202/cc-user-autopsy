@@ -1015,8 +1015,12 @@ def compute_aggregates(sessions, rated, facets_coverage):
     for w, d in sorted(weekly.items()):
         total_oc = sum(d["outcomes"].values())
         good = d["outcomes"].get("fully_achieved", 0) + d["outcomes"].get("mostly_achieved", 0)
+        # `week` is kept as "YYYY-WWW" for cross-year sorting/joining.
+        # `week_label` strips the year prefix for axis display ("W15" not "2026-W15").
+        week_label = w.split("-", 1)[-1] if "-" in w else w
         wk.append({
             "week": w,
+            "week_label": week_label,
             "sessions": d["sessions"],
             "tokens": d["tokens"],
             "commits": d["commits"],
@@ -1147,6 +1151,7 @@ def compute_aggregates(sessions, rated, facets_coverage):
         composite = round(0.4 * good_rate_w + 0.3 * ta_rate_w + 0.3 * fric_score, 1)
         growth.append({
             "week": w["week"],
+            "week_label": w.get("week_label", w["week"]),
             "composite_score": None if insufficient else composite,
             "ta_rate": round(ta_rate_w, 1),  # uses sessions denominator, no gate
             "good_rate": None if insufficient else good_rate_w,

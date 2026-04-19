@@ -2069,7 +2069,9 @@ def main():
 
     # Chart series
     weekly = agg["weekly"]
-    w_labels = [w["week"] for w in weekly]
+    # Use week_label (e.g. "W15") for display; fall back to full "week" key
+    # for older aggregate files that pre-date the week_label field.
+    w_labels = [w.get("week_label", w["week"]) for w in weekly]
 
     # heatmap
     grid = [[0] * 24 for _ in range(7)]
@@ -2476,7 +2478,7 @@ def main():
 
     # Growth curve chart section (both audiences but different placement)
     growth = agg.get("growth_curve", [])
-    growth_labels = json_for_script([g["week"] for g in growth])
+    growth_labels = json_for_script([g.get("week_label", g["week"]) for g in growth])
     growth_composite = json_for_script([g["composite_score"] for g in growth])
     growth_ta = json_for_script([g["ta_rate"] for g in growth])
     growth_good = json_for_script([g["good_rate"] for g in growth])
