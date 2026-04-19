@@ -408,6 +408,35 @@ class ScoreD6PatternTests(unittest.TestCase):
         self.assertIn("pattern", result)
         self.assertIsNone(result["pattern"])
 
+    def test_pattern_excludes_unrated_sessions(self):
+        """Unrated sessions (outcome == '') must not bias the diversity rates.
+        Proves the fix: 6 rated diverse (3 good → 50%) + 4 unrated diverse (would drag
+        rate to 30% if included) + 6 rated narrow (5 good → 83%). Pattern should show
+        50%/83%, not 30%/83%."""
+        sessions = []
+        # 6 rated diverse: 3 good, 3 failed
+        for i in range(6):
+            sessions.append(self._d6_session(f"rd{i}",
+                                             tool_counts={"Bash": 2, "Read": 2, "Edit": 2, "Grep": 2},
+                                             outcome="fully_achieved" if i < 3 else "failed"))
+        # 4 unrated diverse (would skew if included) — outcome=""
+        for i in range(4):
+            sessions.append(self._d6_session(f"ud{i}",
+                                             tool_counts={"Bash": 2, "Read": 2, "Edit": 2, "Grep": 2},
+                                             outcome=""))
+        # 6 rated narrow: 5 good, 1 failed
+        for i in range(6):
+            sessions.append(self._d6_session(f"rn{i}",
+                                             tool_counts={"Bash": 3, "Read": 2},
+                                             outcome="fully_achieved" if i < 5 else "failed"))
+        result = aggregate.score_d6_tool_breadth(sessions)
+        self.assertIn("pattern", result)
+        self.assertIsNotNone(result["pattern"])
+        self.assertIn("50%", result["pattern"])
+        self.assertIn("83%", result["pattern"])
+        # If the bug were present, diverse_good would be 30% (3/10), not 50% (3/6)
+        self.assertNotIn("30%", result["pattern"])
+
 
 if __name__ == "__main__":
     unittest.main()

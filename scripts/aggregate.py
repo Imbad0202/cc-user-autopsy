@@ -589,8 +589,12 @@ def score_d6_tool_breadth(sessions):
     else:
         score = 4
 
-    diverse = [s for s in sessions if len(s.get("tool_counts", {})) >= 4]
-    narrow  = [s for s in sessions if 0 < len(s.get("tool_counts", {})) <= 2]
+    # Rated-only subsets: unrated sessions (outcome == "") would bias is_good() toward
+    # False, so restrict the contrast to sessions with a recorded outcome. 3-tool
+    # sessions are intentionally excluded to sharpen the diverse/narrow contrast.
+    rated_sessions = [s for s in sessions if s.get("outcome", "")]
+    diverse = [s for s in rated_sessions if len(s.get("tool_counts", {})) >= 4]
+    narrow  = [s for s in rated_sessions if 0 < len(s.get("tool_counts", {})) <= 2]
     pattern = None
     if len(diverse) >= _PATTERN_MIN_SAMPLE and len(narrow) >= _PATTERN_MIN_SAMPLE:
         diverse_good = 100 * sum(1 for s in diverse if is_good(s["outcome"])) / len(diverse)
