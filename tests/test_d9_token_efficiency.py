@@ -228,7 +228,18 @@ def test_d9_en_locale_keys_present():
 
 
 def test_d9_zh_tw_keys_have_todo_marker():
+    """Ensure every D9 zh_TW key carries the TODO marker until
+    fix/zh-tw-locale fills native translations."""
     from scripts.locales import t
-    # zh_TW placeholders are expected until fix/zh-tw-locale fills them
-    assert "[TODO zh_TW]" in t("zh_TW", "score_d9")
-    assert "[TODO zh_TW]" in t("zh_TW", "d9_band_10")
+    todo_keys = [
+        "score_d9",
+        "d9_how_it_works",
+        "d9_band_10",
+        "d9_band_8",
+        "d9_band_6",
+        "d9_band_4",
+        "d9_band_2",
+        "d9_insufficient",
+    ]
+    for key in todo_keys:
+        assert "[TODO zh_TW]" in t("zh_TW", key), f"{key} missing TODO marker"
