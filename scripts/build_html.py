@@ -345,6 +345,42 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
     --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+    /* --- Spacing primitives (2px granularity, matches existing component values) --- */
+    --space-0: 0;
+    --space-1: 2px;
+    --space-2: 4px;
+    --space-3: 6px;
+    --space-4: 8px;
+    --space-5: 10px;
+    --space-6: 12px;
+    --space-7: 14px;
+    --space-8: 16px;
+    --space-9: 18px;
+    --space-10: 20px;
+    --space-11: 22px;
+    --space-12: 24px;
+    --space-14: 28px;
+    --space-15: 30px;
+
+    /* --- Radius primitives --- */
+    --radius-sm: 2px;
+    --radius-md: 3px;
+    --radius-lg: 6px;
+
+    /* --- Font-size primitives (zh-Hant overrides handled separately) --- */
+    --text-xs: 11.5px;
+    --text-sm: 13px;
+    --text-base: 15px;
+    --text-md: 16px;
+    --text-lg: 17px;
+    --text-xl: 18px;
+
+    /* --- Line-height primitives --- */
+    --leading-tight: 1.2;
+    --leading-snug: 1.35;
+    --leading-normal: 1.55;
+    --leading-loose: 1.7;
   }
 
   * { box-sizing: border-box; }
