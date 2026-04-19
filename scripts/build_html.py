@@ -1943,11 +1943,15 @@ def main():
         display = f'<span class="num">{sc}</span><span class="out">/ 10</span>' if sc is not None else 'n/a'
         dim_label = f"{key.split('_', 1)[0]} · {key.split('_', 1)[1].replace('_', ' ')}"
         reason = s.get("explanation") or s.get("reason", "")
+        pattern_html = ""
+        pattern_val = s.get("pattern")
+        if pattern_val:
+            pattern_html = f'\n    <p class="pattern">{esc(pattern_val)}</p>'
         score_rows += f'''<div class="score-row {band}">
   <div class="dim">{esc(dim_label)}</div>
   <div class="body">
     <div class="h">{esc(title)}</div>
-    <p class="exp">{esc(reason)}</p>
+    <p class="exp">{esc(reason)}</p>{pattern_html}
   </div>
   <div class="score">{display}</div>
 </div>

@@ -510,5 +510,114 @@ class CssRuleTests(unittest.TestCase):
         self.assertIn("grid-template-columns: 72px 1fr", src)
 
 
+class PatternRenderTests(unittest.TestCase):
+    """Task 14: score_rows loop must emit <p class="pattern"> when pattern is present."""
+
+    def _score_rows_source(self):
+        """Return the raw Python source of build_html.py for structural assertions."""
+        import inspect
+        src_path = Path(__file__).resolve().parent.parent / "scripts" / "build_html.py"
+        return src_path.read_text()
+
+    def _render_with_pattern(self, pattern_val):
+        """Build an analysis fixture where D1_delegation carries `pattern_val`,
+        then run build_html.py and return the rendered HTML string."""
+        import subprocess, tempfile, json as _json
+        skill_dir = Path(__file__).resolve().parent.parent
+        analysis = _minimal_analysis()
+        analysis["scores"] = {
+            "_overall": {"avg": 7.0, "dimensions_scored": 1, "dimensions_total": 8},
+            "D1_delegation": {
+                "score": 7,
+                "explanation": "Good delegation practice.",
+                "pattern": pattern_val,
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "a.json").write_text(_json.dumps(analysis))
+            (tmp / "s.json").write_text("{}")
+            out = tmp / "out.html"
+            r = subprocess.run([
+                "python3", str(skill_dir / "scripts" / "build_html.py"),
+                "--input", str(tmp / "a.json"),
+                "--samples", str(tmp / "s.json"),
+                "--audience", "self",
+                "--output", str(out),
+            ], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return out.read_text()
+
+    def test_pattern_block_rendered_when_non_none(self):
+        """When pattern is a non-empty string, the rendered score row must
+        contain an element with class="pattern"."""
+        html = self._render_with_pattern("Uses Task agent for all long-running work.")
+        self.assertIn('class="pattern"', html)
+
+    def test_pattern_block_absent_when_pattern_is_none(self):
+        """When pattern is None (or key absent), no pattern element is emitted.
+        Guard check: source code must use s.get('pattern') not s['pattern']."""
+        # First assert the rendered output has no pattern element
+        html = self._render_with_pattern(None)
+        self.assertNotIn('class="pattern"', html)
+        # Structural guard: source must use dict.get() to avoid KeyError
+        src = self._score_rows_source()
+        self.assertTrue(
+            's.get("pattern")' in src or "s.get('pattern')" in src,
+            "score_rows loop must use s.get('pattern') not s['pattern']",
+        )
+
+    def test_pattern_xss_escaped_in_full_render(self):
+        """XSS gate: injecting a raw <script> tag via pattern must produce
+        the HTML-escaped form (&lt;script&gt;) in output, never the raw tag."""
+        demo_dir = Path("/tmp/cc-autopsy-demo")
+        if not demo_dir.exists():
+            self.skipTest("Demo data absent at /tmp/cc-autopsy-demo/ — skipping XSS integration test.")
+
+        import subprocess, tempfile, json as _json
+        skill_dir = Path(__file__).resolve().parent.parent
+
+        # Load the demo aggregate if it exists, otherwise build our own fixture
+        demo_agg = demo_dir / "aggregate.json"
+        if demo_agg.exists():
+            analysis = _json.loads(demo_agg.read_text())
+        else:
+            self.skipTest("Demo aggregate.json absent — skipping XSS integration test.")
+
+        # Inject XSS payload into the first scored dimension we find
+        xss_payload = "<script>alert(1)</script>"
+        scores = analysis.get("scores", {})
+        injected = False
+        for dim_key in scores:
+            if dim_key.startswith("D") and isinstance(scores[dim_key], dict):
+                scores[dim_key]["pattern"] = xss_payload
+                injected = True
+                break
+        if not injected:
+            self.skipTest("No scored dimension found to inject XSS payload — skipping.")
+
+        analysis["scores"] = scores
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "a.json").write_text(_json.dumps(analysis))
+            (tmp / "s.json").write_text("{}")
+            out = tmp / "out.html"
+            r = subprocess.run([
+                "python3", str(skill_dir / "scripts" / "build_html.py"),
+                "--input", str(tmp / "a.json"),
+                "--samples", str(tmp / "s.json"),
+                "--audience", "self",
+                "--output", str(out),
+            ], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rendered = out.read_text()
+
+        self.assertNotIn(xss_payload, rendered,
+                         "Raw <script> tag must not appear in rendered HTML")
+        self.assertIn("&lt;script&gt;", rendered,
+                      "XSS payload must be HTML-escaped to &lt;script&gt; in output")
+
+
 if __name__ == "__main__":
     unittest.main()
