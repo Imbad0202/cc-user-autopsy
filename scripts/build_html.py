@@ -21,6 +21,51 @@ WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 # key `chart_*` or `series_*` and it flows through automatically.
 JS_KEY_PREFIXES = ("chart_", "series_")
 
+_DATE_SUFFIX_RE = re.compile(r"-\d{8}$")
+
+
+def prettify_model(name: str | None) -> str:
+    """Convert a raw model identifier to a human-readable display label.
+
+    Rules:
+    - None or empty string → empty string.
+    - Strip 'claude-' prefix if present.
+    - Strip any trailing date suffix matching -YYYYMMDD (generalised).
+    - Tokenize on '-': first token is the family name (capitalize it).
+      Remaining tokens (version digits, e.g. '4', '7') are joined with '.'
+      to form the version string.
+    - Known families: opus, sonnet, haiku — all follow <family>-<major>-<minor>.
+    - Unknown / non-standard: title-case each token, join with spaces.
+
+    Examples:
+        'claude-opus-4-7-20251101' → 'Opus 4.7'
+        'claude-sonnet-4-6-20251001' → 'Sonnet 4.6'
+        'opus-4-7'                  → 'Opus 4.7'
+        'claude-opus'               → 'Opus'
+        'unknown-model-x'           → 'Unknown Model X'
+        ''                          → ''
+        None                        → ''
+    """
+    if not name:
+        return ""
+    # Strip claude- prefix
+    if name.startswith("claude-"):
+        name = name[len("claude-"):]
+    # Strip generic date suffix -YYYYMMDD
+    name = _DATE_SUFFIX_RE.sub("", name)
+    if not name:
+        return ""
+    tokens = name.split("-")
+    family = tokens[0].capitalize()
+    version_tokens = tokens[1:]
+    if not version_tokens:
+        return family
+    # Heuristic: if all version tokens are digit strings, join with dots (version).
+    if all(t.isdigit() for t in version_tokens):
+        return f"{family} {'.'.join(version_tokens)}"
+    # Fallback: title-case all tokens and join with spaces.
+    return " ".join(t.capitalize() for t in tokens)
+
 
 def load_json_or_warn(path_arg, label, default):
     """Load a JSON file if the path resolves. Warn on parse error, return default."""
@@ -81,7 +126,7 @@ def _build_activity_panel(activity: dict, locale: str = "en") -> str:
     full_pool = activity.get("full_pool_sessions")
 
     # Compact favorite model label
-    fav_short = fav.replace("claude-", "").replace("-20251001", "").replace("-20250929", "").replace("-20251101", "")
+    fav_short = prettify_model(fav) if fav != "—" else "—"
 
     scope_note = ""
     if scoring_pool is not None and full_pool is not None and full_pool != scoring_pool:
@@ -175,7 +220,7 @@ def _build_models_chart(models: dict, locale: str = "en") -> str:
         pct = v / total
         w = round(bar_w * pct, 2)
         color = palette[i] if i < len(palette) else "#94a3b8"
-        short = m.replace("claude-", "").replace("-20251001", "").replace("-20250929", "").replace("-20251101", "")
+        short = prettify_model(m)
         rects.append(
             f'<rect x="{x}" y="0" width="{w}" height="{bar_h}" fill="{color}">'
             f'<title>{esc(short)}: {v:,} messages ({pct*100:.1f}%)</title>'
