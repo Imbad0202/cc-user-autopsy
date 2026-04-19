@@ -26,6 +26,11 @@ CLEANED_COMPONENTS: list[tuple[str, str, str]] = [
         "  /* Metric cards grid */\n  .metrics {",
         "    margin-top: var(--space-4);\n  }",
     ),
+    (
+        ".chart-box",
+        "  /* Charts */\n  .chart-box {",
+        "    text-transform: uppercase;\n  }",
+    ),
 ]
 
 # Hard-coded px values that are allowed inside cleaned component blocks.
@@ -39,6 +44,9 @@ HARDCODE_WHITELIST_PX = {
 
     # --- Display-size typography (unique hero numerics) ---
     "32px",                                  # .metric .n display-size number
+
+    # --- Fixed chart canvas heights (not spacing) ---
+    "260px", "340px", "420px",              # .chart-box .short / default / .tall
 
     # --- Border indicator widths (used as visual accents, not spacing) ---
     "4px",                                   # profile-card accent border-left

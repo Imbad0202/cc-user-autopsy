@@ -1007,9 +1007,9 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .chart-box {
     background: rgba(255,250,240,0.4);
     border: 1px solid var(--rule);
-    padding: 18px 20px 14px 20px;
-    margin: 20px 0;
-    height: 340px;
+    padding: var(--space-9) var(--space-10) var(--space-7) var(--space-10);
+    margin: var(--space-10) 0;
+    height: 340px;     /* fixed chart area; not a spacing token */
     position: relative;
   }
   .chart-box.tall { height: 420px; }
@@ -1022,9 +1022,9 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .chart-box::after {
     content: attr(data-fig);
     position: absolute;
-    top: -8px; right: 18px;
+    top: -8px; right: var(--space-9);
     background: var(--paper);
-    padding: 0 8px;
+    padding: 0 var(--space-4);
     font-family: var(--mono);
     font-size: 9.5px;
     letter-spacing: 0.2em;
