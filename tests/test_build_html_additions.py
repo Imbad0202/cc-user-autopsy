@@ -408,6 +408,35 @@ class LocaleTests(unittest.TestCase):
         html = self._build(locale="zh_TW")
         self.assertIn("快取讀取 Token", html)
         self.assertIn("最常用模型", html)
+        self.assertIn("評分", html)  # § 02 Scoring localized
+        self.assertIn("方法論", html)  # § 07 Methodology localized
+
+    def test_zh_tw_build_has_no_section_chrome_in_english(self):
+        """Independent leak scan beyond the basic 5-string list. Catches
+        section headers, method paragraphs, TOC links, and chart series
+        labels that previously slipped through."""
+        html = self._build(locale="zh_TW")
+        forbidden = [
+            # Section headers
+            "Scoring", "Peer review", "Pattern mining", "Weekly trends",
+            "Evidence library", "Methodology",
+            # Method paragraphs (substring matches)
+            "Eight dimensions, each with its own rubric",
+            "Written by Claude after reading your data",
+            "What this report is",
+            # TOC link labels (the more distinctive ones)
+            "Rule-based", "Personalized peer review",
+            # Chart series labels
+            "Composite score", "Good-outcome rate", "Task agent adoption",
+            "Tokens (M)", "Avg prompt length",
+            # Letterhead
+            "sessions analyzed",
+            # Methodology bullets
+            "Data sources", "Sampling strategy", "Caveats",
+        ]
+        present = [s for s in forbidden if s in html]
+        self.assertEqual(present, [],
+                         f"zh_TW build still leaks English chrome: {present}")
 
     def test_unknown_locale_rejected(self):
         import subprocess, tempfile
