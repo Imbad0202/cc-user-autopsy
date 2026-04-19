@@ -187,6 +187,20 @@ STRINGS = {
         "score_d6": "Tool breadth",
         "score_d7": "Writing consistency",
         "score_d8": "Time-of-day management",
+        "score_d9": "Token efficiency",
+        "d9_how_it_works": (
+            "Compares average tokens spent on good-outcome sessions versus "
+            "other rated sessions. Heavy spending on sessions that didn't "
+            "reach a good outcome suggests tokens are being burned without "
+            "landing results. Cache hit ratio adjusts the score by ±1 to "
+            "reflect prompt reuse."
+        ),
+        "d9_band_10": "Not-good sessions cost ≤0.9× of good ones — very efficient",
+        "d9_band_8": "Not-good sessions cost 0.9–1.1× of good ones",
+        "d9_band_6": "Not-good sessions cost 1.1–1.5× of good ones",
+        "d9_band_4": "Not-good sessions cost 1.5–2.0× of good ones",
+        "d9_band_2": "Not-good sessions cost >2.0× of good ones — tokens burning without results",
+        "d9_insufficient": "Not enough rated good/not-good sessions to compare (need ≥5 of each).",
         "score_overall_low_data": "Not enough data for an overall score.",
         # --- Evidence categories ---
         "ev_high_friction": "Highest friction",
@@ -380,6 +394,14 @@ STRINGS = {
         "score_d6": "工具廣度",
         "score_d7": "寫作一致性",
         "score_d8": "時段管理",
+        "score_d9": "[TODO zh_TW] Token efficiency",
+        "d9_how_it_works": "[TODO zh_TW] d9 how it works",
+        "d9_band_10": "[TODO zh_TW] d9 band 10",
+        "d9_band_8": "[TODO zh_TW] d9 band 8",
+        "d9_band_6": "[TODO zh_TW] d9 band 6",
+        "d9_band_4": "[TODO zh_TW] d9 band 4",
+        "d9_band_2": "[TODO zh_TW] d9 band 2",
+        "d9_insufficient": "[TODO zh_TW] d9 insufficient",
         "score_overall_low_data": "資料量不足，無法給整體分數。",
         # --- Evidence categories ---
         "ev_high_friction": "摩擦最高",

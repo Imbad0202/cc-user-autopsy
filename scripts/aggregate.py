@@ -814,6 +814,7 @@ def compute_scores(sessions, rated, facets_coverage):
     scores["D6_tool_breadth"] = score_d6_tool_breadth(sessions)
     scores["D7_writing_consistency"] = score_d7_writing(rated)
     scores["D8_time_mgmt"] = score_d8_time_mgmt(sessions, rated)
+    scores["D9_token_efficiency"] = score_d9_token_efficiency(sessions, rated)
     # overall
     valid = [v["score"] for v in scores.values() if v.get("score") is not None]
     total_dims = len(scores)

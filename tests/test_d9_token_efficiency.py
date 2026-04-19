@@ -189,3 +189,46 @@ def test_cache_hit_uses_sessions_arg_not_rated():
     # Base from rated ratio = 8; cache from sessions adds +1 → 9.
     assert result["score"] == 9
     assert result["metric_cache_hit_pct"] == 70.0
+
+
+def test_d9_wired_into_compute_scores():
+    from unittest.mock import patch
+    from scripts.aggregate import compute_scores
+
+    rated = _pool(6, 10_000, 6, 13_000, cache_read=60, cache_create=40)
+    sessions = rated
+
+    _stub = {"score": None, "reason": "stub", "pattern": None, "explanation": ""}
+
+    with (
+        patch("scripts.aggregate.score_d1_delegation", return_value=_stub),
+        patch("scripts.aggregate.score_d2_rootcause", return_value=_stub),
+        patch("scripts.aggregate.score_d3_prompt_quality", return_value=_stub),
+        patch("scripts.aggregate.score_d4_context_mgmt", return_value=_stub),
+        patch("scripts.aggregate.score_d5_interrupt", return_value=_stub),
+        patch("scripts.aggregate.score_d6_tool_breadth", return_value=_stub),
+        patch("scripts.aggregate.score_d7_writing", return_value=_stub),
+        patch("scripts.aggregate.score_d8_time_mgmt", return_value=_stub),
+    ):
+        scores = compute_scores(sessions, rated, facets_coverage=100)
+
+    assert "D9_token_efficiency" in scores
+    assert scores["D9_token_efficiency"]["score"] is not None
+
+
+def test_d9_en_locale_keys_present():
+    from scripts.locales import t
+    assert t("en", "score_d9") == "Token efficiency"
+    for band in (10, 8, 6, 4, 2):
+        key = f"d9_band_{band}"
+        assert t("en", key).strip() != ""
+        assert not t("en", key).startswith("[TODO")
+    assert t("en", "d9_insufficient").strip() != ""
+    assert t("en", "d9_how_it_works").strip() != ""
+
+
+def test_d9_zh_tw_keys_have_todo_marker():
+    from scripts.locales import t
+    # zh_TW placeholders are expected until fix/zh-tw-locale fills them
+    assert "[TODO zh_TW]" in t("zh_TW", "score_d9")
+    assert "[TODO zh_TW]" in t("zh_TW", "d9_band_10")
