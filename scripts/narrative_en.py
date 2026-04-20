@@ -50,7 +50,9 @@ def d4_explanation(metrics: dict) -> str:
     enc = metrics["metric_effort_no_commit_pct"]
     enc_n = metrics.get("metric_effort_no_commit_sample")
     long_intr = metrics["metric_long_session_interrupt_rate_pct"]
-    n_suffix = f" (n={enc_n})" if enc_n else ""
+    # `n=0` is a valid sample size — it means "no eligible sessions to
+    # measure against". Distinguish from missing key via `is not None`.
+    n_suffix = f" (n={enc_n})" if enc_n is not None else ""
     return (
         f"{otl} sessions hit output-token-limit. {enc:.0f}% of sessions over "
         f"20 minutes had zero commits{n_suffix}. Long-session interrupt rate: "

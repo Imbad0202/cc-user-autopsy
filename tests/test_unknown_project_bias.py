@@ -214,6 +214,44 @@ class TestD4NarrativeSurfacesSample:
         text = d4_explanation(metrics)
         assert "92" in text, f"expected n=92 in zh narrative; got: {text}"
 
+    def test_en_narrative_renders_zero_sample(self):
+        """n=0 is a valid sample size (no eligible sessions). Render it
+        explicitly — do not silently drop the `(n=...)` suffix."""
+        from scripts.narrative_en import d4_explanation
+        metrics = {
+            "metric_output_token_limit_sessions": 0,
+            "metric_effort_no_commit_pct": 0.0,
+            "metric_effort_no_commit_sample": 0,
+            "metric_long_session_interrupt_rate_pct": 0,
+        }
+        text = d4_explanation(metrics)
+        assert "n=0" in text, f"expected n=0 in en narrative; got: {text}"
+
+    def test_zh_narrative_renders_zero_sample(self):
+        from scripts.narrative_zh import d4_explanation
+        metrics = {
+            "metric_output_token_limit_sessions": 0,
+            "metric_effort_no_commit_pct": 0.0,
+            "metric_effort_no_commit_sample": 0,
+            "metric_long_session_interrupt_rate_pct": 0,
+        }
+        text = d4_explanation(metrics)
+        assert "n=0" in text, f"expected n=0 in zh narrative; got: {text}"
+
+    def test_narrative_drops_suffix_when_key_missing(self):
+        """If the upstream aggregator is old and doesn't emit
+        `metric_effort_no_commit_sample` at all, fall back silently — no
+        literal `(n=None)`."""
+        from scripts.narrative_en import d4_explanation
+        metrics = {
+            "metric_output_token_limit_sessions": 5,
+            "metric_effort_no_commit_pct": 50.0,
+            # key intentionally absent
+            "metric_long_session_interrupt_rate_pct": 20.0,
+        }
+        text = d4_explanation(metrics)
+        assert "(n=" not in text, f"should omit suffix when key missing; got: {text}"
+
 
 # ---------------------------------------------------------------------------
 # commits_per_hour must exclude (unknown) duration
