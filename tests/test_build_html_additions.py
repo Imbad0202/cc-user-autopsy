@@ -488,7 +488,7 @@ class CssRuleTests(unittest.TestCase):
         sys.path.insert(0, str(SKILL / "scripts"))
         import build_html
         # Read the raw template text to inspect CSS — simpler than full render
-        template_path = SKILL / "scripts" / "build_html.py"
+        template_path = SKILL / "scripts" / "report_render.py"
         return template_path.read_text()
 
     def test_pattern_class_css_present(self):
@@ -524,8 +524,8 @@ class PatternRenderTests(unittest.TestCase):
     }
 
     def _score_rows_source(self):
-        """Return the raw Python source of build_html.py for structural assertions."""
-        src_path = Path(__file__).resolve().parent.parent / "scripts" / "build_html.py"
+        """Return the raw Python source of report_render.py for structural assertions."""
+        src_path = Path(__file__).resolve().parent.parent / "scripts" / "report_render.py"
         return src_path.read_text()
 
     def _render_with_pattern_emit(self, pattern_emit_val):
@@ -671,18 +671,19 @@ class HowScoresRelateTests(unittest.TestCase):
     def test_how_to_read_hr_mode_includes_relate_entry(self):
         """build_html.py source must reference both locale keys for the new
         HOW SCORES RELATE dt/dd entry in the HR how-to-read block."""
-        src = (Path(__file__).resolve().parent.parent / "scripts" / "build_html.py").read_text()
+        # PAGE_TEMPLATE lives in report_render.py after Task 7 extraction.
+        src = (Path(__file__).resolve().parent.parent / "scripts" / "report_render.py").read_text()
         self.assertIn('how_to_read_key_relate', src,
-                      "build_html.py must reference locale key 'how_to_read_key_relate'")
+                      "report_render.py must reference locale key 'how_to_read_key_relate'")
         self.assertIn('how_to_read_val_relate', src,
-                      "build_html.py must reference locale key 'how_to_read_val_relate'")
+                      "report_render.py must reference locale key 'how_to_read_val_relate'")
 
 
 class ScoreDisclaimerTests(unittest.TestCase):
     def test_disclaimer_placeholder_in_template(self):
         """Template source must contain both the $score_disclaimer placeholder
         and the class="score-disclaimer" element."""
-        src = Path(__file__).resolve().parent.parent / "scripts" / "build_html.py"
+        src = Path(__file__).resolve().parent.parent / "scripts" / "report_render.py"
         text = src.read_text()
         self.assertIn("$score_disclaimer", text,
                       "Template must contain $score_disclaimer placeholder")
@@ -691,7 +692,7 @@ class ScoreDisclaimerTests(unittest.TestCase):
 
     def test_disclaimer_rendered_above_score_table(self):
         """score-disclaimer element must appear BEFORE score-table in source order."""
-        src = Path(__file__).resolve().parent.parent / "scripts" / "build_html.py"
+        src = Path(__file__).resolve().parent.parent / "scripts" / "report_render.py"
         text = src.read_text()
         idx_disclaimer = text.find('class="score-disclaimer"')
         idx_table = text.find('class="score-table"')
