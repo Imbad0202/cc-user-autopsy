@@ -66,7 +66,6 @@ STRINGS = {
             "raw context the scoring and peer review were built from."
         ),
         "section_method": "Methodology",
-        "section_method_subtitle": "What this report is, and what it is not.",
         "method_h_sources": "Data sources",
         "method_src_session_meta": (
             "<code>~/.claude/usage-data/session-meta/*.json</code>: auto-recorded by Claude Code."
@@ -80,20 +79,7 @@ STRINGS = {
             "the evidence library only."
         ),
         "method_h_sampling": "Sampling strategy",
-        "method_sampling_body": (
-            "Up to 24 sessions across 7 buckets: 5 highest-friction, 5 top-tokens, 5 "
-            "most-interrupts, 4 not_achieved, 3 partially_achieved, 4 control "
-            "(fully_achieved + essential), 2 user_rejected. When facets are absent, "
-            "fallback is by session duration."
-        ),
         "method_h_caveats": "Caveats",
-        "method_caveats_body": (
-            "Facet labels come from an LLM and may be miscategorized. Above roughly 50% "
-            "facet coverage, outcome-based rules are reliable; below 30%, some "
-            "dimensions return n/a. Scoring thresholds are rules of thumb, not science. "
-            "The peer review depends on there being enough data to say specific things; "
-            "if your data is thin, the review should be short, not padded."
-        ),
         # --- Hero block (self audience) ---
         "hero_self_title_line1": "A diagnostic letter",
         "hero_self_title_line2_pre": "on",
@@ -202,15 +188,6 @@ STRINGS = {
         "d9_band_2": "Not-good sessions cost >2.0× of good ones — tokens burning without results",
         "d9_insufficient": "Not enough rated good/not-good sessions to compare (need ≥5 of each).",
         "score_overall_low_data": "Not enough data for an overall score.",
-        # --- Evidence categories ---
-        "ev_high_friction": "Highest friction",
-        "ev_top_token": "Highest token count",
-        "ev_top_interrupt": "Most interrupts",
-        "ev_not_achieved": "Not achieved",
-        "ev_partial": "Partially achieved",
-        "ev_control_good": "Control · fully achieved + essential",
-        "ev_user_rejected": "You rejected Claude's action",
-        "ev_long_duration": "Longest duration · fallback",
         # --- Privacy / redaction ---
         "redacted_project": "Private project",
         # --- Footer ---
@@ -278,7 +255,6 @@ STRINGS = {
             "從七個分桶最多取 24 個 session。展開任何一列可看當初評分與同行檢視所依據的原始脈絡。"
         ),
         "section_method": "方法論",
-        "section_method_subtitle": "這份報告是什麼，又不是什麼。",
         "method_h_sources": "資料來源",
         "method_src_session_meta": (
             "<code>~/.claude/usage-data/session-meta/*.json</code>：Claude Code 自動記錄。"
@@ -291,18 +267,7 @@ STRINGS = {
             "<code>~/.claude/projects/**/*.jsonl</code>：原始逐字稿，僅用於證據庫抽樣。"
         ),
         "method_h_sampling": "抽樣策略",
-        "method_sampling_body": (
-            "從七個分桶最多取 24 個 session：摩擦最高 5 筆、Token 用量最多 5 筆、"
-            "中斷次數最多 5 筆、未達成 4 筆、部分達成 3 筆、對照組（完全達成+關鍵）4 筆、"
-            "你否決動作 2 筆。若無 facet 資料，改以 session 持續時間為後備抽樣依據。"
-        ),
         "method_h_caveats": "注意事項",
-        "method_caveats_body": (
-            "Facet 標籤由 LLM 產出，可能誤分類。Facet 覆蓋率約 50% 以上，"
-            "outcome 規則才可靠；30% 以下，某些面向會回 n/a。"
-            "評分門檻只是經驗法則，不是科學。"
-            "同行檢視倚賴足夠資料才有具體結論；資料量薄時，回饋應該短，而不是被填滿。"
-        ),
         # --- Hero block (self audience) ---
         "hero_self_title_line1": "一份診斷信",
         "hero_self_title_line2_pre": "寫給",
@@ -394,42 +359,31 @@ STRINGS = {
         "score_d6": "工具廣度",
         "score_d7": "寫作一致性",
         "score_d8": "時段管理",
-        "score_d9": "[TODO zh_TW] Token efficiency",
+        "score_d9": "Token 效率",
         "d9_how_it_works": (
-            "[TODO zh_TW] Compares average tokens spent on good-outcome "
-            "sessions versus other rated sessions. Heavy spending on "
-            "sessions that didn't reach a good outcome suggests tokens "
-            "are being burned without landing results. Cache hit ratio "
-            "adjusts the score by ±1 to reflect prompt reuse."
+            "比較「完全達成／大致達成」的 session 與其他 session 的平均 Token 消耗。"
+            "若未達成的 session 反而燒更多 Token，代表 Token 在沒結果的對話上被消耗。"
+            "Cache 命中率會依 prompt 重用程度再加減 1 分。"
         ),
-        "d9_band_10": "[TODO zh_TW] Not-good sessions cost ≤0.9× of good ones (very efficient)",
-        "d9_band_8": "[TODO zh_TW] Not-good sessions cost 0.9–1.1× of good ones",
-        "d9_band_6": "[TODO zh_TW] Not-good sessions cost 1.1–1.5× of good ones",
-        "d9_band_4": "[TODO zh_TW] Not-good sessions cost 1.5–2.0× of good ones",
-        "d9_band_2": "[TODO zh_TW] Not-good sessions cost >2.0× of good ones, tokens burning without results",
-        "d9_insufficient": "[TODO zh_TW] Not enough rated good/not-good sessions to compare (need ≥5 of each).",
+        "d9_band_10": "未達成的 session 平均 Token ≤ 達成組的 0.9 倍（非常有效率）",
+        "d9_band_8": "未達成的 session 平均 Token 為達成組的 0.9–1.1 倍",
+        "d9_band_6": "未達成的 session 平均 Token 為達成組的 1.1–1.5 倍",
+        "d9_band_4": "未達成的 session 平均 Token 為達成組的 1.5–2.0 倍",
+        "d9_band_2": "未達成的 session 平均 Token 超過達成組 2 倍，Token 在沒結果的地方燒掉",
+        "d9_insufficient": "達成與未達成的 rated session 樣本不足（各需至少 5 筆）。",
         "score_overall_low_data": "資料量不足，無法給整體分數。",
-        # --- Evidence categories ---
-        "ev_high_friction": "摩擦最高",
-        "ev_top_token": "Token 用量最多",
-        "ev_top_interrupt": "中斷次數最多",
-        "ev_not_achieved": "未達成",
-        "ev_partial": "部分達成",
-        "ev_control_good": "對照組：完全達成且關鍵",
-        "ev_user_rejected": "你否決了 Claude 的動作",
-        "ev_long_duration": "持續最久（後備樣本）",
         # --- Privacy / redaction ---
         "redacted_project": "私人專案",
         # --- Footer ---
         "footer_repo": "原始碼",
         "footer_tagline": "規則為主、LLM 輔助；隨時可重新執行此 skill",
         # --- Usage rubric (Task 12) ---
-        "score_disclaimer": "[TODO zh_TW] These are independent characteristics, not a breakdown; scores do not sum.",
-        "score_disclaimer_long": "[TODO zh_TW] Each dimension is scored from the sessions that apply to it.",
-        "how_to_read_key_relate": "[TODO zh_TW] HOW SCORES RELATE",
-        "how_to_read_val_relate": "[TODO zh_TW] Each dimension scores a different aspect of sessions.",
-        "usage_char_header": "[TODO zh_TW] Usage characteristics",
-        "usage_char_note_template": "[TODO zh_TW] Across {n_sessions} sessions from {since} to {until}, local only.",
+        "score_disclaimer": "各面向是彼此獨立的特徵，不是拆分比例，分數不會相加。",
+        "score_disclaimer_long": "每個面向都從適用的 session 各自計分。",
+        "how_to_read_key_relate": "分數彼此獨立",
+        "how_to_read_val_relate": "每個面向看的是 session 的不同切面。",
+        "usage_char_header": "使用特徵",
+        "usage_char_note_template": "取樣範圍：{since} 至 {until}，共 {n_sessions} 個 session，僅本機。",
     },
 }
 

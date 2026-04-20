@@ -10,7 +10,8 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BUILD_HTML = REPO_ROOT / "scripts" / "build_html.py"
+# PAGE_TEMPLATE and CSS live in report_render.py after the Task 7 extraction.
+BUILD_HTML = REPO_ROOT / "scripts" / "report_render.py"
 
 # Components that have been refactored to use tokens. Each entry:
 # (name, start_marker, end_marker) — raw substrings bracketing the CSS rule set.
