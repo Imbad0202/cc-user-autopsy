@@ -43,7 +43,7 @@ python3 scripts/build_html.py \
 A standalone HTML file at `~/.claude/usage-data/cc-user-autopsy.html` with:
 
 - **Overview** — session count, tokens, commits, duration, Task agent / MCP adoption
-- **8-dimension rule-based scores** (1-10) with explicit metric evidence:
+- **9-dimension rule-based scores** (1-10) with explicit metric evidence:
   1. Delegation (Task agent usage)
   2. Root-cause debugging
   3. Prompt quality
@@ -52,6 +52,7 @@ A standalone HTML file at `~/.claude/usage-data/cc-user-autopsy.html` with:
   6. Tool breadth
   7. Writing consistency
   8. Time-of-day management
+  9. Token efficiency
 - **Personalized peer review** — 3 strengths + 3 specific improvements + 1
   neutral observation, written by Claude after reading your aggregate data
 - **14 charts** (inline canvas renderer; no remote JS) — prompt-length × outcome, friction distribution,
@@ -175,7 +176,7 @@ sending to make sure nothing you care about is in there.
 | | `/insights` | `cc-user-autopsy` |
 |---|---|---|
 | Honest peer review | Leans celebratory | Directive, no sandwiching |
-| Scoring | No explicit scores | 8 rule-based scores with thresholds |
+| Scoring | No explicit scores | 9 rule-based scores with thresholds |
 | Evidence traceability | Occasional | Every claim cites session ID or metric |
 | Regenerate without LLM | Yes | Yes (rule-based part) |
 | Personalized | Partially | Yes (Claude writes review after reading your data) |

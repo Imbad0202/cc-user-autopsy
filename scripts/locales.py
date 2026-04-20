@@ -25,7 +25,7 @@ STRINGS = {
         "section_overview": "Overview",
         "section_overview_subtitle": "The raw numbers, before interpretation.",
         "section_scoring": "Scoring",
-        "section_scoring_subtitle": "Eight dimensions, each with its own rubric.",
+        "section_scoring_subtitle": "Nine dimensions, each with its own rubric.",
         "section_scoring_method": (
             "Scores are derived from explicit thresholds (see "
             "<code>references/scoring-rubric.md</code>). A high or low score is not a "
@@ -101,7 +101,7 @@ STRINGS = {
         "hero_self_title_line2_post": "Claude Code practice",
         "hero_self_dek": (
             "This report is the output of a skill that reads your local usage data and "
-            "gives you a direct, evidence-backed peer review of your workflow. Eight "
+            "gives you a direct, evidence-backed peer review of your workflow. Nine "
             "rule-based scores, thirteen figures, twenty-four session citations. No sandwiching."
         ),
         "hero_self_intro_card": (
@@ -136,7 +136,7 @@ STRINGS = {
         # --- TOC nav links (HR audience) ---
         "toc_hr_shipped": "Shipped with Claude",
         "toc_hr_overview": "Raw numbers",
-        "toc_hr_scores": "8-dim self-audit",
+        "toc_hr_scores": "9-dim self-audit",
         "toc_hr_peer_review": "Peer review",
         "toc_hr_trends": "Growth curve &amp; trends",
         "toc_hr_patterns": "Pattern mining",
@@ -178,7 +178,7 @@ STRINGS = {
         "chart_no_data": "No data",
         "chart_count": "Count",
         "chart_rated": "rated",
-        # --- Score dimensions (D1-D8) ---
+        # --- Score dimensions (D1-D9) ---
         "score_d1": "Delegation (Task agent usage)",
         "score_d2": "Root-cause debugging",
         "score_d3": "Prompt quality",
@@ -187,6 +187,20 @@ STRINGS = {
         "score_d6": "Tool breadth",
         "score_d7": "Writing consistency",
         "score_d8": "Time-of-day management",
+        "score_d9": "Token efficiency",
+        "d9_how_it_works": (
+            "Compares average tokens spent on good-outcome sessions versus "
+            "other rated sessions. Heavy spending on sessions that didn't "
+            "reach a good outcome suggests tokens are being burned without "
+            "landing results. Cache hit ratio adjusts the score by ±1 to "
+            "reflect prompt reuse."
+        ),
+        "d9_band_10": "Not-good sessions cost ≤0.9× of good ones — very efficient",
+        "d9_band_8": "Not-good sessions cost 0.9–1.1× of good ones",
+        "d9_band_6": "Not-good sessions cost 1.1–1.5× of good ones",
+        "d9_band_4": "Not-good sessions cost 1.5–2.0× of good ones",
+        "d9_band_2": "Not-good sessions cost >2.0× of good ones — tokens burning without results",
+        "d9_insufficient": "Not enough rated good/not-good sessions to compare (need ≥5 of each).",
         "score_overall_low_data": "Not enough data for an overall score.",
         # --- Evidence categories ---
         "ev_high_friction": "Highest friction",
@@ -206,7 +220,7 @@ STRINGS = {
         "score_disclaimer": "These are independent characteristics, not a breakdown — scores do not sum.",
         "score_disclaimer_long": (
             "Each dimension is scored from the sessions that apply to it. A session can "
-            "contribute to multiple dimensions, so the eight scores describe independent "
+            "contribute to multiple dimensions, so the nine scores describe independent "
             "slices, not shares of a whole."
         ),
         "how_to_read_key_relate": "HOW SCORES RELATE",
@@ -228,7 +242,7 @@ STRINGS = {
         "section_overview": "概覽",
         "section_overview_subtitle": "詮釋之前的原始數字。",
         "section_scoring": "評分",
-        "section_scoring_subtitle": "八個面向，各自有獨立量表。",
+        "section_scoring_subtitle": "九個面向，各自有獨立量表。",
         "section_scoring_method": (
             "分數來自明確的門檻值（見 <code>references/scoring-rubric.md</code>）。"
             "高分或低分都不是評斷，是指標：對照解釋來判斷門檻是否合理。"
@@ -296,7 +310,7 @@ STRINGS = {
         "hero_self_title_line2_post": "的 Claude Code 工作流",
         "hero_self_dek": (
             "這份報告由一個 skill 自動產出，會讀取你本機的 usage data，"
-            "給你一份有實據、不打高空的同行檢視。八個規則式分數、十三張圖、"
+            "給你一份有實據、不打高空的同行檢視。九個規則式分數、十三張圖、"
             "二十四個 session 引用，不三明治、不灌水。"
         ),
         "hero_self_intro_card": (
@@ -329,7 +343,7 @@ STRINGS = {
         # --- TOC nav links (HR audience) ---
         "toc_hr_shipped": "用 Claude 交付的成果",
         "toc_hr_overview": "原始數字",
-        "toc_hr_scores": "八面向自我審視",
+        "toc_hr_scores": "九面向自我審視",
         "toc_hr_peer_review": "同行檢視",
         "toc_hr_trends": "成長曲線與趨勢",
         "toc_hr_patterns": "模式挖掘",
@@ -371,7 +385,7 @@ STRINGS = {
         "chart_no_data": "尚無資料",
         "chart_count": "次數",
         "chart_rated": "已評",
-        # --- Score dimensions (D1-D8) ---
+        # --- Score dimensions (D1-D9) ---
         "score_d1": "委派（Task Agent 使用）",
         "score_d2": "根因除錯",
         "score_d3": "Prompt 品質",
@@ -380,6 +394,20 @@ STRINGS = {
         "score_d6": "工具廣度",
         "score_d7": "寫作一致性",
         "score_d8": "時段管理",
+        "score_d9": "[TODO zh_TW] Token efficiency",
+        "d9_how_it_works": (
+            "[TODO zh_TW] Compares average tokens spent on good-outcome "
+            "sessions versus other rated sessions. Heavy spending on "
+            "sessions that didn't reach a good outcome suggests tokens "
+            "are being burned without landing results. Cache hit ratio "
+            "adjusts the score by ±1 to reflect prompt reuse."
+        ),
+        "d9_band_10": "[TODO zh_TW] Not-good sessions cost ≤0.9× of good ones (very efficient)",
+        "d9_band_8": "[TODO zh_TW] Not-good sessions cost 0.9–1.1× of good ones",
+        "d9_band_6": "[TODO zh_TW] Not-good sessions cost 1.1–1.5× of good ones",
+        "d9_band_4": "[TODO zh_TW] Not-good sessions cost 1.5–2.0× of good ones",
+        "d9_band_2": "[TODO zh_TW] Not-good sessions cost >2.0× of good ones, tokens burning without results",
+        "d9_insufficient": "[TODO zh_TW] Not enough rated good/not-good sessions to compare (need ≥5 of each).",
         "score_overall_low_data": "資料量不足，無法給整體分數。",
         # --- Evidence categories ---
         "ev_high_friction": "摩擦最高",

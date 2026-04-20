@@ -2113,6 +2113,7 @@ def main():
         "D6_tool_breadth": t(args.locale, "score_d6"),
         "D7_writing_consistency": t(args.locale, "score_d7"),
         "D8_time_mgmt": t(args.locale, "score_d8"),
+        "D9_token_efficiency": t(args.locale, "score_d9"),
     }
     score_rows = ""
     for key, title in dim_titles.items():
@@ -2339,7 +2340,7 @@ def main():
     <div class="profile-cell">
       <div class="k">Self-audit</div>
       <div class="v">{scores_overall if scores_overall else "n/a"}<span style="font-size:14px;color:var(--ink-muted);"> / 10</span></div>
-      <div class="sub">8-dim rule-based</div>
+      <div class="sub">9-dim rule-based</div>
     </div>
     <div class="profile-cell">
       <div class="k">Focus</div>

@@ -1,6 +1,6 @@
 """
 cc-user-autopsy Step 1: aggregate.
-Reads ~/.claude/usage-data/ and computes every metric + 8 rule-based scores.
+Reads ~/.claude/usage-data/ and computes every metric + 9 rule-based scores.
 Outputs analysis-data.json.
 """
 import argparse
@@ -708,6 +708,102 @@ def score_d8_time_mgmt(sessions, rated):
     }
 
 
+def score_d9_token_efficiency(sessions, rated):
+    """Compare tokens per good-outcome session vs per other rated session.
+
+    Primary signal: ratio = mean(total_tokens | not-good) / mean(total_tokens | good).
+    Secondary: cache hit ratio over all sessions adjusts score by ±1.
+    total_tokens is billable non-cache (input + output); cache tokens counted
+    separately via cache hit ratio. Returns score=None when either rated
+    subgroup is below _PATTERN_MIN_SAMPLE.
+    """
+    rated_good = [s for s in rated if is_good(s["outcome"])]
+    rated_not_good = [s for s in rated if not is_good(s["outcome"])]
+    if len(rated_good) < _PATTERN_MIN_SAMPLE or len(rated_not_good) < _PATTERN_MIN_SAMPLE:
+        return {
+            "score": None,
+            "reason": "insufficient good/not-good sample",
+            "pattern": None,
+        }
+
+    tokens_per_good = sum(s["total_tokens"] for s in rated_good) / len(rated_good)
+    tokens_per_not_good = sum(s["total_tokens"] for s in rated_not_good) / len(rated_not_good)
+    if tokens_per_good <= 0:
+        return {
+            "score": None,
+            "reason": "zero-token good sessions",
+            "pattern": None,
+        }
+    ratio = tokens_per_not_good / tokens_per_good
+
+    turns_good = sum(s["user_msgs"] for s in rated_good)
+    turns_not_good = sum(s["user_msgs"] for s in rated_not_good)
+    tokens_per_turn_good = (
+        sum(s["total_tokens"] for s in rated_good) / turns_good
+        if turns_good > 0 else None
+    )
+    tokens_per_turn_not_good = (
+        sum(s["total_tokens"] for s in rated_not_good) / turns_not_good
+        if turns_not_good > 0 else None
+    )
+
+    cache_read_all = sum(s.get("cache_read_tokens", 0) or 0 for s in sessions)
+    cache_create_all = sum(s.get("cache_create_tokens", 0) or 0 for s in sessions)
+    cache_total = cache_read_all + cache_create_all
+    cache_hit = cache_read_all / cache_total if cache_total > 0 else None
+
+    if ratio <= 0.9:
+        base = 10
+    elif ratio <= 1.1:
+        base = 8
+    elif ratio <= 1.5:
+        base = 6
+    elif ratio <= 2.0:
+        base = 4
+    else:
+        base = 2
+
+    adj = 0
+    if cache_hit is not None:
+        if cache_hit < 0.20:
+            adj = -1
+        elif cache_hit >= 0.60:
+            adj = +1
+    score = max(1, min(10, base + adj))
+
+    per_turn_frag = ""
+    if tokens_per_turn_good is not None and tokens_per_turn_not_good is not None:
+        per_turn_frag = (
+            f" per-turn: {tokens_per_turn_not_good:,.0f} "
+            f"vs {tokens_per_turn_good:,.0f};"
+        )
+    cache_frag = (
+        f" Cache hit ratio {cache_hit*100:.0f}%." if cache_hit is not None else ""
+    )
+    trailer = f"{per_turn_frag}{cache_frag}"
+    explanation = (
+        f"Other rated sessions averaged {tokens_per_not_good:,.0f} tokens "
+        f"versus {tokens_per_good:,.0f} for good outcomes "
+        f"({ratio:.2f}× more)"
+        + (f";{trailer}" if trailer else ".")
+    )
+    pattern = (
+        f"Good-outcome sessions averaged {tokens_per_good:,.0f} tokens; "
+        f"other rated sessions averaged {tokens_per_not_good:,.0f} "
+        f"({ratio:.2f}× more)."
+    )
+
+    return {
+        "score": score,
+        "metric_tokens_per_good": round(tokens_per_good),
+        "metric_tokens_per_not_good": round(tokens_per_not_good),
+        "metric_ratio": round(ratio, 2),
+        "metric_cache_hit_pct": round(cache_hit * 100, 1) if cache_hit is not None else None,
+        "explanation": explanation,
+        "pattern": pattern,
+    }
+
+
 def compute_scores(sessions, rated, facets_coverage):
     scores = {}
     scores["D1_delegation"] = score_d1_delegation(sessions, rated)
@@ -718,6 +814,7 @@ def compute_scores(sessions, rated, facets_coverage):
     scores["D6_tool_breadth"] = score_d6_tool_breadth(sessions)
     scores["D7_writing_consistency"] = score_d7_writing(rated)
     scores["D8_time_mgmt"] = score_d8_time_mgmt(sessions, rated)
+    scores["D9_token_efficiency"] = score_d9_token_efficiency(sessions, rated)
     # overall
     valid = [v["score"] for v in scores.values() if v.get("score") is not None]
     total_dims = len(scores)
@@ -1253,7 +1350,7 @@ def main():
             tz = timezone.utc
 
     # Two universes:
-    #  - scoring_metas: the rich, LLM-labeled subset used for 8-dimension scores
+    #  - scoring_metas: the rich, LLM-labeled subset used for 9-dimension scores
     #  - activity_metas: the full session universe (transcript-scan output)
     # When --transcript-rows is set, activity_metas uses it; scoring_metas
     # prefers session-meta's richer data (uses_task_agent etc.) intersected
