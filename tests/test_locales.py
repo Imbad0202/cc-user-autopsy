@@ -78,10 +78,6 @@ class UsageRubricKeysTests(unittest.TestCase):
         missing = self.REQUIRED_KEYS - set(locales.STRINGS["zh_TW"].keys())
         self.assertEqual(missing, set(), f"Missing keys in zh_TW: {missing}")
 
-    @unittest.skip(
-        "zh_TW native-tone rewrite scheduled for follow-up PR. Delete this "
-        "skip marker and replace placeholder strings once the rewrite lands."
-    )
     def test_no_zh_tw_todo_markers_in_release(self):
         offenders = [
             (k, v)

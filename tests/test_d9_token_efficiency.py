@@ -227,11 +227,11 @@ def test_d9_en_locale_keys_present():
     assert t("en", "d9_how_it_works").strip() != ""
 
 
-def test_d9_zh_tw_keys_have_todo_marker():
-    """Ensure every D9 zh_TW key carries the TODO marker until
-    fix/zh-tw-locale fills native translations."""
+def test_d9_zh_tw_keys_are_translated():
+    """After fix/zh-tw-locale lands, all D9 zh_TW keys must be native
+    Chinese (no TODO markers, no raw English fallback)."""
     from scripts.locales import t
-    todo_keys = [
+    translated_keys = [
         "score_d9",
         "d9_how_it_works",
         "d9_band_10",
@@ -241,5 +241,7 @@ def test_d9_zh_tw_keys_have_todo_marker():
         "d9_band_2",
         "d9_insufficient",
     ]
-    for key in todo_keys:
-        assert "[TODO zh_TW]" in t("zh_TW", key), f"{key} missing TODO marker"
+    for key in translated_keys:
+        val = t("zh_TW", key)
+        assert "[TODO" not in val, f"{key} still has TODO marker: {val!r}"
+        assert val.strip() != "", f"{key} is empty"
