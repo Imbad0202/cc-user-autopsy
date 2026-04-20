@@ -48,10 +48,12 @@ def d3_explanation(metrics: dict) -> str:
 def d4_explanation(metrics: dict) -> str:
     otl = metrics["metric_output_token_limit_sessions"]
     enc = metrics["metric_effort_no_commit_pct"]
+    enc_n = metrics.get("metric_effort_no_commit_sample")
     long_intr = metrics["metric_long_session_interrupt_rate_pct"]
+    n_suffix = f" (n={enc_n})" if enc_n else ""
     return (
         f"{otl} sessions hit output-token-limit. {enc:.0f}% of sessions over "
-        f"20 minutes had zero commits. Long-session interrupt rate: "
+        f"20 minutes had zero commits{n_suffix}. Long-session interrupt rate: "
         f"{long_intr:.0f}%."
     )
 
