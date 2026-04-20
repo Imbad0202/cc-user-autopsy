@@ -126,6 +126,30 @@ def project_name(path: str) -> str:
     return parts[-1]
 
 
+def is_shippable_project_key(key: str) -> bool:
+    """Return True if a project_key is one we can attribute shipped work to.
+
+    Sessions without a resolvable project_path surface as "(unknown)" — the
+    scanner cannot read git_commits/pushes for them, so they must not be
+    treated as shipped artefacts or as the user's "top project".
+    """
+    return bool(key) and key != "(unknown)"
+
+
+def pick_top_project(proj_detail: dict):
+    """Pick the project with the most sessions, skipping (unknown).
+
+    Returns (key, data) or None when no eligible project exists.
+    """
+    eligible = [
+        (k, v) for k, v in proj_detail.items()
+        if is_shippable_project_key(k)
+    ]
+    if not eligible:
+        return None
+    return max(eligible, key=lambda x: x[1]["sessions"])
+
+
 def bucket_prompt_len(n: int) -> str:
     if n < 20:
         return "<20"
@@ -503,9 +527,17 @@ def score_d4_context_mgmt(sessions):
     long_s = [s for s in sessions if s["duration_min"] > 60]
     long_intr = [s for s in long_s if s["interrupts"] > 0]
     long_intr_rate = (100 * len(long_intr) / len(long_s)) if long_s else 0
-    over20 = [s for s in sessions if s["duration_min"] > 20]
+    # effort-no-commit only makes sense on sessions whose project_path is
+    # resolvable — the scanner cannot read git_commits for (unknown) sessions,
+    # so they are structurally zero and would inflate enc_pct.
+    over20 = [
+        s for s in sessions
+        if s["duration_min"] > 20
+        and is_shippable_project_key(s.get("project_key", ""))
+    ]
     over20_zero_commit = [s for s in over20 if s["git_commits"] == 0]
     enc_pct = (100 * len(over20_zero_commit) / len(over20)) if over20 else 0
+    enc_sample = len(over20)
 
     # per-project otl
     proj_otl = Counter(s["project_key"] for s in otl)
@@ -526,8 +558,17 @@ def score_d4_context_mgmt(sessions):
         score -= 1
     score = max(score, 3)
 
-    long_no_commit = [s for s in sessions if s.get("duration_min", 0) > 20 and s.get("git_commits", 0) == 0]
-    other          = [s for s in sessions if not (s.get("duration_min", 0) > 20 and s.get("git_commits", 0) == 0)]
+    long_no_commit = [
+        s for s in sessions
+        if s.get("duration_min", 0) > 20
+        and s.get("git_commits", 0) == 0
+        and is_shippable_project_key(s.get("project_key", ""))
+    ]
+    other = [
+        s for s in sessions
+        if is_shippable_project_key(s.get("project_key", ""))
+        and not (s.get("duration_min", 0) > 20 and s.get("git_commits", 0) == 0)
+    ]
     pattern_emit = len(long_no_commit) >= _PATTERN_MIN_SAMPLE and len(other) >= _PATTERN_MIN_SAMPLE
     pattern = None
     if pattern_emit:
@@ -544,12 +585,13 @@ def score_d4_context_mgmt(sessions):
         "metric_output_token_limit_sessions": len(otl),
         "metric_long_session_interrupt_rate_pct": round(long_intr_rate, 1),
         "metric_effort_no_commit_pct": round(enc_pct, 1),
+        "metric_effort_no_commit_sample": enc_sample,
         "metric_max_otl_in_one_project": max_proj_otl,
         "pattern_emit": pattern_emit,
         # DEPRECATED (see docs/SCHEMA-CHANGES.md): prose fields retained for
         # 2 releases so external JSON consumers don't break. Render layer
         # reads narrative modules instead.
-        "explanation": f"{len(otl)} sessions hit output-token-limit. {enc_pct:.0f}% of >20min sessions had 0 commits. Long-session interrupt rate: {long_intr_rate:.0f}%.",
+        "explanation": f"{len(otl)} sessions hit output-token-limit. {enc_pct:.0f}% of >20min sessions had 0 commits (n={enc_sample}). Long-session interrupt rate: {long_intr_rate:.0f}%.",
         "pattern": pattern,
     }
 
@@ -1248,7 +1290,7 @@ def compute_aggregates(sessions, rated, facets_coverage):
     shipped_by_proj = defaultdict(list)
     for s in rated:
         if s["outcome"] == "fully_achieved" and s["helpfulness"] in ("essential", "very_helpful"):
-            if s["brief_summary"]:
+            if s["brief_summary"] and is_shippable_project_key(s["project_key"]):
                 shipped_by_proj[s["project_key"]].append(s)
     shipped = []
     for proj, sess_list in shipped_by_proj.items():
@@ -1308,7 +1350,7 @@ def compute_aggregates(sessions, rated, facets_coverage):
     ta_pct = 100 * sum(1 for s in sessions if s["uses_task_agent"]) / len(sessions) if sessions else 0
     mcp_pct = 100 * sum(1 for s in sessions if s["uses_mcp"]) / len(sessions) if sessions else 0
     project_count = len([p for p, d in proj_detail.items() if d["sessions"] >= 3])
-    top_project = max(proj_detail.items(), key=lambda x: x[1]["sessions"]) if proj_detail else None
+    top_project = pick_top_project(proj_detail)
     top_project_share = 100 * top_project[1]["sessions"] / len(sessions) if top_project and sessions else 0
 
     # Pick a specialty tag based on goal_categories
