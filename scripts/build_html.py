@@ -39,7 +39,7 @@ from report_render import (  # noqa: F401  (re-exported for test compatibility)
     PAGE_TEMPLATE,
     SAFE_URL_SCHEMES,
     SAFE_URL_SCHEMES_WITH_MAILTO,
-    WEEKDAY_LABELS,
+    weekday_labels,
 )
 
 
@@ -77,6 +77,12 @@ def main():
     ap.add_argument("--input", required=True)
     ap.add_argument("--samples", required=True)
     ap.add_argument("--peer-review", default=None)
+    ap.add_argument("--try-this", default=None,
+                    help="Optional markdown file with 3-5 'this week try this' "
+                    "items. SELF audience only; ignored for HR.")
+    ap.add_argument("--case-study", default=None,
+                    help="Optional markdown file with the strongest-single-session "
+                    "case study block. Rendered for both audiences.")
     ap.add_argument("--output", required=True)
     ap.add_argument("--audience", choices=["self", "hr"], default="self",
                     help="'self' for the diagnostic letter (default); 'hr' re-orders sections "
@@ -111,6 +117,18 @@ def main():
         if p.exists():
             pr_md = p.read_text()
 
+    try_this_md = ""
+    if args.try_this:
+        p = Path(args.try_this).expanduser()
+        if p.exists():
+            try_this_md = p.read_text()
+
+    case_study_md = ""
+    if args.case_study:
+        p = Path(args.case_study).expanduser()
+        if p.exists():
+            case_study_md = p.read_text()
+
     artifacts_list = load_json_or_warn(args.artifacts, "artifacts", [])
     profile_info = load_json_or_warn(args.profile, "profile", {})
     allowlist = load_json_or_warn(args.public_projects, "public-projects", {})
@@ -130,6 +148,8 @@ def main():
         artifacts_list=artifacts_list,
         public_set=public_set,
         category_map=category_map,
+        try_this_md=try_this_md,
+        case_study_md=case_study_md,
     )
 
     out = Path(args.output).expanduser()
