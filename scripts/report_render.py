@@ -16,7 +16,12 @@ from urllib.parse import urlparse
 from locales import STRINGS, t
 
 
-WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+_WEEKDAY_KEYS = ["wd_mon", "wd_tue", "wd_wed", "wd_thu", "wd_fri", "wd_sat", "wd_sun"]
+
+
+def weekday_labels(locale: str):
+    """Return localized weekday labels (Mon–Sun)."""
+    return [t(locale, k) for k in _WEEKDAY_KEYS]
 
 # Keys whose name starts with one of these prefixes are exposed to inline JS
 # via the `I18N` const.  Naming convention is the contract: name a chart-side
@@ -616,6 +621,299 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     font-size: 12px;
     letter-spacing: 0.04em;
     margin: 18px 0 0 0;
+  }
+
+  /* Plain-language intro + 4-zone relationship diagram */
+  .story-section {
+    margin-top: 64px;
+    margin-bottom: 64px;
+  }
+  .plain-intro {
+    border-left: 4px solid var(--accent);
+    background: rgba(255, 248, 232, 0.55);
+    padding: 22px 28px 18px 28px;
+    margin-bottom: 36px;
+    font-size: 15.5px;
+    line-height: 1.65;
+  }
+  .plain-intro-h {
+    font-family: var(--serif);
+    font-size: 22px;
+    font-weight: 600;
+    margin: 0 0 12px 0;
+    color: var(--ink);
+    letter-spacing: 0.01em;
+  }
+  .plain-intro p { margin: 0 0 12px 0; }
+  .plain-intro ul { margin: 8px 0 12px 0; padding-left: 24px; }
+  .plain-intro li { margin-bottom: 6px; }
+  .plain-intro b { color: var(--accent); }
+
+  .zone-map {
+    border: 1px solid var(--rule);
+    padding: 24px 28px;
+    background: var(--paper);
+  }
+  .zone-map-h h3 {
+    font-family: var(--serif);
+    font-size: 19px;
+    margin: 0 0 6px 0;
+  }
+  .zone-map-sub {
+    font-size: 13.5px;
+    color: var(--ink-muted);
+    margin: 0 0 22px 0;
+    line-height: 1.5;
+  }
+  .zone-grid {
+    display: grid;
+    grid-template-columns: 1fr 28px 1fr 28px 1fr 28px 1fr;
+    gap: 0;
+    align-items: stretch;
+  }
+  .zone-card {
+    border: 1px solid var(--rule);
+    padding: 16px 14px 14px 14px;
+    background: rgba(255, 250, 240, 0.35);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .zone-card.zone-when { background: rgba(232, 218, 195, 0.35); }
+  .zone-card.zone-how { background: rgba(220, 232, 218, 0.35); }
+  .zone-card.zone-what { background: rgba(232, 218, 222, 0.40); }
+  .zone-card.zone-cost { background: rgba(218, 222, 232, 0.35); }
+  .zone-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    color: var(--accent);
+    text-transform: uppercase;
+  }
+  html[lang="zh-Hant"] .zone-label {
+    letter-spacing: 0.05em;
+    font-size: 13px;
+    text-transform: none;
+    font-family: var(--serif);
+    font-weight: 600;
+  }
+  .zone-desc {
+    font-size: 13.5px;
+    line-height: 1.45;
+    color: var(--ink);
+  }
+  .zone-dims {
+    font-size: 11.5px;
+    color: var(--ink-muted);
+    margin-top: auto;
+    font-family: var(--mono);
+    line-height: 1.4;
+  }
+  html[lang="zh-Hant"] .zone-dims {
+    font-family: var(--serif);
+    font-size: 12.5px;
+  }
+  .zone-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent);
+    font-size: 22px;
+    font-weight: 300;
+  }
+  @media (max-width: 800px) {
+    .zone-grid {
+      grid-template-columns: 1fr;
+    }
+    .zone-arrow {
+      transform: rotate(90deg);
+      padding: 8px 0;
+    }
+  }
+  .zone-caption {
+    margin: 18px 0 0 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--ink-muted);
+    border-top: 1px solid var(--rule);
+    padding-top: 14px;
+  }
+
+  /* SELF reading guide — replaces zone-map visual for the diagnostic audience */
+  .reading-guide {
+    border-left: 3px solid var(--rule);
+    background: transparent;
+    padding: 4px 0 4px 18px;
+    margin-top: 24px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--ink-muted);
+  }
+  .reading-guide-h {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 6px 0;
+  }
+  html[lang="zh-Hant"] .reading-guide-h {
+    letter-spacing: 0.05em;
+    font-size: 13px;
+    text-transform: none;
+    font-family: var(--serif);
+    font-weight: 600;
+  }
+  .reading-guide p { margin: 0; }
+
+  /* Benchmark caveat — italic disclaimer line, low key */
+  .benchmark-caveat {
+    font-size: 12.5px;
+    color: var(--ink-muted);
+    font-style: italic;
+    margin: 16px 0 8px 0;
+    line-height: 1.5;
+  }
+
+  /* Try-this-week block (SELF) */
+  .try-this-section {
+    background: rgba(255, 248, 232, 0.40);
+    border: 1px solid var(--rule);
+    padding: 24px 28px 18px 28px;
+    margin: 48px 0;
+  }
+  .try-this-section h2.sec {
+    margin-top: 0;
+  }
+  .try-this-body {
+    font-size: 15px;
+    line-height: 1.7;
+  }
+  .try-this-body ol, .try-this-body ul {
+    padding-left: 22px;
+    margin: 12px 0;
+  }
+  .try-this-body li {
+    margin-bottom: 10px;
+  }
+  .try-this-body strong {
+    color: var(--accent);
+  }
+
+  /* HR self-awareness caveat (replaces 5 collapsed dimensions) */
+  .self-awareness-caveat {
+    margin-top: 24px;
+    padding: 14px 18px;
+    background: rgba(232, 218, 222, 0.30);
+    border-left: 3px solid var(--accent);
+    font-size: 13.5px;
+    line-height: 1.6;
+    font-style: italic;
+    color: var(--ink-muted);
+  }
+
+  /* Method as footer (BOTH, smaller typography) */
+  .method-footer {
+    margin-top: 64px;
+    padding: 24px 0 8px 0;
+    border-top: 1px solid var(--rule);
+    color: var(--ink-muted);
+  }
+  .method-footer-h {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px 0;
+  }
+  html[lang="zh-Hant"] .method-footer-h {
+    letter-spacing: 0.06em;
+    font-size: 13px;
+    text-transform: none;
+    font-family: var(--serif);
+    font-weight: 600;
+  }
+  .method-footer-body {
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+  .method-footer-body h4 {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 14px 0 4px 0;
+    color: var(--ink);
+  }
+  .method-footer-body ul {
+    padding-left: 18px;
+    margin: 4px 0;
+  }
+  .method-footer-body li {
+    margin-bottom: 3px;
+  }
+
+  /* Claim-indexed evidence (SELF) */
+  .claim-header {
+    margin-top: 36px;
+    margin-bottom: 14px;
+    padding: 12px 0 10px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .claim-header:first-child {
+    margin-top: 0;
+    border-top: none;
+  }
+  .claim-header h3 {
+    font-family: var(--serif);
+    font-size: 18px;
+    margin: 0 0 4px 0;
+    color: var(--ink);
+  }
+  .claim-intro {
+    font-size: 13.5px;
+    color: var(--ink-muted);
+    margin: 0;
+    line-height: 1.5;
+  }
+  .claim-empty {
+    font-style: italic;
+    color: var(--ink-muted);
+    font-size: 13.5px;
+    margin: 8px 0;
+  }
+
+  /* Case study block (BOTH) */
+  .case-study-section {
+    border-top: 2px solid var(--rule);
+    border-bottom: 2px solid var(--rule);
+    padding: 28px 0;
+    margin: 48px 0;
+  }
+  .case-study-body {
+    font-size: 14.5px;
+    line-height: 1.65;
+  }
+  .case-study-body dl {
+    margin: 16px 0;
+  }
+  .case-study-body dt {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-top: 12px;
+  }
+  html[lang="zh-Hant"] .case-study-body dt {
+    letter-spacing: 0.05em;
+    font-size: 12.5px;
+    text-transform: none;
+    font-family: var(--serif);
+    font-weight: 600;
+  }
+  .case-study-body dd {
+    margin: 4px 0 0 0;
+    padding-left: 0;
   }
 
   /* Section headers */
@@ -1359,91 +1657,21 @@ $artifacts_section
 
 $overview_section
 
-<section id="scores">
-  <h2 class="sec" data-num="§ 02">$section_scoring</h2>
-  <h2 class="sec-title">$section_scoring_subtitle</h2>
-  <p class="method">$section_scoring_method</p>
+$plain_intro_block
 
-  <div class="overall-strip">$section_scoring_overall_label &nbsp;·&nbsp; $overall_line</div>
+$diagnosis_block
 
-  <p class="score-disclaimer">$score_disclaimer</p>
-  <div class="score-table">
-    $score_rows
-  </div>
-</section>
+$try_this_block
 
-<section id="peer-review-section">
-  <h2 class="sec" data-num="§ 03">$section_peer_review</h2>
-  <h2 class="sec-title">$section_peer_review_subtitle</h2>
-  <p class="method">$section_peer_review_method</p>
-  <div id="peer-review">
-$peer_review_html
-  </div>
-</section>
+$case_study_block
 
-<section id="patterns">
-  <h2 class="sec" data-num="§ 04">$section_patterns</h2>
-  <h2 class="sec-title">$section_patterns_subtitle</h2>
+$patterns_section
 
-  <h3>$patterns_h_plen</h3>
-  <div class="chart-box short" data-fig="Fig. 04"><canvas id="plenChart"></canvas></div>
+$trends_section
 
-  <h3>$patterns_h_friction</h3>
-  <div class="chart-box" data-fig="Fig. 05"><canvas id="fricChart"></canvas></div>
+$evidence_section
 
-  <h3>$patterns_h_tools</h3>
-  <div class="chart-box tall" data-fig="Fig. 06"><canvas id="toolChart"></canvas></div>
-
-  <h3>$patterns_h_heatmap</h3>
-  <div class="chart-box tall" data-fig="Fig. 07"><canvas id="heatChart"></canvas></div>
-
-  <h3>$patterns_h_helpfulness</h3>
-  <p class="method">$patterns_helpfulness_method</p>
-  <div class="chart-box short" data-fig="Fig. 08"><canvas id="helpChart"></canvas></div>
-</section>
-
-<section id="trends">
-  <h2 class="sec" data-num="§ 05">$section_trends</h2>
-  <h2 class="sec-title">$weekly_count weeks on the record.</h2>
-
-  <h3>$trends_h_growth</h3>
-  <p class="method">$trends_growth_method</p>
-  <div class="chart-box" data-fig="Fig. 09"><canvas id="growthChart"></canvas></div>
-
-  <h3>$trends_h_volume</h3>
-  <div class="chart-box" data-fig="Fig. 10"><canvas id="wkSessions"></canvas></div>
-  <div class="chart-box" data-fig="Fig. 11"><canvas id="wkTokens"></canvas></div>
-  <div class="chart-box" data-fig="Fig. 12"><canvas id="wkGood"></canvas></div>
-  <div class="chart-box" data-fig="Fig. 13"><canvas id="wkFric"></canvas></div>
-  <div class="chart-box" data-fig="Fig. 14"><canvas id="wkPlen"></canvas></div>
-</section>
-
-<section id="evidence">
-  <h2 class="sec" data-num="§ 06">$section_evidence</h2>
-  <h2 class="sec-title">$section_evidence_subtitle</h2>
-  <p class="method">$section_evidence_method</p>
-  $evidence_html
-</section>
-
-<section id="method">
-  <h2 class="sec" data-num="§ 07">$section_method</h2>
-  <h2 class="sec-title">$section_method_subtitle</h2>
-
-  <div class="method">
-  <h4>$method_h_sources</h4>
-  <ul>
-    <li>$method_src_session_meta</li>
-    <li>$method_src_facets</li>
-    <li>$method_src_transcripts</li>
-  </ul>
-
-  <h4>$method_h_sampling</h4>
-  <p>$method_sampling_body</p>
-
-  <h4>$method_h_caveats</h4>
-  <div class="caveat">$method_caveats_body</div>
-  </div>
-</section>
+$method_section
 
 <footer>
   <div>cc-user-autopsy · <a href="https://github.com/Imbad0202/cc-user-autopsy">$footer_repo</a> · $footer_tagline</div>
@@ -2054,6 +2282,8 @@ def render(
     artifacts_list: list = None,
     public_set: set = None,
     category_map: dict = None,
+    try_this_md: str = "",
+    case_study_md: str = "",
 ) -> str:
     """Render the full HTML report and return it as a string.
 
@@ -2129,18 +2359,27 @@ def render(
         plen_good_pct.append(round(100 * good / tot, 1) if tot else 0)
         plen_n.append(tot)
 
-    # Score rows
-    dim_titles = {
-        "D1_delegation": t(locale, "score_d1"),
-        "D2_root_cause": t(locale, "score_d2"),
-        "D3_prompt_quality": t(locale, "score_d3"),
-        "D4_context_mgmt": t(locale, "score_d4"),
-        "D5_interrupt_judgment": t(locale, "score_d5"),
-        "D6_tool_breadth": t(locale, "score_d6"),
-        "D7_writing_consistency": t(locale, "score_d7"),
-        "D8_time_mgmt": t(locale, "score_d8"),
-        "D9_token_efficiency": t(locale, "score_d9"),
-    }
+    # Score rows. HR audience shows only 4 candidate-relevant dimensions
+    # (Codex v3 review). The other 5 collapse into one self-awareness caveat.
+    if audience == "hr":
+        dim_titles = {
+            "D1_delegation": t(locale, "score_d1"),
+            "D2_root_cause": t(locale, "score_d2"),
+            "D6_tool_breadth": t(locale, "score_d6"),
+            "D9_token_efficiency": t(locale, "score_d9"),
+        }
+    else:
+        dim_titles = {
+            "D1_delegation": t(locale, "score_d1"),
+            "D2_root_cause": t(locale, "score_d2"),
+            "D3_prompt_quality": t(locale, "score_d3"),
+            "D4_context_mgmt": t(locale, "score_d4"),
+            "D5_interrupt_judgment": t(locale, "score_d5"),
+            "D6_tool_breadth": t(locale, "score_d6"),
+            "D7_writing_consistency": t(locale, "score_d7"),
+            "D8_time_mgmt": t(locale, "score_d8"),
+            "D9_token_efficiency": t(locale, "score_d9"),
+        }
     score_rows = ""
     for key, title in dim_titles.items():
         s = scores.get(key, {})
@@ -2183,32 +2422,107 @@ def render(
     else:
         overall_line = t(locale, "score_overall_low_data")
 
-    # Evidence
-    tag_labels = {
-        tag: narrative.evidence_badge(tag)
-        for tag in (
-            "high_friction", "top_token", "top_interrupt", "not_achieved",
-            "partial", "control_good", "user_rejected", "long_duration",
-        )
-    }
-    by_tag = {}
-    for sid, info in samples_data.items():
-        by_tag.setdefault(info["tag"], []).append({"sid": sid, **info})
+    # Evidence — claim-indexed for SELF, hidden for HR (Codex v3 review).
     evidence_html = ""
     if audience == "hr":
-        # Evidence library leaks sid + project + first-prompt + friction detail.
-        # Not appropriate for a public-facing report. Hidden entirely in HR mode.
-        evidence_html = (
-            '<p class="method">Evidence library with per-session citations is '
-            'available in the self-audit version of this report. It is hidden '
-            'here to protect private project details.</p>'
-        )
+        # HR: hide evidence library entirely. Redacted sid + redacted project
+        # name yields zero signal, looks forensic. Section is fully suppressed
+        # (see PAGE_TEMPLATE conditional below).
+        evidence_html = ""
     else:
-        for tag, label in tag_labels.items():
-            sess_list = by_tag.get(tag, [])
+        # SELF: group sample sessions by the peer-review CLAIM they support.
+        # This makes evidence traceback fast: each claim shows 2-3 examples,
+        # not a 24-card archive.
+        def _hour_of(sid_meta):
+            ts = sid_meta.get("start", "")
+            if not ts or len(ts) < 13:
+                return None
+            try:
+                # ISO 8601 UTC → tz offset 8 (Asia/Taipei) per meta tz_offset_hours
+                hour_utc = int(ts[11:13])
+                return (hour_utc + 8) % 24
+            except ValueError:
+                return None
+
+        samples_with_meta = []
+        for sid, info in samples_data.items():
+            m = info.get("meta", {})
+            samples_with_meta.append({"sid": sid, **info, "_hour": _hour_of(m)})
+
+        # Bucket sessions into claims. A session can match multiple claims;
+        # we keep dedup so the same sid does not appear twice.
+        seen = set()
+        def _pick(predicate, limit=3):
+            picked = []
+            for s in samples_with_meta:
+                if s["sid"] in seen:
+                    continue
+                if predicate(s):
+                    picked.append(s)
+                    seen.add(s["sid"])
+                    if len(picked) >= limit:
+                        break
+            return picked
+
+        # Claim 1: afternoon sessions degrade. V4: not just hour, also requires
+        # actual degradation signal (friction or non-good outcome).
+        def _has_friction(s):
+            fc = s.get("meta", {}).get("friction_counts") or {}
+            return sum(fc.values()) >= 1
+        def _not_good(s):
+            return s.get("meta", {}).get("outcome") not in (
+                "fully_achieved", "mostly_achieved", ""
+            )
+        claim_afternoon = _pick(
+            lambda s: (
+                s.get("_hour") is not None and 13 <= s["_hour"] <= 15
+                and (_has_friction(s) or _not_good(s))
+            ),
+            limit=3,
+        )
+        # Claim 2: delegation strength — long multi-task, Task agent, fully_achieved.
+        claim_delegation = _pick(
+            lambda s: (
+                s.get("meta", {}).get("uses_task_agent") and
+                s.get("meta", {}).get("outcome") == "fully_achieved" and
+                s.get("meta", {}).get("git_commits", 0) >= 3
+            ),
+            limit=3,
+        )
+        # Claim 3: meander — long sessions with high tokens but zero commits.
+        claim_meander = _pick(
+            lambda s: (
+                s.get("meta", {}).get("total_tokens", 0) >= 100_000 and
+                s.get("meta", {}).get("git_commits", 0) == 0
+            ),
+            limit=3,
+        )
+        # Claim 4: interrupt-as-redirect. V4: must be interrupted AND have
+        # reached a good outcome — otherwise it does not prove the redirect was
+        # successful.
+        claim_interrupt = _pick(
+            lambda s: (
+                s.get("meta", {}).get("interrupts", 0) >= 1 and
+                s.get("meta", {}).get("outcome") in (
+                    "fully_achieved", "mostly_achieved"
+                )
+            ),
+            limit=3,
+        )
+
+        claim_groups = [
+            ("claim_afternoon_h", "claim_afternoon_intro", claim_afternoon),
+            ("claim_delegation_h", "claim_delegation_intro", claim_delegation),
+            ("claim_meander_h", "claim_meander_intro", claim_meander),
+            ("claim_interrupt_h", "claim_interrupt_intro", claim_interrupt),
+        ]
+
+        for h_key, intro_key, sess_list in claim_groups:
+            # V4: hide empty claim groups entirely. An apologetic "no sessions
+            # match" line is weaker than showing fewer claims.
             if not sess_list:
                 continue
-            evidence_html += f'<div class="evidence-header">{label}</div>\n'
+            evidence_html += f'<div class="claim-header"><h3>{t(locale, h_key)}</h3><p class="claim-intro">{t(locale, intro_key)}</p></div>\n'
             for s in sess_list:
                 m = s.get("meta", {})
                 fp = (m.get("first_prompt", "") or "")[:300]
@@ -2220,21 +2534,22 @@ def render(
                 outcome = narrative.outcome_label(raw_outcome) if raw_outcome else narrative.no_facet_label()
                 tok_str = fmt(m.get('total_tokens', 0))
                 dur = m.get('duration_min', 0)
+                tag = s.get("tag", "control_good")
                 evidence_html += f'''<details class="evidence">
       <summary>
     <span class="tag {tag}">{esc(narrative.evidence_badge(tag))}</span>
     <span><span class="sid">{esc(s["sid"][:8])}</span> · <span class="proj">{esc(proj)}</span> · {esc(outcome)}</span>
-    <span class="right">{esc(tok_str)} tok · {esc(dur)}m</span>
+    <span class="right">{esc(tok_str)} {t(locale, "evidence_tok_unit")} · {esc(dur)}{t(locale, "evidence_dur_unit")}</span>
       </summary>
-      <p><strong>Summary</strong> · {esc(summary)}</p>
-      <p><strong>Friction detail</strong> · {esc(frictxt)}</p>
-      <p><strong>First prompt</strong> · <code>{esc(fp)}</code></p>
-      <p><strong>Friction counts</strong> · <code>{esc(fric)}</code></p>
+      <p><strong>{t(locale, "evidence_summary")}</strong> · {esc(summary)}</p>
+      <p><strong>{t(locale, "evidence_friction_detail")}</strong> · {esc(frictxt)}</p>
+      <p><strong>{t(locale, "evidence_first_prompt")}</strong> · <code>{esc(fp)}</code></p>
+      <p><strong>{t(locale, "evidence_friction_counts")}</strong> · <code>{esc(fric)}</code></p>
     </details>
     '''
 
     preliminary_warning = (
-        '<div class="preliminary">⚠ Preliminary report — fewer than 20 rated sessions. Scores directional.</div>'
+        f'<div class="preliminary">{t(locale, "preliminary_warning")}</div>'
         if meta.get("data_thin_warning") else ''
     )
 
@@ -2352,80 +2667,74 @@ def render(
       <div class="profile-lede">{profile_lede_html}</div>
       <div class="profile-grid">
     <div class="profile-cell">
-      <div class="k">Scale</div>
+      <div class="k">{t(locale, "hr_profile_scale_label")}</div>
       <div class="v">{fmt(profile.get("total_duration_hr", 0))}h</div>
-      <div class="sub">{profile.get("total_sessions", 0)} sessions</div>
+      <div class="sub">{profile.get("total_sessions", 0)} {t(locale, "hr_profile_sessions_unit")}</div>
     </div>
     <div class="profile-cell">
-      <div class="k">Velocity</div>
+      <div class="k">{t(locale, "hr_profile_velocity_label")}</div>
       <div class="v">{efficiency.get("commits_per_hour", 0)}</div>
       <div class="sub">{t(locale, "profile_sub_commits_per_hour")}</div>
     </div>
     <div class="profile-cell">
-      <div class="k">Parallel work</div>
+      <div class="k">{t(locale, "hr_profile_parallel_label")}</div>
       <div class="v">{profile.get("ta_pct", 0):.0f}%</div>
       <div class="sub">{t(locale, "profile_sub_task_agent_adoption")}</div>
     </div>
     <div class="profile-cell">
-      <div class="k">Tool breadth</div>
+      <div class="k">{t(locale, "hr_profile_tool_breadth_label")}</div>
       <div class="v">{profile.get("mcp_pct", 0):.0f}%</div>
       <div class="sub">{t(locale, "profile_sub_mcp_sessions")}</div>
     </div>
     <div class="profile-cell">
-      <div class="k">Self-audit</div>
+      <div class="k">{t(locale, "hr_profile_self_audit_label")}</div>
       <div class="v">{scores_overall if scores_overall else "n/a"}<span style="font-size:14px;color:var(--ink-muted);"> / 10</span></div>
-      <div class="sub">9-dim rule-based</div>
+      <div class="sub">{t(locale, "toc_hr_scores")}</div>
     </div>
     <div class="profile-cell">
-      <div class="k">Focus</div>
+      <div class="k">{t(locale, "hr_profile_focus_label")}</div>
       <div class="v" style="font-size:14.5px;line-height:1.3;">{esc(profile.get("specialty", "—"))}</div>
-      <div class="sub">{profile.get("top_project_share_pct", 0):.0f}% on top project</div>
+      <div class="sub">{t(locale, "hr_profile_top_project_share").format(pct=f'{profile.get("top_project_share_pct", 0):.0f}')}</div>
     </div>
       </div>
     </div>'''
 
-        # Shipped artifacts section — redact non-public projects
-        if shipped:
+        # Shipped artifacts — Codex v3: HR shows AT MOST 3 PUBLIC items.
+        # Redacted items ("Private platform project") provide near-zero signal
+        # for a hiring manager and look like padding. If there are fewer than 3
+        # public items, show only what is public.
+        public_shipped = [item for item in shipped if is_public(item["project"])]
+        public_shipped = public_shipped[:3]
+        if public_shipped:
             shipped_items = ""
-            for item in shipped[:6]:
+            for item in public_shipped:
                 raw_proj = item["project"]
                 dur_hr = item["project_duration_min"] / 60
-                if is_public(raw_proj):
-                    proj_display = raw_proj
-                    summary_display = item["summary"]
-                else:
-                    proj_display = label_project(raw_proj)
-                    summary_display = (
-                        f"Outcome: fully achieved across {item['project_sessions']} "
-                        f"sessions. Details withheld — {t(locale, 'redacted_project').lower()}."
-                    )
+                proj_display = raw_proj
+                summary_display = item["summary"]
+                proj_sub = t(locale, "hr_shipped_proj_sub_template").format(
+                    sessions=item["project_sessions"],
+                    hours=f'{dur_hr:.0f}',
+                )
                 shipped_items += f'''<div class="shipped-item">
       <div>
     <div class="proj">{esc(proj_display)}</div>
-    <div class="proj-sub">{item["project_sessions"]} sessions · {dur_hr:.0f}h</div>
+    <div class="proj-sub">{esc(proj_sub)}</div>
       </div>
       <div class="desc">{esc(summary_display)}</div>
       <div class="stats">
-    {item["project_commits"]} commits<br>
-    {fmt(item["total_tokens"])} tok / top session
+    {item["project_commits"]} {t(locale, "hr_shipped_commits_label")}<br>
+    {fmt(item["total_tokens"])} {t(locale, "hr_shipped_top_session_tok")}
       </div>
     </div>'''
-            privacy_note = ""
             if public_set:
-                privacy_note = (
-                    ' Allowlisted public projects appear by name; everything else is '
-                    'shown as a generic category label.'
-                )
+                privacy_note = " " + t(locale, "hr_shipped_privacy_note_allowlist").strip()
             else:
-                privacy_note = (
-                    ' All project names are anonymised — no public-projects allowlist '
-                    'was supplied. Pass <code>--public-projects</code> to show specific '
-                    'repos by name.'
-                )
+                privacy_note = " " + t(locale, "hr_shipped_privacy_note_anonymised").strip()
             shipped_section = f'''<section id="shipped">
-      <h2 class="sec" data-num="§ HR-02">Shipped with Claude</h2>
-      <h2 class="sec-title">Representative outcomes — fully achieved, essential-tier sessions, grouped by project.</h2>
-      <p class="method">Extracted from session facets where <code>outcome = fully_achieved</code> and <code>helpfulness ∈ (essential, very_helpful)</code>. One representative per project, ranked by total time invested.{privacy_note}</p>
+      <h2 class="sec" data-num="§ HR-02">{t(locale, "hr_shipped_h")}</h2>
+      <h2 class="sec-title">{t(locale, "hr_shipped_subtitle")}</h2>
+      <p class="method">{t(locale, "hr_shipped_method")}{privacy_note}</p>
       <div class="shipped-list">{shipped_items}</div>
     </section>'''
         else:
@@ -2444,9 +2753,9 @@ def render(
       <div class="link"><a rel="noopener noreferrer" href="{esc(safe_url)}">{esc(display_url(safe_url))}</a></div>
     </div>'''
             artifacts_section = f'''<section id="artifacts">
-      <h2 class="sec" data-num="§ HR-03">Public artifacts</h2>
-      <h2 class="sec-title">Links the user chose to surface.</h2>
-      <p class="method">Self-reported. Not auto-extracted.</p>
+      <h2 class="sec" data-num="§ HR-03">{t(locale, "hr_artifacts_h")}</h2>
+      <h2 class="sec-title">{t(locale, "hr_artifacts_subtitle")}</h2>
+      <p class="method">{t(locale, "hr_artifacts_method")}</p>
       {artifact_rows}
     </section>'''
         else:
@@ -2454,20 +2763,20 @@ def render(
 
         # How-to-read for HR
         how_to_read_section = f'''<details class="how-to-read" open>
-    <summary>How to read this report (30-second primer)</summary>
+    <summary>{t(locale, "how_to_read_summary")}</summary>
     <div class="how-body">
-    <p>This report is generated by <code>cc-user-autopsy</code>, a skill that reads a user's local Claude Code usage data. It combines deterministic rule-based scoring with an LLM-written peer review.</p>
+    <p>{t(locale, "how_to_read_intro")}</p>
     <dl>
-    <dt>Session</dt>
-    <dd>One continuous Claude Code conversation, bounded by either a fresh start or a <code>/clear</code>. A typical heavy user has hundreds per quarter.</dd>
-    <dt>Task agent / Subagent</dt>
-    <dd>Claude Code lets you spawn isolated child agents to run a subtask in parallel. Heavy adoption signals fluency with agentic workflows.</dd>
-    <dt>MCP (Model Context Protocol)</dt>
-    <dd>A standard for connecting Claude to external tools (Playwright, Supabase, GitHub, etc). MCP adoption rate correlates with tool breadth.</dd>
-    <dt>Facet</dt>
-    <dd>LLM-classified outcome / friction labels per session, produced by the built-in <code>/insights</code> command. Coverage &lt; 100% is normal.</dd>
-    <dt>Interrupt recovery rate</dt>
-    <dd>Of sessions where the user interrupted Claude's action, what fraction still reached a "good" outcome. High = good judgment about when to stop Claude.</dd>
+    <dt>{t(locale, "how_to_read_dt_session")}</dt>
+    <dd>{t(locale, "how_to_read_dd_session")}</dd>
+    <dt>{t(locale, "how_to_read_dt_subagent")}</dt>
+    <dd>{t(locale, "how_to_read_dd_subagent")}</dd>
+    <dt>{t(locale, "how_to_read_dt_mcp")}</dt>
+    <dd>{t(locale, "how_to_read_dd_mcp")}</dd>
+    <dt>{t(locale, "how_to_read_dt_facet")}</dt>
+    <dd>{t(locale, "how_to_read_dd_facet")}</dd>
+    <dt>{t(locale, "how_to_read_dt_interrupt")}</dt>
+    <dd>{t(locale, "how_to_read_dd_interrupt")}</dd>
     <dt>{t(locale, "how_to_read_key_relate")}</dt>
     <dd>{t(locale, "how_to_read_val_relate")}</dd>
     </dl>
@@ -2475,15 +2784,26 @@ def render(
     </details>'''
 
         # TOC — HR-ordered
-        toc_links = (
+        shipped_toc = (
             f'<a href="#shipped">{t(locale, "toc_hr_shipped")}</a>'
-            f'<a href="#overview">{t(locale, "toc_hr_overview")}</a>'
-            f'<a href="#scores">{t(locale, "toc_hr_scores")}</a>'
-            f'<a href="#peer-review-section">{t(locale, "toc_hr_peer_review")}</a>'
-            f'<a href="#trends">{t(locale, "toc_hr_trends")}</a>'
-            f'<a href="#patterns">{t(locale, "toc_hr_patterns")}</a>'
-            f'<a href="#evidence">{t(locale, "toc_hr_evidence")}</a>'
-            f'<a href="#method">{t(locale, "toc_hr_method")}</a>'
+            if shipped_section else ""
+        )
+        artifacts_toc = (
+            f'<a href="#artifacts">{t(locale, "hr_artifacts_h")}</a>'
+            if artifacts_section else ""
+        )
+        case_study_toc = (
+            f'<a href="#case-study">{t(locale, "toc_hr_case_study")}</a>'
+            if case_study_md else ""
+        )
+        toc_links = (
+            shipped_toc
+            + artifacts_toc
+            + f'<a href="#peer-review-section">{t(locale, "toc_hr_peer_review")}</a>'
+            + f'<a href="#scores">{t(locale, "toc_hr_scores")}</a>'
+            + case_study_toc
+            + f'<a href="#trends">{t(locale, "toc_hr_trends")}</a>'
+            + f'<a href="#method">{t(locale, "toc_hr_method")}</a>'
         )
     else:
         # --- SELF audience (default, original layout) ---
@@ -2501,14 +2821,24 @@ def render(
         shipped_section = ""
         artifacts_section = ""
         how_to_read_section = ""
+        try_this_toc = (
+            f'<a href="#try-this-week">{t(locale, "toc_self_try_this")}</a>'
+            if try_this_md else ""
+        )
+        case_study_toc = (
+            f'<a href="#case-study">{t(locale, "toc_self_case_study")}</a>'
+            if case_study_md else ""
+        )
         toc_links = (
             f'<a href="#overview">{t(locale, "toc_self_overview")}</a>'
-            f'<a href="#scores">{t(locale, "toc_self_scores")}</a>'
-            f'<a href="#peer-review-section">{t(locale, "toc_self_peer_review")}</a>'
-            f'<a href="#patterns">{t(locale, "toc_self_patterns")}</a>'
-            f'<a href="#trends">{t(locale, "toc_self_trends")}</a>'
-            f'<a href="#evidence">{t(locale, "toc_self_evidence")}</a>'
-            f'<a href="#method">{t(locale, "toc_self_method")}</a>'
+            + f'<a href="#peer-review-section">{t(locale, "toc_self_peer_review")}</a>'
+            + f'<a href="#scores">{t(locale, "toc_self_scores")}</a>'
+            + try_this_toc
+            + case_study_toc
+            + f'<a href="#patterns">{t(locale, "toc_self_patterns")}</a>'
+            + f'<a href="#trends">{t(locale, "toc_self_trends")}</a>'
+            + f'<a href="#evidence">{t(locale, "toc_self_evidence")}</a>'
+            + f'<a href="#method">{t(locale, "toc_self_method")}</a>'
         )
 
     # Growth curve chart section (both audiences but different placement)
@@ -2526,34 +2856,172 @@ def render(
         overview_section = ""
         # Drop the activity panel directly under the profile card so readers
         # still see cache/models/cost — the most compelling scale evidence.
+        # Benchmark caveat sits between profile and activity panel.
+        caveat_line = (
+            f'<p class="benchmark-caveat" style="margin-top:24px">'
+            f'{t(locale, "benchmark_caveat")}</p>'
+        )
         hr_activity_block = (
-            f'<div style="margin-top:28px">{activity_panel_html}</div>'
-            if activity_panel_html else ""
+            f'{caveat_line}<div style="margin-top:16px">{activity_panel_html}</div>'
+            if activity_panel_html else caveat_line
         )
     else:
         hr_activity_block = ""
-        overview_section = f'''<section id="overview">
-      <h2 class="sec" data-num="§ 01">{t(locale, "section_overview")}</h2>
-      <h2 class="sec-title">{t(locale, "section_overview_subtitle")}</h2>
-
-      {activity_panel_html}
-
-      <div class="metrics">
-    <div class="metric"><div class="n">{total}</div><div class="lbl">{t(locale, "tile_sessions")}</div></div>
-    <div class="metric"><div class="n">{fmt(total_tok)}</div><div class="lbl">{t(locale, "tile_total_tokens")}</div></div>
+        # SELF Usage Snapshot: merged overview + activity. Codex v2: the
+        # 8-tile metric grid was redundant with activity_panel_html. Keep
+        # only behavior-relevant metrics that the peer review actually
+        # references (commits, interactive time, TA%, MCP%).
+        behavior_strip = f'''<div class="metrics" style="margin-top:16px;margin-bottom:16px">
     <div class="metric"><div class="n">{commits_total}</div><div class="lbl">{t(locale, "tile_git_commits")}</div></div>
     <div class="metric"><div class="n">{duration_hr}h</div><div class="lbl">{t(locale, "tile_interactive_time")}</div></div>
     <div class="metric"><div class="n">{ta_rate}%</div><div class="lbl">{t(locale, "tile_used_task_agent")}</div></div>
     <div class="metric"><div class="n">{mcp_rate}%</div><div class="lbl">{t(locale, "tile_used_mcp")}</div></div>
-    <div class="metric"><div class="n">{meta["facets_coverage_pct"]}%</div><div class="lbl">{t(locale, "tile_facet_coverage")}</div></div>
-    <div class="metric"><div class="n">{int(agg["response_times"]["median_seconds"])}s</div><div class="lbl">{t(locale, "tile_median_think_time")}</div></div>
-      </div>
+      </div>'''
+        overview_section = f'''<section id="overview">
+      <h2 class="sec" data-num="§ 01">{t(locale, "self_snapshot_h")}</h2>
+      <h2 class="sec-title">{t(locale, "self_snapshot_subtitle")}</h2>
+
+      <p class="benchmark-caveat">{t(locale, "benchmark_caveat")}</p>
+
+      {activity_panel_html}
+
+      {behavior_strip}
 
       <div class="two-col">
     <div class="chart-box" data-fig="Fig. 01"><canvas id="outcomeChart"></canvas></div>
     <div class="chart-box" data-fig="Fig. 02"><canvas id="stypeChart"></canvas></div>
       </div>
       <div class="chart-box tall" data-fig="Fig. 03"><canvas id="projChart"></canvas></div>
+    </section>'''
+
+    # -------- Plain-language intro + 4-zone relationship (audience-conditional) --------
+    # SELF audience: short reading-guide paragraph (the user already knows their workflow).
+    # HR audience: full visual zone-map (first-time reader needs orientation).
+    if audience == "hr":
+        zone_visual_html = f'''<div class="zone-map">
+    <div class="zone-map-h">
+      <h3>{t(locale, "section_relationships")}</h3>
+      <p class="zone-map-sub">{t(locale, "section_relationships_subtitle")}</p>
+    </div>
+    <div class="zone-grid">
+      <div class="zone-card zone-when">
+    <div class="zone-label">{t(locale, "plain_zone_when")}</div>
+    <div class="zone-desc">{t(locale, "plain_zone_when_desc")}</div>
+    <div class="zone-dims">{t(locale, "plain_zone_when_dims")}</div>
+      </div>
+      <div class="zone-arrow">→</div>
+      <div class="zone-card zone-how">
+    <div class="zone-label">{t(locale, "plain_zone_how")}</div>
+    <div class="zone-desc">{t(locale, "plain_zone_how_desc")}</div>
+    <div class="zone-dims">{t(locale, "plain_zone_how_dims")}</div>
+      </div>
+      <div class="zone-arrow">→</div>
+      <div class="zone-card zone-what">
+    <div class="zone-label">{t(locale, "plain_zone_what")}</div>
+    <div class="zone-desc">{t(locale, "plain_zone_what_desc")}</div>
+    <div class="zone-dims">{t(locale, "plain_zone_what_dims")}</div>
+      </div>
+      <div class="zone-arrow">→</div>
+      <div class="zone-card zone-cost">
+    <div class="zone-label">{t(locale, "plain_zone_cost")}</div>
+    <div class="zone-desc">{t(locale, "plain_zone_cost_desc")}</div>
+    <div class="zone-dims">{t(locale, "plain_zone_cost_dims")}</div>
+      </div>
+    </div>
+    <p class="zone-caption">{t(locale, "relationships_flow_caption")}</p>
+      </div>'''
+    else:
+        zone_visual_html = f'''<div class="reading-guide">
+    <h3 class="reading-guide-h">{t(locale, "self_reading_guide_h")}</h3>
+    <p>{t(locale, "self_reading_guide_body")}</p>
+      </div>'''
+
+    plain_intro_block = f'''<section id="story" class="story-section">
+      <div class="plain-intro">
+    <h3 class="plain-intro-h">{t(locale, "plain_intro_header")}</h3>
+    {t(locale, "plain_intro_body")}
+      </div>
+      {zone_visual_html}
+    </section>'''
+
+    # -------- Try-this-week block (SELF only) --------
+    # 3-5 concrete behaviors derived from peer review claims, hand-curated per user.
+    # Sits between peer review and scoring grid so action items have momentum.
+    # NOTE: try_this_md is loaded externally (analogous to peer_review_md) via build_html.py.
+    if audience != "hr" and try_this_md:
+        try_this_block = f'''<section id="try-this-week" class="try-this-section">
+      <h2 class="sec" data-num="§ 04">{t(locale, "self_try_this_h")}</h2>
+      <p class="method">{t(locale, "self_try_this_intro")}</p>
+      <div class="try-this-body">
+    {md_to_html(try_this_md)}
+      </div>
+    </section>'''
+    else:
+        try_this_block = ""
+
+    # -------- Case study block (BOTH audiences) --------
+    # The strongest single session, attached as evidence. SELF gets raw project name.
+    # HR gets the redacted category label.
+    # NOTE: case_study_md is loaded externally via build_html.py.
+    if case_study_md:
+        # HR drops try-this so case-study takes §04 slot. SELF keeps try-this at §04 so case-study is §05.
+        cs_num = "§ 04" if audience == "hr" else "§ 05"
+        case_study_block = f'''<section id="case-study" class="case-study-section">
+      <h2 class="sec" data-num="{cs_num}">{t(locale, "case_study_h")}</h2>
+      <h2 class="sec-title">{t(locale, "case_study_subtitle")}</h2>
+      <div class="case-study-body">
+    {md_to_html(case_study_md)}
+      </div>
+    </section>'''
+    else:
+        case_study_block = ""
+
+    # -------- Diagnosis block: peer review THEN scoring (BOTH audiences) --------
+    # Codex V2 review: story-first, quantification-after. The reader sees the
+    # narrative before the grid so the grid reads as an index, not a verdict.
+    # V4: HR uses different scoring chrome (4 hiring signals, no 9-dim language,
+    # no overall average since the visible 4 are cherry-picked from a larger set).
+    self_awareness_caveat_html = (
+        f'<p class="self-awareness-caveat">{t(locale, "hr_self_awareness_caveat")}</p>'
+        if audience == "hr" else ""
+    )
+    if audience == "hr":
+        scoring_h = t(locale, "hr_section_scoring_h")
+        scoring_subtitle = t(locale, "hr_section_scoring_subtitle")
+        scoring_method = t(locale, "hr_section_scoring_method")
+        overall_strip_html = ""  # No average over a cherry-picked 4-dim subset.
+        score_disclaimer_html = ""
+    else:
+        scoring_h = t(locale, "section_scoring")
+        scoring_subtitle = t(locale, "section_scoring_subtitle")
+        scoring_method = t(locale, "section_scoring_method")
+        overall_strip_html = (
+            f'<div class="overall-strip">{t(locale, "section_scoring_overall_label")} '
+            f'&nbsp;·&nbsp; {overall_line}</div>'
+        )
+        score_disclaimer_html = f'<p class="score-disclaimer">{t(locale, "score_disclaimer")}</p>'
+
+    diagnosis_block = f'''<section id="peer-review-section">
+      <h2 class="sec" data-num="§ 02">{t(locale, "section_peer_review")}</h2>
+      <h2 class="sec-title">{t(locale, "section_peer_review_subtitle")}</h2>
+      <p class="method">{t(locale, "section_peer_review_method")}</p>
+      <div id="peer-review">
+    {pr_html}
+      </div>
+    </section>
+
+    <section id="scores">
+      <h2 class="sec" data-num="§ 03">{scoring_h}</h2>
+      <h2 class="sec-title">{scoring_subtitle}</h2>
+      <p class="method">{scoring_method}</p>
+
+      {overall_strip_html}
+
+      {score_disclaimer_html}
+      <div class="score-table">
+    {score_rows}
+      </div>
+      {self_awareness_caveat_html}
     </section>'''
 
     # Assemble via string.Template to avoid CSS brace escaping
@@ -2615,6 +3083,94 @@ def render(
         "profile_section": profile_section,
         "hr_activity_block": hr_activity_block,
         "overview_section": overview_section,
+        "plain_intro_block": plain_intro_block,
+        "try_this_block": try_this_block,
+        "case_study_block": case_study_block,
+        "diagnosis_block": diagnosis_block,
+        # SELF section numbering: 01 Overview / 02 Peer / 03 Scoring / 04 Try /
+        # 05 Case Study / 06 Patterns / 07 Trends / 08 Evidence + Method footer.
+        # HR section numbering: 02 Peer / 03 Scoring / 04 Case Study / 05 Trends + Method footer.
+        # (HR drops Try-this and Evidence and Patterns; case study takes the 04 slot.)
+        "evidence_section": (
+            "" if audience == "hr" else
+            f'<section id="evidence">'
+            f'<h2 class="sec" data-num="§ 08">{t(locale, "section_evidence")}</h2>'
+            f'<h2 class="sec-title">{t(locale, "section_evidence_subtitle")}</h2>'
+            f'<p class="method">{t(locale, "section_evidence_method")}</p>'
+            f'{evidence_html}'
+            f'</section>'
+        ),
+        "patterns_section": (
+            # HR: no pattern mining section at all. Outcome donut already lives
+            # in trends_section. Heatmap/helpfulness/tool usage charts are
+            # internal analytics with no hiring-manager signal.
+            "" if audience == "hr" else
+            f'<section id="patterns">'
+            f'<h2 class="sec" data-num="§ 06">{t(locale, "section_patterns")}</h2>'
+            f'<h2 class="sec-title">{t(locale, "section_patterns_subtitle")}</h2>'
+            f'<h3>{t(locale, "patterns_h_plen")}</h3>'
+            f'<div class="chart-box short" data-fig="Fig. 04"><canvas id="plenChart"></canvas></div>'
+            f'<h3>{t(locale, "patterns_h_friction")}</h3>'
+            f'<div class="chart-box" data-fig="Fig. 05"><canvas id="fricChart"></canvas></div>'
+            f'<h3>{t(locale, "patterns_h_tools")}</h3>'
+            f'<div class="chart-box tall" data-fig="Fig. 06"><canvas id="toolChart"></canvas></div>'
+            f'<h3>{t(locale, "patterns_h_heatmap")}</h3>'
+            f'<div class="chart-box tall" data-fig="Fig. 07"><canvas id="heatChart"></canvas></div>'
+            f'<h3>{t(locale, "patterns_h_helpfulness")}</h3>'
+            f'<p class="method">{t(locale, "patterns_helpfulness_method")}</p>'
+            f'<div class="chart-box short" data-fig="Fig. 08"><canvas id="helpChart"></canvas></div>'
+            f'</section>'
+        ),
+        "trends_section": (
+            # HR: keep only growth curve + outcome mix. SELF: full weekly suite.
+            f'<section id="trends">'
+            f'<h2 class="sec" data-num="§ 05">{t(locale, "section_trends")}</h2>'
+            f'<h2 class="sec-title">{t(locale, "trends_subtitle_template").format(n=len(weekly))}</h2>'
+            f'<h3>{t(locale, "trends_h_growth")}</h3>'
+            f'<p class="method">{t(locale, "trends_growth_method")}</p>'
+            f'<div class="chart-box" data-fig="Fig. 09"><canvas id="growthChart"></canvas></div>'
+            f'<div class="two-col" style="margin-top:24px">'
+            f'<div class="chart-box" data-fig="Fig. 01"><canvas id="outcomeChart"></canvas></div>'
+            f'<div class="chart-box" data-fig="Fig. 02"><canvas id="stypeChart"></canvas></div>'
+            f'</div>'
+            f'</section>'
+            if audience == "hr" else
+            f'<section id="trends">'
+            f'<h2 class="sec" data-num="§ 07">{t(locale, "section_trends")}</h2>'
+            f'<h2 class="sec-title">{t(locale, "trends_subtitle_template").format(n=len(weekly))}</h2>'
+            f'<h3>{t(locale, "trends_h_growth")}</h3>'
+            f'<p class="method">{t(locale, "trends_growth_method")}</p>'
+            f'<div class="chart-box" data-fig="Fig. 09"><canvas id="growthChart"></canvas></div>'
+            f'<h3>{t(locale, "trends_h_volume")}</h3>'
+            f'<div class="chart-box" data-fig="Fig. 10"><canvas id="wkSessions"></canvas></div>'
+            f'<div class="chart-box" data-fig="Fig. 11"><canvas id="wkTokens"></canvas></div>'
+            f'<div class="chart-box" data-fig="Fig. 12"><canvas id="wkGood"></canvas></div>'
+            f'<div class="chart-box" data-fig="Fig. 13"><canvas id="wkFric"></canvas></div>'
+            f'<div class="chart-box" data-fig="Fig. 14"><canvas id="wkPlen"></canvas></div>'
+            f'</section>'
+        ),
+        "method_section": (
+            f'<section id="method" class="method-footer">'
+            f'<h3 class="method-footer-h">{t(locale, "hr_method_disclosure_h")}</h3>'
+            f'<p class="method-footer-body">{t(locale, "hr_method_disclosure_body")}</p>'
+            f'</section>'
+            if audience == "hr" else
+            f'<section id="method" class="method-footer">'
+            f'<h3 class="method-footer-h">{t(locale, "section_method")}</h3>'
+            f'<div class="method-footer-body">'
+            f'<h4>{t(locale, "method_h_sources")}</h4>'
+            f'<ul>'
+            f'<li>{t(locale, "method_src_session_meta")}</li>'
+            f'<li>{t(locale, "method_src_facets")}</li>'
+            f'<li>{t(locale, "method_src_transcripts")}</li>'
+            f'</ul>'
+            f'<h4>{t(locale, "method_h_sampling")}</h4>'
+            f'<p>{narrative.methodology_sampling_body()}</p>'
+            f'<h4>{t(locale, "method_h_caveats")}</h4>'
+            f'<div class="caveat">{narrative.methodology_caveats_body()}</div>'
+            f'</div>'
+            f'</section>'
+        ),
         "how_to_read_section": how_to_read_section,
         "shipped_section": shipped_section,
         "artifacts_section": artifacts_section,
@@ -2633,6 +3189,7 @@ def render(
         "score_rows": score_rows,
         "peer_review_html": pr_html,
         "weekly_count": len(weekly),
+        "trends_subtitle": t(locale, "trends_subtitle_template").format(n=len(weekly)),
         "evidence_html": evidence_html,
         # Chart data
         "outcome_labels": json_for_script(list(agg["outcomes"].keys())),
@@ -2650,7 +3207,7 @@ def render(
         "tool_labels": json_for_script([re.sub(r"mcp__[^_]+__", "", tt[0])[:28] for tt in tool_top]),
         "tool_counts": json_for_script([tt[1] for tt in tool_top]),
         "heat_grid": json_for_script(grid),
-        "heat_labels": json_for_script(WEEKDAY_LABELS),
+        "heat_labels": json_for_script(weekday_labels(locale)),
         "help_labels": json_for_script(list(agg["helpfulness"].keys())),
         "help_values": json_for_script(list(agg["helpfulness"].values())),
         "wk_labels": json_for_script(w_labels),
