@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>樣張 B · 量測儀器 × 工程日誌</title>
+<style>
+  :root {
+    --surface: #F5F6F7;
+    --panel: #FDFDFD;
+    --ink: #17191C;
+    --ink-2: #54575C;
+    --ink-3: #8B8E93;
+    --grid: #DCDEE1;
+    --grid-soft: #E9EAEC;
+    --amber: #9A6A00;        /* 儀器刻度與銘板：量測器材本身的顏色 */
+    --amber-soft: rgba(154, 106, 0, 0.10);
+    --flag: #B3261E;         /* 異常旗標：必伴隨 ▲ 與文字標籤，不裸用 */
+    --sans: ui-sans-serif, system-ui, -apple-system, "PingFang TC", "Noto Sans CJK TC", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--surface);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.8;
+    font-variant-numeric: tabular-nums;
+  }
+  .bench { max-width: 1080px; margin: 0 auto; padding: 56px 40px 96px; }
+
+  /* ---------- 銘板 ---------- */
+  .plate {
+    background: var(--panel);
+    border: 1px solid var(--ink);
+    outline: 1px solid var(--ink);
+    outline-offset: 3px;
+    padding: 26px 30px 22px;
+    margin: 3px;
+  }
+  .plate h1 { font-size: 21px; letter-spacing: 0.18em; font-weight: 700; }
+  .plate .model { font-family: var(--mono); font-size: 12px; color: var(--amber); letter-spacing: 0.1em; margin-top: 2px; }
+  .plate-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border-top: 1px solid var(--grid); margin-top: 18px; padding-top: 14px; gap: 0 28px;
+    font-size: 12.5px;
+  }
+  .plate-grid .k { color: var(--ink-3); font-size: 11px; letter-spacing: 0.16em; }
+  .plate-grid .v { font-family: var(--mono); font-size: 13px; margin-top: 2px; }
+
+  /* ---------- 讀值列 ---------- */
+  .readouts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin: 44px 0 10px; }
+  .readout .val { font-family: var(--mono); font-size: 38px; font-weight: 600; line-height: 1.1; letter-spacing: -0.01em; }
+  .readout .val .unit { font-size: 15px; color: var(--ink-2); font-weight: 400; margin-left: 2px; }
+  .readout .name { font-size: 12px; color: var(--ink-2); margin-top: 6px; }
+  .readout .n { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+  .readout.alert .val { color: var(--flag); }
+  .readout.alert .name::before { content: "▲ "; color: var(--flag); }
+
+  .caveat { font-size: 12.5px; color: var(--ink-2); max-width: 52em; margin-bottom: 8px; }
+
+  /* ---------- 區段 ---------- */
+  section { margin-top: 56px; }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; border-bottom: 1px solid var(--ink); padding-bottom: 8px; margin-bottom: 24px; }
+  .sec-head h2 { font-size: 16px; letter-spacing: 0.14em; font-weight: 700; }
+  .sec-head .ch { font-family: var(--mono); font-size: 11.5px; color: var(--amber); letter-spacing: 0.08em; }
+  .sec-head .note { font-size: 12px; color: var(--ink-3); margin-left: auto; }
+
+  /* ---------- 檢定證 ---------- */
+  .certs { display: grid; grid-template-columns: repeat(2, minmax(0, 380px)); gap: 20px; }
+  .cert {
+    background: var(--panel); border: 1px solid var(--grid);
+    padding: 16px 20px; display: grid; grid-template-columns: 1fr auto; gap: 4px 16px;
+  }
+  .cert .t { font-weight: 700; font-size: 14.5px; }
+  .cert .crit { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); line-height: 1.9; grid-column: 1; }
+  .cert .pass {
+    grid-row: 1 / span 2; align-self: center;
+    font-family: var(--mono); font-size: 13px; font-weight: 700; letter-spacing: 0.2em;
+    color: var(--amber); border: 2px solid var(--amber); padding: 8px 12px;
+  }
+  .cert .crit b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- 通道圖 ---------- */
+  .channels { display: grid; grid-template-columns: repeat(2, 1fr); gap: 32px 40px; }
+  .chan .chan-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+  .chan .chan-head .id { font-family: var(--mono); font-size: 11.5px; color: var(--amber); }
+  .chan .chan-head .nm { font-size: 13.5px; font-weight: 600; }
+  .chan .chan-head .tier { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); margin-left: auto; }
+  .chan svg { display: block; width: 100%; height: auto; background: var(--panel); border: 1px solid var(--grid-soft); }
+  .figcap { font-size: 12px; color: var(--ink-3); margin-top: 16px; max-width: 52em; }
+
+  /* ---------- 異常記錄 ---------- */
+  table { border-collapse: collapse; width: 100%; }
+  .log { font-size: 13.5px; background: var(--panel); border: 1px solid var(--grid); }
+  .log th {
+    text-align: left; font-size: 10.5px; letter-spacing: 0.16em; color: var(--ink-3); font-weight: 600;
+    padding: 10px 16px; border-bottom: 1px solid var(--ink);
+  }
+  .log td { padding: 12px 16px; border-bottom: 1px solid var(--grid-soft); vertical-align: top; }
+  .log tr:last-child td { border-bottom: none; }
+  .log tr:hover td { background: rgba(23, 25, 28, 0.02); }
+  .log .code { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  .log .flagcell { color: var(--flag); font-weight: 700; white-space: nowrap; }
+  .log .conf { font-family: var(--mono); font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+  .log .ev { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
+  .log .reading { font-family: var(--mono); white-space: nowrap; text-align: right; }
+  .log .reading.bad { color: var(--flag); }
+  .log .fix b { font-weight: 600; }
+
+  /* ---------- 損耗量測 ---------- */
+  .loss-total {
+    font-family: var(--mono); font-size: 15px; margin-top: 14px; text-align: right;
+    border-top: 2px solid var(--ink); padding-top: 10px;
+  }
+  .loss-total .bad { color: var(--flag); font-weight: 700; }
+
+  /* ---------- 熱圖 ---------- */
+  .heat { display: grid; grid-template-columns: 40px repeat(24, 1fr); gap: 2px; max-width: 760px; }
+  .heat .hcell { aspect-ratio: 1 / 0.72; background: var(--grid-soft); }
+  .heat .rowlab { font-size: 11px; color: var(--ink-3); align-self: center; font-family: var(--mono); }
+  .heat-x { display: grid; grid-template-columns: 40px repeat(24, 1fr); gap: 2px; max-width: 760px; font-size: 10px; color: var(--ink-3); margin-top: 4px; font-family: var(--mono); }
+  .heat-x span { text-align: center; }
+
+  /* ---------- 偵測極限 ---------- */
+  .limit {
+    border: 1px dashed var(--ink-3); background: var(--panel);
+    padding: 26px 30px; display: flex; align-items: center; gap: 26px;
+  }
+  .limit svg { flex: none; }
+  .limit .msg { font-size: 14px; color: var(--ink-2); }
+  .limit .msg b { color: var(--ink); font-family: var(--mono); }
+
+  footer { font-size: 11.5px; color: var(--ink-3); padding-top: 40px; letter-spacing: 0.06em; }
+
+  @media (max-width: 880px) {
+    .bench { padding: 32px 18px 64px; }
+    .plate-grid, .readouts { grid-template-columns: repeat(2, 1fr); gap: 14px 20px; }
+    .channels, .certs { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="bench">
+
+  <!-- ============ 銘板 ============ -->
+  <header class="plate">
+    <h1>AI 工作量測報告</h1>
+    <div class="model">CC-USER-AUTOPSY · SELF-AUDIT · STD v5.0-PROVISIONAL</div>
+    <div class="plate-grid">
+      <div><div class="k">量測期間</div><div class="v">2026-04-16 → 07-14</div></div>
+      <div><div class="k">通道</div><div class="v">CH1–CH4（等級見各段）</div></div>
+      <div><div class="k">共同比較窗</div><div class="v">90 天</div></div>
+      <div><div class="k">誤差註記</div><div class="v">產出＝證據下限</div></div>
+    </div>
+  </header>
+
+  <!-- ============ 讀值 ============ -->
+  <div class="readouts">
+    <div class="readout"><div class="val">47<span class="unit">項</span></div><div class="name">有證據之交付</div><div class="n">下限計數</div></div>
+    <div class="readout"><div class="val">41.2<span class="unit">億 tok</span></div><div class="name">總投入</div><div class="n">API 等值 US$1,247</div></div>
+    <div class="readout alert"><div class="val">6.1<span class="unit">h／週</span></div><div class="name">量測到的損耗</div><div class="n">三項合計，區間中值</div></div>
+    <div class="readout"><div class="val">2<span class="unit">／6</span></div><div class="name">檢定通過</div><div class="n">STD v5.0 門檻</div></div>
+  </div>
+  <p class="caveat">所有比較為自身歷史之對照，無母體基準。跨通道比較僅於共同窗內、且不做跨單位換算。</p>
+
+  <!-- ============ 檢定 ============ -->
+  <section>
+    <div class="sec-head"><h2>檢定</h2><span class="ch">STD v5.0</span><span class="note">未過門檻之項目不顯示，判準公開可重跑</span></div>
+    <div class="certs">
+      <div class="cert">
+        <div class="t">委派</div>
+        <div class="pass">PASS</div>
+        <div class="crit">TASK-AGENT 42% ≥ 30%<br>良率 <b>71%</b> ≥ 65% ・ n=182</div>
+      </div>
+      <div class="cert">
+        <div class="t">交付節奏</div>
+        <div class="pass">PASS</div>
+        <div class="crit">3.9 項／活躍週 ≥ 2.0<br>證據下限計 ・ 13 週</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 通道記錄 ============ -->
+  <section>
+    <div class="sec-head"><h2>通道記錄</h2><span class="ch">CH1–CH4</span><span class="note">場次／週 · 縱軸各自獨立</span></div>
+    <div class="channels">
+      <div class="chan">
+        <div class="chan-head"><span class="id">CH1</span><span class="nm">Claude Code</span><span class="tier">FULL · 852 場</span></div>
+        <svg viewBox="0 0 480 120">
+          <line x1="16" y1="100" x2="464" y2="100" stroke="#9A6A00" stroke-width="1"/>
+          <g stroke="#9A6A00" stroke-width="1">
+            <line x1="16" y1="100" x2="16" y2="95"/><line x1="53.3" y1="100" x2="53.3" y2="97"/><line x1="90.7" y1="100" x2="90.7" y2="97"/><line x1="128" y1="100" x2="128" y2="95"/><line x1="165.3" y1="100" x2="165.3" y2="97"/><line x1="202.7" y1="100" x2="202.7" y2="97"/><line x1="240" y1="100" x2="240" y2="95"/><line x1="277.3" y1="100" x2="277.3" y2="97"/><line x1="314.7" y1="100" x2="314.7" y2="97"/><line x1="352" y1="100" x2="352" y2="95"/><line x1="389.3" y1="100" x2="389.3" y2="97"/><line x1="426.7" y1="100" x2="426.7" y2="97"/><line x1="464" y1="100" x2="464" y2="95"/>
+          </g>
+          <text x="16" y="114" font-size="9" fill="#8B8E93" font-family="ui-monospace, Menlo, monospace">04-20</text>
+          <text x="464" y="114" font-size="9" fill="#8B8E93" text-anchor="end" font-family="ui-monospace, Menlo, monospace">07-13</text>
+          <polyline fill="none" stroke="#17191C" stroke-width="2"
+            points="16,49.3 53.3,42.7 90.7,37.8 128,31.2 165.3,41.1 202.7,34.5 240,28 277.3,36.2 314.7,39.5 352,32.9 389.3,26.3 426.7,37.8 464,41.1"/>
+          <circle cx="389.3" cy="26.3" r="3.2" fill="#17191C"/>
+          <text x="389.3" y="17" font-size="11" font-weight="600" fill="#17191C" text-anchor="middle" font-family="ui-sans-serif, system-ui">45</text>
+        </svg>
+      </div>
+      <div class="chan">
+        <div class="chan-head"><span class="id">CH2</span><span class="nm">Codex</span><span class="tier">FULL · 431 場</span></div>
+        <svg viewBox="0 0 480 120">
+          <line x1="16" y1="100" x2="464" y2="100" stroke="#9A6A00" stroke-width="1"/>
+          <g stroke="#9A6A00" stroke-width="1">
+            <line x1="16" y1="100" x2="16" y2="95"/><line x1="53.3" y1="100" x2="53.3" y2="97"/><line x1="90.7" y1="100" x2="90.7" y2="97"/><line x1="128" y1="100" x2="128" y2="95"/><line x1="165.3" y1="100" x2="165.3" y2="97"/><line x1="202.7" y1="100" x2="202.7" y2="97"/><line x1="240" y1="100" x2="240" y2="95"/><line x1="277.3" y1="100" x2="277.3" y2="97"/><line x1="314.7" y1="100" x2="314.7" y2="97"/><line x1="352" y1="100" x2="352" y2="95"/><line x1="389.3" y1="100" x2="389.3" y2="97"/><line x1="426.7" y1="100" x2="426.7" y2="95"/><line x1="464" y1="100" x2="464" y2="95"/>
+          </g>
+          <text x="16" y="114" font-size="9" fill="#8B8E93" font-family="ui-monospace, Menlo, monospace">04-20</text>
+          <text x="464" y="114" font-size="9" fill="#8B8E93" text-anchor="end" font-family="ui-monospace, Menlo, monospace">07-13</text>
+          <polyline fill="none" stroke="#17191C" stroke-width="2"
+            points="16,66.4 53.3,62.7 90.7,59 128,53.4 165.3,64.5 202.7,57.1 240,51.5 277.3,60.8 314.7,62.7 352,55.3 389.3,49.7 426.7,59 464,60.8"/>
+          <circle cx="389.3" cy="49.7" r="3.2" fill="#17191C"/>
+          <text x="389.3" y="40" font-size="11" font-weight="600" fill="#17191C" text-anchor="middle" font-family="ui-sans-serif, system-ui">27</text>
+        </svg>
+      </div>
+      <div class="chan">
+        <div class="chan-head"><span class="id">CH3</span><span class="nm">Grok CLI</span><span class="tier">PARTIAL · 87 場 · 無 token</span></div>
+        <svg viewBox="0 0 480 120">
+          <line x1="16" y1="100" x2="464" y2="100" stroke="#9A6A00" stroke-width="1"/>
+          <g stroke="#9A6A00" stroke-width="1">
+            <line x1="16" y1="100" x2="16" y2="95"/><line x1="128" y1="100" x2="128" y2="95"/><line x1="240" y1="100" x2="240" y2="95"/><line x1="352" y1="100" x2="352" y2="95"/><line x1="464" y1="100" x2="464" y2="95"/>
+          </g>
+          <text x="16" y="114" font-size="9" fill="#8B8E93" font-family="ui-monospace, Menlo, monospace">04-20</text>
+          <text x="464" y="114" font-size="9" fill="#8B8E93" text-anchor="end" font-family="ui-monospace, Menlo, monospace">07-13</text>
+          <polyline fill="none" stroke="#54575C" stroke-width="2" stroke-dasharray="5 4"
+            points="16,89.5 53.3,84.2 90.7,86.8 128,78.9 165.3,81.6 202.7,84.2 240,76.3 277.3,86.8 314.7,84.2 352,81.6 389.3,78.9 426.7,84.2 464,86.8"/>
+          <text x="240" y="62" font-size="10.5" fill="#54575C" text-anchor="middle" font-family="ui-sans-serif, system-ui">單位：提問數（與 CH1/CH2 不可跨比）</text>
+        </svg>
+      </div>
+      <div class="chan">
+        <div class="chan-head"><span class="id">CH4</span><span class="nm">Antigravity</span><span class="tier">PRESENCE · 13 場</span></div>
+        <svg viewBox="0 0 480 120">
+          <line x1="16" y1="100" x2="464" y2="100" stroke="#9A6A00" stroke-width="1"/>
+          <g stroke="#8B8E93" stroke-width="2">
+            <line x1="53.3" y1="100" x2="53.3" y2="84"/><line x1="128" y1="100" x2="128" y2="84"/><line x1="165.3" y1="100" x2="165.3" y2="84"/><line x1="277.3" y1="100" x2="277.3" y2="84"/><line x1="352" y1="100" x2="352" y2="84"/><line x1="426.7" y1="100" x2="426.7" y2="84"/>
+          </g>
+          <text x="16" y="114" font-size="9" fill="#8B8E93" font-family="ui-monospace, Menlo, monospace">04-20</text>
+          <text x="464" y="114" font-size="9" fill="#8B8E93" text-anchor="end" font-family="ui-monospace, Menlo, monospace">07-13</text>
+          <text x="240" y="62" font-size="10.5" fill="#8B8E93" text-anchor="middle" font-family="ui-sans-serif, system-ui">僅出席訊號：豎線＝該週有活動</text>
+        </svg>
+      </div>
+    </div>
+    <p class="figcap">琥珀色為儀器刻度，墨色為量測值，虛線為部分等級通道。各面板縱軸獨立。</p>
+  </section>
+
+  <!-- ============ 異常記錄（盲點） ============ -->
+  <section>
+    <div class="sec-head"><h2>異常記錄</h2><span class="ch">ANOMALY LOG</span><span class="note">低於信心門檻之項目自動抑制，不顯示</span></div>
+    <table class="log">
+      <thead><tr><th>代碼</th><th>事件</th><th style="text-align:right">讀值</th><th>信心</th><th>證據</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="code flagcell">▲ AN-01</td>
+          <td>重複教學：同組偏好 90 天內重複 47 場（Claude 31／Codex 16），跨通道零共享</td>
+          <td class="reading bad">3.1 h／週</td>
+          <td class="conf">HIGH</td>
+          <td class="ev">a3f8c2e1 0d97b3aa +45</td>
+        </tr>
+        <tr>
+          <td class="code flagcell">▲ AN-02</td>
+          <td>沉沒成本：續凹未果 124 分鐘，翌日重開 11 分鐘解決；同型事件 ≥3 對</td>
+          <td class="reading bad">1.8 h／週</td>
+          <td class="conf">HIGH</td>
+          <td class="ev">9b2d44f0 → 61c8e2d7</td>
+        </tr>
+        <tr>
+          <td class="code flagcell">▲ AN-03</td>
+          <td>切換稅：≥3 通道並行時段，CH1 中斷率 9.6% 對單工 4.0%（2.4×）</td>
+          <td class="reading bad">2.4×</td>
+          <td class="conf">MED</td>
+          <td class="ev">n=182／64</td>
+        </tr>
+        <tr>
+          <td class="code flagcell">▲ AN-04</td>
+          <td>半成品墳場：實質寫入、未 commit、14 天未再訪共 9 項，其中 3 項完成度逾八成</td>
+          <td class="reading bad">9 項</td>
+          <td class="conf">HIGH</td>
+          <td class="ev">e4b91c02 +8</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="loss-total">損耗合計（AN-01＋02＋深夜時段）　<span class="bad">6.1 h／週</span></div>
+  </section>
+
+  <!-- ============ 並行量測 ============ -->
+  <section>
+    <div class="sec-head"><h2>並行量測</h2><span class="ch">CONCURRENCY</span><span class="note">週 × 時 · 同時開啟之通道數 0–4</span></div>
+    <div class="heat" id="heat"></div>
+    <div class="heat-x" id="heatx"></div>
+  </section>
+
+  <!-- ============ 趨勢：偵測極限 ============ -->
+  <section>
+    <div class="sec-head"><h2>趨勢</h2><span class="ch">BASELINE</span></div>
+    <div class="limit">
+      <svg width="120" height="56" viewBox="0 0 120 56" aria-hidden="true">
+        <defs>
+          <pattern id="hatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+            <line x1="0" y1="0" x2="0" y2="7" stroke="#C9CBCE" stroke-width="1.6"/>
+          </pattern>
+        </defs>
+        <rect x="0" y="0" width="120" height="48" fill="url(#hatch)"/>
+        <line x1="0" y1="48" x2="120" y2="48" stroke="#9A6A00" stroke-width="1"/>
+        <circle cx="14" cy="30" r="3.4" fill="#17191C"/>
+      </svg>
+      <div class="msg">低於偵測極限：趨勢基準線需 <b>3</b> 份快照，目前 <b>1／3</b>。已取得之單點如左，不做外插。</div>
+    </div>
+  </section>
+
+  <footer>樣張 B · 合成資料，非任何真實使用者之紀錄 · cc-user-autopsy V5 設計方向評估用</footer>
+</div>
+
+<script>
+(function () {
+  var days = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
+  var data = [
+    [0,0,0,0,0,0,0,1,2,3,3,2,1,1,2,3,3,2,2,1,2,3,2,1],
+    [0,0,0,0,0,0,0,1,2,3,4,3,1,1,2,3,4,3,2,2,3,4,3,1],
+    [0,0,0,0,0,0,0,1,2,3,4,3,1,1,3,3,3,3,2,2,3,4,3,2],
+    [0,0,0,0,0,0,0,1,2,3,3,2,1,1,2,3,3,2,2,1,2,3,2,1],
+    [0,0,0,0,0,0,0,1,2,2,3,2,1,1,2,2,3,2,1,1,2,2,1,1],
+    [0,0,0,0,0,0,0,0,1,1,2,2,1,1,1,2,2,1,1,1,1,2,1,0],
+    [0,0,0,0,0,0,0,0,1,1,1,1,1,0,1,1,2,1,1,1,1,1,1,0]
+  ];
+  var heat = document.getElementById("heat");
+  var alphas = [0, 0.16, 0.35, 0.6, 0.88];
+  data.forEach(function (row, d) {
+    var lab = document.createElement("div");
+    lab.className = "rowlab"; lab.textContent = days[d];
+    heat.appendChild(lab);
+    row.forEach(function (v, h) {
+      var c = document.createElement("div");
+      c.className = "hcell";
+      if (v > 0) c.style.background = "rgba(154,106,0," + alphas[v] + ")";
+      c.title = days[d] + " " + h + ":00 · " + v + " 通道";
+      heat.appendChild(c);
+    });
+  });
+  var hx = document.getElementById("heatx");
+  hx.appendChild(document.createElement("span"));
+  for (var h = 0; h < 24; h++) {
+    var s = document.createElement("span");
+    s.textContent = (h % 6 === 0) ? ("0" + h).slice(-2) : "";
+    hx.appendChild(s);
+  }
+})();
+</script>
+</body>
+</html>

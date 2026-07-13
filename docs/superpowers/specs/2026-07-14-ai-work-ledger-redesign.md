@@ -169,3 +169,15 @@ Approved sequencing (option B, re-scoped to the ledger design). Each phase gets 
 - Graveyard revisit horizon: **14 days**.
 - Badge bars: initial values written into the rubric as **provisional v1**, revisited after first real runs.
 - Common window shorter than **14 days** → cross-source comparison charts degrade to per-source panels with an explanatory note.
+
+---
+
+## Progress log
+
+**2026-07-14** — Spec drafted and pushed; user review of the spec body still pending. Frontend direction explored with three synthetic-data mocks (in `mocks/`):
+
+- `mock-a-audit-ledger.html` — audit dossier × bank statement (vermillion seals, red/black ledger ink). **Rejected**: reads as an official/cold costume.
+- `mock-b-instrument-log.html` — instrument × engineering log (spec plate, channels, anomaly log). **Rejected**: same reason, technical costume.
+- `mock-c-business-report.html` — professional business report: executive summary with assertive finding sentences, action-title section heads, numbered Exhibits with source lines, gold annotation callouts as the signature element, warm-white/charcoal/gold `#B08A2E`/negative-red `#9C201A` (gold-red CVD ΔE 25.5, validated). **Delivered, awaiting user confirmation.**
+
+§8 Rendering is to be rewritten around direction C once the user confirms. Next step after confirmation: writing-plans for Phase 1.
