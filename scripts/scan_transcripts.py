@@ -27,6 +27,11 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+try:
+    from cross_llm_common import split_segments, to_local_iso
+except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_transcripts
+    from scripts.cross_llm_common import split_segments, to_local_iso
+
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
 
@@ -194,6 +199,16 @@ def scan_one(path: Path):
     if len(all_ts) >= 2:
         duration_minutes = round((all_ts[-1] - all_ts[0]).total_seconds() / 60)
 
+    # Additive activity-window field for cross-LLM concurrency math: split
+    # the same record timestamps at idle gaps > 30 minutes so a resumed
+    # session's multi-day idle stretch doesn't get counted as active time
+    # by _row_windows (which would fabricate switch-tax overlaps against
+    # other sources active inside the gap). Does NOT affect duration_minutes
+    # above, which existing panels depend on.
+    segments = None
+    if all_ts:
+        segments = [[to_local_iso(s), to_local_iso(e)] for s, e in split_segments(all_ts)]
+
     in_tok = out_tok = cache_create = cache_read = 0
     model_counts = Counter()
     hit_output_limit = False
@@ -312,11 +327,13 @@ def scan_one(path: Path):
     # Proxy for "flailing": regenerating ever-larger responses late in a
     # session. Input tokens are excluded on purpose — context growth makes
     # input rise monotonically in every session, which would flag everything.
+    # For odd n, the middle element belongs to the second half (index n//2
+    # onward) so every message lands in exactly one half.
     token_accel = None
     n = len(assistant_output_seq)
     if n >= 6:
         first = sum(assistant_output_seq[: n // 2])
-        second = sum(assistant_output_seq[n - n // 2:])
+        second = sum(assistant_output_seq[n // 2:])
         if first > 0:
             token_accel = round(second / first, 2)
 
@@ -325,6 +342,7 @@ def scan_one(path: Path):
         "project_path": project_path,
         "start_time": start_time,
         "duration_minutes": duration_minutes,
+        "segments": segments,
         "user_message_count": len(user_msgs),
         "assistant_message_count": len(asst_msgs),
         "tool_counts": dict(tool_counts),

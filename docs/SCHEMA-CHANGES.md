@@ -143,6 +143,13 @@ for dim, metrics in scores.items():
   an `evidence: [sid, ...]` list. Phase 3's trend-ledger implementer should
   read shapes per source: list-of-leak-dicts from the history file, the
   `{window_weeks, items}` dict from `analysis-data.json`.
+- `transcript-rows.jsonl` (pipeline-internal, produced by `scan_transcripts.py`)
+  now additionally emits a `segments` field per row — the same
+  `[[start_iso, end_iso], ...]` idle-gap-split activity-window shape the
+  cross-LLM adapters (`scan_codex.py` etc.) already emit — so `_row_windows`
+  in `aggregate.py` and cross_llm parallel-detection stop treating a resumed
+  Claude session's multi-day idle gap as active time; orphan/synthetic rows
+  omit it, matching how other optional fields are handled.
 
 ---
 

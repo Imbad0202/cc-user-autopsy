@@ -378,6 +378,88 @@ class TokenAccelTests(unittest.TestCase):
         row = self._scan_with_outputs([0, 0, 0, 100, 100, 100])
         self.assertIsNone(row["token_accel"])
 
+    def test_odd_count_middle_message_in_second_half(self):
+        # n=7: first = seq[:3] = [100,100,100] = 300;
+        # second = seq[3:] = [300,300,300,300] = 1200 (middle index 3 included).
+        row = self._scan_with_outputs([100, 100, 100, 300, 300, 300, 300])
+        self.assertAlmostEqual(row["token_accel"], 4.0)
+
+
+class SegmentsTests(unittest.TestCase):
+    """Fix 2: scan_transcripts.py emits idle-gap-split `segments` per row."""
+
+    def test_two_clusters_ten_days_apart_yield_two_segments(self):
+        sid = "20202020-0000-0000-0000-000000000002"
+        rows = [
+            {"type": "user", "sessionId": sid,
+             "message": {"role": "user", "content": "hi"},
+             "timestamp": "2026-04-01T10:00:00Z"},
+            {"type": "assistant", "sessionId": sid,
+             "message": {"role": "assistant", "content": "ok", "model": "claude-opus-4-6",
+                         "usage": {"input_tokens": 10, "output_tokens": 10}},
+             "timestamp": "2026-04-01T10:05:00Z"},
+            {"type": "user", "sessionId": sid,
+             "message": {"role": "user", "content": "resuming"},
+             "timestamp": "2026-04-11T09:00:00Z"},
+            {"type": "assistant", "sessionId": sid,
+             "message": {"role": "assistant", "content": "ok", "model": "claude-opus-4-6",
+                         "usage": {"input_tokens": 10, "output_tokens": 10}},
+             "timestamp": "2026-04-11T09:05:00Z"},
+        ]
+        row = _run_single_row_session(rows, sid)
+        self.assertIsNotNone(row.get("segments"))
+        self.assertEqual(len(row["segments"]), 2)
+        # duration_minutes must stay computed from full first/last span,
+        # unaffected by the new segments field.
+        self.assertGreater(row["duration_minutes"], 60 * 24 * 9)
+
+    def test_row_windows_uses_segments_not_full_span(self):
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        from aggregate import _row_windows
+        row = {
+            "start_time": "2026-04-01T10:00:00+00:00",
+            "duration_minutes": 14400,  # ~10 days, what the no-segments fallback would use
+            "segments": [
+                ["2026-04-01T10:00:00+00:00", "2026-04-01T10:05:00+00:00"],
+                ["2026-04-11T09:00:00+00:00", "2026-04-11T09:05:00+00:00"],
+            ],
+        }
+        windows = _row_windows(row)
+        self.assertEqual(len(windows), 2)
+        for start, end in windows:
+            self.assertLess((end - start).total_seconds(), 3600)
+
+    def test_switch_tax_false_positive_gone_for_row_in_idle_gap(self):
+        """A codex row active inside the claude row's 10-day idle gap must NOT
+        overlap the claude row's windows once segments are honored."""
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        from aggregate import _row_windows
+        claude_row = {
+            "start_time": "2026-04-01T10:00:00+00:00",
+            "duration_minutes": 14400,
+            "segments": [
+                ["2026-04-01T10:00:00+00:00", "2026-04-01T10:05:00+00:00"],
+                ["2026-04-11T09:00:00+00:00", "2026-04-11T09:05:00+00:00"],
+            ],
+        }
+        codex_row = {
+            "start_time": "2026-04-05T12:00:00+00:00",
+            "duration_minutes": 20,
+            "source": "codex",
+        }
+        claude_windows = _row_windows(claude_row)
+        codex_windows = _row_windows(codex_row)
+
+        def _overlaps(a, b):
+            return a[0] < b[1] and b[0] < a[1]
+
+        overlap_found = any(
+            _overlaps(cw, kw) for cw in claude_windows for kw in codex_windows)
+        self.assertFalse(
+            overlap_found,
+            "codex row inside claude's idle gap must not overlap claude's "
+            "segment-derived windows")
+
 
 if __name__ == "__main__":
     unittest.main()

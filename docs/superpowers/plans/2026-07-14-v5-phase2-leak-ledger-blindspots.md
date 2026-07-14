@@ -1805,12 +1805,9 @@ git commit -m "feat(demo): deterministic blind-spot fixtures; smoke + SKILL.md f
 
 ---
 
-## Completion workflow (after all tasks)
+## Completion
 
-1. Run `/simplify` on the branch diff (repo rule), fold in fixes.
-2. Feed the implementation-notes file into the maintainer's private review workflow: independent cross-model review + security review, both must reach zero critical/advisory findings before merge.
-3. PR to `main` titled `feat: V5 Phase 2 — leak ledger, blind-spot engine, praise-word lint`; PR body lists deviations from this plan (from implementation-notes).
-4. After merge: update private project notes — Phase 2 done, Phase 3 next (trend ledger UI + badges + recruiter rebuild); remove the temporary implementation-notes file.
+Release gates and review process are run outside this document.
 
 ## Out of scope for Phase 2 (do not do)
 

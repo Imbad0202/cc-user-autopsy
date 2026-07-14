@@ -2041,19 +2041,29 @@ def compute_cross_llm(claude_rows, cross_rows):
             "project_matrix": project_matrix, "head_to_head": head_to_head}
 
 
-def compute_ledger(activity_metas, cross_llm):
+def compute_ledger(activity_metas, cross_llm, window_end=None):
+    """window_end (aware datetime, optional): the max activity END across
+    all activity windows (see main()'s shared computation — blind_spots,
+    leaks, and ledger.window share one end-aware window). When omitted,
+    falls back to the max session START date (prior behavior), for callers
+    that don't have the end-aware value on hand.
+    """
     rows = list(activity_metas.values())
     dates = sorted(d for d in (_parse_dt(r.get("start_time") or "")
                                for r in rows) if d)
     commits = sum(r.get("git_commits") or 0 for r in rows)
     pushes = sum(r.get("git_pushes") or 0 for r in rows)
     with_commits = sum(1 for r in rows if (r.get("git_commits") or 0) > 0)
+    start_date = dates[0].date() if dates else None
+    end_date = window_end.date() if window_end else (dates[-1].date() if dates else None)
+    if start_date and end_date and end_date < start_date:
+        end_date = start_date
     return {
         "schema_version": 1,
         "window": {
-            "start": dates[0].date().isoformat() if dates else None,
-            "end": dates[-1].date().isoformat() if dates else None,
-            "days": (dates[-1] - dates[0]).days if len(dates) > 1 else 0,
+            "start": start_date.isoformat() if start_date else None,
+            "end": end_date.isoformat() if end_date else None,
+            "days": (end_date - start_date).days if start_date and end_date else 0,
         },
         "output": {"git_commits": commits, "git_pushes": pushes,
                    "sessions_with_commits": with_commits},
@@ -2417,7 +2427,14 @@ def bs_graveyard(activity_rows, window_end):
         key = normalize_project_path(r.get("project_path") or "")
         if not is_shippable_project_key(key):
             continue
-        if any(m in key.lower() for m in _SCRATCH_PATH_MARKERS):
+        # normalize_project_path() strips trailing slashes, so a project
+        # rooted exactly at a scratch root ("/tmp", "/private/tmp") no
+        # longer contains the "/tmp/"-style marker as a substring. Match
+        # the marker as the whole (trailing-slash-stripped) path, as a
+        # path-root prefix, or (unchanged) anywhere in the path.
+        p = key.lower()
+        if any(p == m.rstrip("/") or p.startswith(m.rstrip("/") + "/") or m in p
+               for m in _SCRATCH_PATH_MARKERS):
             continue
         windows = _row_windows(r)
         if not windows:
@@ -2906,14 +2923,17 @@ def main():
     # consumers that don't check this key unaffected.
     cross_llm["unattributed_parse_errors"] = cross_errors.get("(unknown)", 0)
     final["cross_llm"] = cross_llm
-    final["ledger"] = compute_ledger(activity_rows, cross_llm)
 
-    # blind_spots: additive top-level block (Phase 2, spec §5/§7).
-    # window_end anchors graveyard staleness to the newest activity seen —
-    # that must be the max END across all activity windows (not max START):
-    # a resumed multi-day session's newest activity can land days after its
-    # start, and anchoring on start alone would understate days_untouched
-    # for every OTHER project. window_start stays min start (unaffected).
+    # window_end anchors both blind_spots (graveyard staleness) and
+    # ledger.window.end to the newest activity seen — that must be the max
+    # END across all activity windows (not max START): a resumed multi-day
+    # session's newest activity can land days after its start, and
+    # anchoring on start alone would (a) understate days_untouched for
+    # every OTHER project in the graveyard check and (b) leave
+    # ledger.window.end stale relative to the numerators compute_leaks
+    # divides by that same window. blind_spots, leaks, and ledger.window
+    # share one end-aware window — compute it once here. window_start
+    # stays min start (unaffected).
     all_starts, all_ends = [], []
     for r in activity_rows.values():
         d = _parse_dt(r.get("start_time"))
@@ -2927,6 +2947,10 @@ def main():
     else:
         window_end = datetime.now().astimezone()
     window_start = min(all_starts) if all_starts else None
+
+    final["ledger"] = compute_ledger(activity_rows, cross_llm, window_end=window_end)
+
+    # blind_spots: additive top-level block (Phase 2, spec §5/§7).
     final["blind_spots"] = compute_blind_spots(
         sessions, rated, list(activity_rows.values()), cross_rows, window_end,
         window_start=window_start)

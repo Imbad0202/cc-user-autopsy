@@ -523,6 +523,38 @@ class GraveyardTests(unittest.TestCase):
         touched_keys = {i["project_key"] for i in out.get("metrics", {}).get("items", [])}
         self.assertNotIn("projects/resumed", touched_keys)
 
+    def test_scratch_root_paths_excluded(self):
+        # Fix 4: normalize_project_path() strips trailing slashes, so a
+        # project rooted exactly at "/tmp" or "/private/tmp" no longer
+        # contains the "/tmp/"-style marker as a substring. Both must still
+        # be excluded from the graveyard, alongside an ordinary non-scratch
+        # project that DOES qualify (to prove exclusion isn't accidentally
+        # swallowing everything).
+        rows = [
+            _grave_row("g1", BASE, "/tmp"),
+            _grave_row("g2", BASE, "/private/tmp"),
+            _grave_row("g3", BASE, "/home/u/projects/legacy-migration"),
+            _grave_row("g4", BASE + timedelta(days=3), "/home/u/projects/docs-site"),
+        ]
+        out = bs_graveyard(rows, WINDOW_END)
+        keys = {i["project_key"] for i in out.get("metrics", {}).get("items", [])}
+        self.assertNotIn("tmp", keys)
+        self.assertNotIn("private/tmp", keys)
+        self.assertIn("projects/legacy-migration", keys)
+        self.assertIn("projects/docs-site", keys)
+
+    def test_non_scratch_path_containing_tmp_substring_not_excluded(self):
+        # A project path that merely contains "tmp" as part of a directory
+        # name (not a "/tmp/" path root, and not the "m in p" substring
+        # pattern either) must NOT be excluded.
+        rows = [
+            _grave_row("g1", BASE, "/home/u/tmp-tools"),
+            _grave_row("g2", BASE + timedelta(days=3), "/home/u/projects/docs-site"),
+        ]
+        out = bs_graveyard(rows, WINDOW_END)
+        keys = {i["project_key"] for i in out.get("metrics", {}).get("items", [])}
+        self.assertIn("u/tmp-tools", keys)
+
     def test_same_session_without_recent_segment_is_graveyard(self):
         # Same fixture as above, but WITHOUT the recent-ending segment —
         # only start+duration (60 min), which ends long before window_end

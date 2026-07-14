@@ -5,7 +5,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from scripts.aggregate import (
-    compute_cross_llm, compute_ledger, load_cross_llm_rows, _row_windows)
+    compute_blind_spots, compute_cross_llm, compute_ledger, load_cross_llm_rows,
+    _row_windows)
 
 
 def _iso(dt):
@@ -495,6 +496,41 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(ledger["output"]["git_commits"], 5)
         self.assertEqual(ledger["output"]["sessions_with_commits"], 5)
         self.assertIn("claude", ledger["sources_detected"])
+
+    def test_window_end_uses_segment_end_not_max_start(self):
+        # Fix 3: a resumed session's segment ends 6 days after its start_time
+        # (max START). compute_ledger's window.end must reflect the segment
+        # END when window_end is threaded in (main() computes this via
+        # _row_windows across all activity rows and passes it through) —
+        # not the stale max-start date.
+        start = BASE
+        seg_end = BASE + timedelta(days=6)
+        row = _claude_row("resumed", start, dur=5)
+        row["segments"] = [[_iso(start), _iso(seg_end)]]
+        metas = {"resumed": row}
+        cross = compute_cross_llm(list(metas.values()), [])
+        max_end = max(e for _, e in _row_windows(row))
+        ledger = compute_ledger(metas, cross, window_end=max_end)
+        self.assertEqual(ledger["window"]["end"], seg_end.date().isoformat())
+        self.assertEqual(ledger["window"]["days"], 6)
+
+        # And the leaks weekly denominator (window_weeks) is derived from
+        # this SAME end-aware window, not the stale start-only one — a
+        # window.days of 6 gives weeks = max(6/7, 1.0) = 1.0.
+        from scripts.aggregate import compute_leaks
+        leaks = compute_leaks(compute_blind_spots([], [], [], [], max_end),
+                              [], ledger["window"])
+        self.assertEqual(leaks["window_weeks"], 1.0)
+
+    def test_window_end_falls_back_to_max_start_when_not_supplied(self):
+        # Backward-compat: omitting window_end preserves prior behavior for
+        # callers that don't have the end-aware value on hand.
+        metas = {f"c{i}": _claude_row(f"c{i}", BASE + timedelta(days=i))
+                 for i in range(3)}
+        cross = compute_cross_llm(list(metas.values()), [])
+        ledger = compute_ledger(metas, cross)
+        self.assertEqual(ledger["window"]["end"],
+                         (BASE + timedelta(days=2)).date().isoformat())
 
     def test_sources_detected_excludes_undetected_sources(self):
         # cross_llm.sources now always has one card per known source

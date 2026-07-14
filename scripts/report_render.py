@@ -346,18 +346,27 @@ def _rest_lines(text):
     return "\n".join(out).strip()
 
 
-def _build_opening_band(ledger, narration, locale="en"):
+def _build_opening_band(ledger, narration, locale="en", include_leak_finding=True):
     """SELF-only opening band: kicker + LLM-written opening sentence, plus a
     numbered-finding list built from the output-ledger / team-ledger /
     leak-ledger opener claims. Never fabricates prose — an empty narration
     renders numbers-only. Finding numbers only increment for books that
     actually have a first line, so a missing leak-ledger book leaves the
     list at two findings rather than skipping a number.
+
+    include_leak_finding=False suppresses the leak-ledger opener claim even
+    when the narration has one: the leak section itself can be gated off
+    (no leak data passed a blind-spot gate) while stale/manually-supplied
+    narration still contains a "# leak-ledger" book with an opener line —
+    rendering that line would assert a leak the report's own leak section
+    doesn't support. Output/team opener findings are unaffected.
     """
     opening = _first_line(narration.get("opening", ""))
     findings = []
     n = 0
     for book in ("output-ledger", "team-ledger", "leak-ledger"):
+        if book == "leak-ledger" and not include_leak_finding:
+            continue
         claim = _first_line(narration.get(book, ""))
         if claim:
             n += 1
@@ -3565,8 +3574,23 @@ def render(
         cross_block = analysis.get("cross_llm") or {}
         blind_spots = analysis.get("blind_spots") or {}
         exhibit_no = count(1)
+        # include_leak_finding uses the SAME gate predicate _build_leak_ledger
+        # itself checks (spec §10: whole section suppressed when nothing
+        # passes a gate) to decide up front whether that section will render
+        # anything — without calling the builder itself, which would consume
+        # exhibit numbers out of order-of-appearance (leak exhibits must come
+        # after output/team exhibits in the shared counter, but the opening
+        # band renders before all three). Fix: an opening band must not claim
+        # a leak finding the leak section itself doesn't support.
+        leak_items = ((ledger_block or {}).get("leaks") or {}).get("items") or []
+        leak_gates_passed = any(
+            (blind_spots.get(k) or {}).get("gate_passed")
+            for k in ("repeated_instructions", "sunk_cost", "ask_vs_ship", "interrupt_win_rate"))
+        include_leak_finding = bool(leak_items or leak_gates_passed)
         if ledger_block:
-            ledger_sections += _build_opening_band(ledger_block, ledger_narration, locale)
+            ledger_sections += _build_opening_band(
+                ledger_block, ledger_narration, locale,
+                include_leak_finding=include_leak_finding)
             ledger_sections += _build_output_ledger(
                 ledger_block, ledger_narration, locale, exhibit_no, blind_spots)
         if cross_block:

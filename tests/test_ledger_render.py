@@ -574,6 +574,36 @@ class NarrationLeakBookTests(unittest.TestCase):
         self.assertNotIn('<div class="c-finding-no">3</div>', band_html)
 
 
+class OpeningBandLeakGateEndToEndTests(unittest.TestCase):
+    """Fix 5: narration containing all four books (opening/output/team/leak)
+    must not let the opening band claim a leak finding when the leak
+    section itself doesn't render (no leak data passed a blind-spot gate)."""
+
+    def test_no_leak_data_yields_two_findings_and_no_leak_section(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            html = _run_build_with_ledger(
+                "self", tmp_path, ledger=LEDGER, blind_spots={})
+        self.assertNotIn('id="ledger-leaks"', html)
+        self.assertIn('<div class="c-finding-no">1</div>', html)
+        self.assertIn('<div class="c-finding-no">2</div>', html)
+        self.assertNotIn('<div class="c-finding-no">3</div>', html)
+        self.assertNotIn(NARR["leak-ledger"].splitlines()[0], html)
+
+    def test_leak_data_present_yields_three_findings_and_leak_section(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            html = _run_build_with_ledger(
+                "self", tmp_path, ledger=LEDGER_LEAKS, blind_spots=BS_ALL_PASSED)
+        self.assertIn('id="ledger-leaks"', html)
+        self.assertIn('<div class="c-finding-no">1</div>', html)
+        self.assertIn('<div class="c-finding-no">2</div>', html)
+        self.assertIn('<div class="c-finding-no">3</div>', html)
+        self.assertIn(NARR["leak-ledger"].splitlines()[0], html)
+
+
 class HRAbsenceTests(unittest.TestCase):
     def test_hr_render_has_no_leak_or_blindspot_or_graveyard_markers(self):
         # Static CSS rules for .c-blindspot etc. are always present in the
