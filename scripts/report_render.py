@@ -306,10 +306,11 @@ def _exhibit(no, title, body_html, source_line, locale="en"):
 def _parse_ledger_narration(md: str) -> dict:
     """Split an LLM-authored ledger narration markdown file on `^# ` headings.
 
-    Returns {"opening": str, "output-ledger": str, "team-ledger": str};
-    missing sections default to "".
+    Returns {"opening": str, "output-ledger": str, "team-ledger": str,
+    "leak-ledger": str}; missing sections default to "".
     """
-    books = {"opening": "", "output-ledger": "", "team-ledger": ""}
+    books = {"opening": "", "output-ledger": "", "team-ledger": "",
+             "leak-ledger": ""}
     current = None
     buf = []
     for line in (md or "").splitlines():
@@ -347,17 +348,22 @@ def _rest_lines(text):
 
 def _build_opening_band(ledger, narration, locale="en"):
     """SELF-only opening band: kicker + LLM-written opening sentence, plus a
-    numbered-finding list built from the output-ledger / team-ledger opener
-    claims. Never fabricates prose — an empty narration renders numbers-only.
+    numbered-finding list built from the output-ledger / team-ledger /
+    leak-ledger opener claims. Never fabricates prose — an empty narration
+    renders numbers-only. Finding numbers only increment for books that
+    actually have a first line, so a missing leak-ledger book leaves the
+    list at two findings rather than skipping a number.
     """
     opening = _first_line(narration.get("opening", ""))
     findings = []
-    for i, book in enumerate(("output-ledger", "team-ledger"), start=1):
+    n = 0
+    for book in ("output-ledger", "team-ledger", "leak-ledger"):
         claim = _first_line(narration.get(book, ""))
         if claim:
+            n += 1
             findings.append(
                 '<div class="c-finding">'
-                f'<div class="c-finding-no">{i}</div>'
+                f'<div class="c-finding-no">{n}</div>'
                 f'<div class="c-finding-head">{inline_md(claim)}</div>'
                 '</div>')
     opening_html = (
@@ -376,10 +382,32 @@ def _build_opening_band(ledger, narration, locale="en"):
         '</section>')
 
 
-def _build_output_ledger(ledger, narration, locale="en"):
-    """SELF-only output ledger: action-title head + prose + Exhibit 1
+def _blindspot_callout(locale, title_key, sentence, detail=None):
+    """One blind-spot opener callout: gold label chip + title + metric
+    sentence + optional escaped detail line (e.g. a repeated-instruction
+    exemplar). `sentence` is plain text formatted from a locale template,
+    so it is escaped here rather than passed through inline_md."""
+    d = f'<div class="c-blindspot-detail">{detail}</div>' if detail else ""
+    return ('<div class="c-blindspot">'
+            f'<span class="c-blindspot-label">{esc(t(locale, "ledger_blindspot_label"))}</span>'
+            f'<strong>{esc(t(locale, title_key))}</strong>'
+            f'<div class="c-blindspot-metric">{esc(sentence)}</div>{d}</div>')
+
+
+def _build_output_ledger(ledger, narration, locale="en", exhibit_no=None,
+                          blind_spots=None):
+    """SELF-only output ledger: action-title head + prose + graveyard opener
+    (blind spot #4, when its gate passed) + output metrics exhibit
     (git_commits, git_pushes, sessions_with_commits). Counts only — no
-    session IDs or prompt text ever flow through this builder."""
+    session IDs or prompt text ever flow through this builder.
+
+    exhibit_no is a shared itertools.count() the caller advances across all
+    ledger sections so numbering is pure order-of-appearance (Phase 2
+    refactor); a fresh count(1) is used when not supplied, preserving the
+    original hard-coded-Exhibit-1 behavior for standalone/legacy callers."""
+    if exhibit_no is None:
+        exhibit_no = count(1)
+    bs = blind_spots or {}
     out = ledger.get("output") or {}
     title = _first_line(narration.get("output-ledger", "")) or t(
         locale, "ledger_output_title")
@@ -394,11 +422,32 @@ def _build_output_ledger(ledger, narration, locale="en"):
         f'<div class="metric"><div class="n">{int(out.get("sessions_with_commits") or 0)}</div>'
         f'<div class="lbl">{t(locale, "ledger_output_sessions_with_commits")}</div></div>'
         '</div>')
-    ex = _exhibit(1, t(locale, "ledger_output_title"), metrics,
+    ex = _exhibit(next(exhibit_no), t(locale, "ledger_output_title"), metrics,
                   "aggregate.py ledger.output, transcript pool", locale=locale)
+
+    graveyard_html = ""
+    bs4 = bs.get("graveyard") or {}
+    if bs4.get("gate_passed"):
+        callout = _blindspot_callout(
+            locale, "blindspot_graveyard_title",
+            t(locale, "blindspot_graveyard_template").format(n=bs4["n"]))
+        items = bs4.get("metrics", {}).get("items") or []
+        rows = "".join(
+            '<tr>'
+            f'<td>{esc(it["project_key"])}</td>'
+            f'<td>{esc(t(locale, "ledger_graveyard_untouched_template").format(days=it["days_untouched"]))}</td>'
+            f'<td>{esc(t(locale, "ledger_graveyard_writes_template").format(writes=it["writes"]))}</td>'
+            '</tr>'
+            for it in items)
+        table = f'<table><tbody>{rows}</tbody></table>'
+        graveyard_exhibit = _exhibit(
+            next(exhibit_no), t(locale, "ledger_graveyard_exhibit_title"),
+            table, t(locale, "ledger_source_blind_spots"), locale=locale)
+        graveyard_html = callout + graveyard_exhibit
+
     return ('<section class="section" id="ledger-output">'
             f'<h2 class="c-sec-title">{inline_md(title)}</h2>'
-            f'{prose_html}{ex}</section>')
+            f'{prose_html}{ex}{graveyard_html}</section>')
 
 
 _SRC_LABEL_KEYS = {"full": "ledger_source_card_full",
@@ -436,15 +485,25 @@ def _source_card_html(s: dict, locale: str) -> str:
             f'<b>{esc(s["source"])}</b> · {body}</div>')
 
 
-def _build_team_ledger(cross_llm, narration, locale="en"):
-    """SELF-only team ledger: per-source cards, then (only when a non-degraded
-    common_window exists) weekly-share / parallel-heatmap / project-matrix /
-    head-to-head exhibits. Degraded or missing window: localized degraded
-    note instead of the comparison exhibits; heatmap and matrix still render
-    since they don't compare rates across sources. Counts, dates, minutes,
-    and tokens only — no session IDs or prompt text ever flow through here."""
+def _build_team_ledger(cross_llm, narration, locale="en", exhibit_no=None,
+                        blind_spots=None):
+    """SELF-only team ledger: per-source cards, switch-tax opener (blind spot
+    #3, when its gate passed), then (only when a non-degraded common_window
+    exists) weekly-share / parallel-heatmap / project-matrix / head-to-head
+    exhibits. Degraded or missing window: localized degraded note instead of
+    the comparison exhibits; heatmap and matrix still render since they
+    don't compare rates across sources. Counts, dates, minutes, and tokens
+    only — no session IDs or prompt text ever flow through here.
+
+    exhibit_no is a shared itertools.count() the caller advances across all
+    ledger sections (Phase 2 order-of-appearance refactor); a fresh count(2)
+    is used when not supplied, preserving the original behavior (Exhibit 1
+    lives in the output ledger) for standalone/legacy callers."""
     if not cross_llm or not cross_llm.get("sources"):
         return ""
+    if exhibit_no is None:
+        exhibit_no = count(2)  # Exhibit 1 lives in the output ledger
+    bs = blind_spots or {}
     title = _first_line(narration.get("team-ledger", "")) or t(
         locale, "ledger_team_title")
     prose = _rest_lines(narration.get("team-ledger", ""))
@@ -458,6 +517,27 @@ def _build_team_ledger(cross_llm, narration, locale="en"):
         note = t(locale, "ledger_unknown_parse_errors_template").format(n=unattributed)
         cards += f'<p class="method">{esc(note)}</p>'
 
+    bs3 = bs.get("switch_tax") or {}
+    if bs3.get("gate_passed"):
+        m = bs3.get("metrics", {})
+        multi_rate = m.get("multi", {}).get("good_rate")
+        single_rate = m.get("single", {}).get("good_rate")
+        sentence = t(locale, "blindspot_switch_template").format(
+            multi=multi_rate, single=single_rate)
+        if multi_rate is not None and single_rate is not None and multi_rate < single_rate:
+            # Wrap only the worse (multi-tool) rate — negative-red is for
+            # bad numbers, not the whole sentence.
+            needle = f"{multi_rate}%"
+            sentence_html = esc(sentence).replace(
+                esc(needle), f'<span class="c-neg-num">{esc(needle)}</span>', 1)
+            cards += (
+                '<div class="c-blindspot">'
+                f'<span class="c-blindspot-label">{esc(t(locale, "ledger_blindspot_label"))}</span>'
+                f'<strong>{esc(t(locale, "blindspot_switch_title"))}</strong>'
+                f'<div class="c-blindspot-metric">{sentence_html}</div></div>')
+        else:
+            cards += _blindspot_callout(locale, "blindspot_switch_title", sentence)
+
     win = cross_llm.get("common_window")
     # Single source of truth for "is this a healthy (present, non-degraded)
     # common_window" — reused below for weekly share, heatmap/matrix, and
@@ -465,7 +545,6 @@ def _build_team_ledger(cross_llm, narration, locale="en"):
     # same way (spec §13).
     window_healthy = bool(win) and not win.get("degraded")
     parts = [cards]
-    exhibit_no = count(2)  # Exhibit 1 lives in the output ledger
 
     if window_healthy:
         note = t(locale, "ledger_common_window_note_template").format(
@@ -551,6 +630,77 @@ def _build_team_ledger(cross_llm, narration, locale="en"):
     return ('<section class="section" id="ledger-team">'
             f'<h2 class="c-sec-title">{inline_md(title)}</h2>'
             f'{prose_html}{"".join(parts)}</section>')
+
+
+def _build_leak_ledger(ledger, blind_spots, narration, locale, exhibit_no):
+    """Leak ledger (spec §3 book 3), SELF only. Openers: repeated-instruction
+    tax (#1) + sunk-cost (#2). Body: top-3 leak cards. Secondary findings:
+    ask-vs-ship (#6) + interrupt win-rate (#7). Habit drift (#5) is computed
+    but renders in Phase 3's trend ledger. Whole section suppressed when
+    nothing passes a gate (spec §10 — no apologetic placeholders)."""
+    bs = blind_spots or {}
+    leaks = (ledger or {}).get("leaks") or {}
+    items = leaks.get("items") or []
+    bs1, bs2 = bs.get("repeated_instructions") or {}, bs.get("sunk_cost") or {}
+    if not items and not bs1.get("gate_passed") and not bs2.get("gate_passed"):
+        return ""
+    title = _first_line(narration.get("leak-ledger", "")) or t(locale, "ledger_leaks_title")
+    prose = _rest_lines(narration.get("leak-ledger", ""))
+    out = ['<section class="section" id="ledger-leaks">',
+           f'<div class="c-kicker">{esc(t(locale, "ledger_leaks_kicker"))}</div>',
+           f'<h2 class="c-sec-title">{inline_md(title)}</h2>']
+    if prose:
+        out.append(f'<div>{inline_md(prose)}</div>')
+    # openers
+    if bs1.get("gate_passed"):
+        p = bs1["metrics"]["patterns"][0]
+        out.append(_blindspot_callout(
+            locale, "blindspot_repeated_title",
+            t(locale, "blindspot_repeated_template").format(
+                n=p["occurrences"], weeks=p["weeks"],
+                sources=", ".join(p["sources"])),
+            detail=esc(p["exemplar"])))
+    if bs2.get("gate_passed"):
+        out.append(_blindspot_callout(
+            locale, "blindspot_sunk_title",
+            t(locale, "blindspot_sunk_template").format(n=bs2["n"])))
+    # leak cards exhibit
+    if items:
+        cards = []
+        for it in items:
+            cost = t(locale, "ledger_leak_weekly_cost_template").format(
+                cost=f"{it['weekly_cost_usd']:.2f}")
+            tokens_str = f"{it['weekly_tokens']:,}"
+            leak_type = it["type"]
+            cards.append(
+                '<div class="c-leak-card">'
+                f'<div class="c-leak-type">{esc(t(locale, "leak_type_" + leak_type))}</div>'
+                f'<div class="c-leak-cost">{esc(cost)}</div>'
+                f'<div class="c-leak-meta">{esc(t(locale, "ledger_leak_tokens_template").format(tokens=tokens_str))}'
+                f' · {esc(t(locale, "ledger_leak_occurrences_template").format(n=it["occurrences"]))}</div>'
+                f'<div class="c-leak-fix"><span>{esc(t(locale, "ledger_leak_fix_label"))}</span> '
+                f'{esc(t(locale, "leak_fix_" + leak_type))}</div></div>')
+        out.append(_exhibit(next(exhibit_no),
+                            t(locale, "ledger_leaks_exhibit_title"),
+                            '<div class="c-leak-cards">' + "".join(cards) + "</div>",
+                            t(locale, "ledger_source_blind_spots"), locale))
+    # secondary findings (#6, #7)
+    sec = []
+    bs6, bs7 = bs.get("ask_vs_ship") or {}, bs.get("interrupt_win_rate") or {}
+    if bs6.get("gate_passed"):
+        g = bs6["metrics"]["top_gap"]
+        sec.append(t(locale, "blindspot_askship_template").format(
+            cat=g["category"], ask=g["ask_share_pct"], ship=g["ship_share_pct"]))
+    if bs7.get("gate_passed"):
+        m = bs7["metrics"]
+        sec.append(t(locale, "blindspot_interrupt_template").format(
+            i=m["interrupted"]["good_rate"], b=m["baseline"]["good_rate"]))
+    if sec:
+        out.append('<div class="c-secondary"><h3>'
+                   + esc(t(locale, "ledger_secondary_findings")) + "</h3><ul>"
+                   + "".join(f"<li>{esc(x)}</li>" for x in sec) + "</ul></div>")
+    out.append("</section>")
+    return "".join(out)
 
 
 def sanitize_url(url: str, *, allow_mailto: bool = False) -> str:
@@ -1938,6 +2088,32 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .c-h2h { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid rgba(128,128,128,0.3); }
   .c-h2h > div { padding: 14px 18px; }
   .c-h2h .num { font-size: 22px; font-weight: 800; }
+  .c-blindspot { border-left: 3px solid var(--c-gold); background: var(--c-gold-soft);
+                 padding: 12px 16px; margin: 16px 0; color: inherit; }
+  .c-blindspot-label { display: inline-block; font-size: 10.5px; font-weight: 800;
+                        letter-spacing: 0.12em; text-transform: uppercase;
+                        color: var(--c-gold-deep); background: rgba(176,138,46,0.18);
+                        padding: 2px 8px; border-radius: 3px; margin-bottom: 6px; }
+  .c-blindspot strong { display: block; font-size: 15px; margin: 4px 0 6px; }
+  .c-blindspot-metric { font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  .c-blindspot-detail { font-size: 12.5px; opacity: 0.75; margin-top: 6px;
+                         font-style: italic; }
+  .c-leak-cards { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0; }
+  .c-leak-card { border: 1px solid rgba(128,128,128,0.3); padding: 14px 16px;
+                 min-width: 220px; flex: 1 1 220px; }
+  .c-leak-type { font-size: 12px; font-weight: 700; letter-spacing: 0.04em;
+                 text-transform: uppercase; opacity: 0.75; }
+  .c-leak-cost { font-size: 24px; font-weight: 800; color: var(--c-gold-deep);
+                 font-variant-numeric: tabular-nums; margin: 4px 0; }
+  .c-leak-meta { font-size: 12px; opacity: 0.7; }
+  .c-leak-fix { font-size: 12.5px; border-top: 1px solid rgba(128,128,128,0.25);
+                margin-top: 10px; padding-top: 8px; }
+  .c-leak-fix span { font-weight: 700; }
+  .c-secondary { font-size: 13px; margin-top: 18px; }
+  .c-secondary h3 { font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase;
+                     opacity: 0.7; margin-bottom: 6px; }
+  .c-secondary ul { margin: 0; padding-left: 20px; }
+  .c-secondary li { margin: 4px 0; }
 </style>
 </head>
 <body>
@@ -3347,20 +3523,31 @@ def render(
     </section>'''
 
     # -------- SELF-only AI work ledger sections (V5 direction C) --------
-    # Opening band / output ledger / team ledger. HR must never see any of
-    # this — cross-LLM session activity is not for outside audiences.
-    # Builders themselves take only counts/dates/minutes/tokens, never
-    # session IDs or prompt text (see report_render docstrings above).
+    # Opening band / output ledger / team ledger / leak ledger. HR must
+    # never see any of this — cross-LLM session activity and blind-spot
+    # findings are not for outside audiences. Builders themselves take only
+    # counts/dates/minutes/tokens, never session IDs or prompt text (see
+    # report_render docstrings above). exhibit_no is a single shared
+    # itertools.count() so Exhibit numbers are pure order-of-appearance
+    # across all four sections (Phase 2 refactor — Exhibit 1 is no longer
+    # hard-coded to the output ledger).
     ledger_sections = ""
     if audience == "self":
         ledger_narration = _parse_ledger_narration(ledger_narration_md)
         ledger_block = analysis.get("ledger") or {}
         cross_block = analysis.get("cross_llm") or {}
+        blind_spots = analysis.get("blind_spots") or {}
+        exhibit_no = count(1)
         if ledger_block:
             ledger_sections += _build_opening_band(ledger_block, ledger_narration, locale)
-            ledger_sections += _build_output_ledger(ledger_block, ledger_narration, locale)
+            ledger_sections += _build_output_ledger(
+                ledger_block, ledger_narration, locale, exhibit_no, blind_spots)
         if cross_block:
-            ledger_sections += _build_team_ledger(cross_block, ledger_narration, locale)
+            ledger_sections += _build_team_ledger(
+                cross_block, ledger_narration, locale, exhibit_no, blind_spots)
+        if ledger_block:
+            ledger_sections += _build_leak_ledger(
+                ledger_block, blind_spots, ledger_narration, locale, exhibit_no)
 
     # Assemble via string.Template to avoid CSS brace escaping
     subs = {

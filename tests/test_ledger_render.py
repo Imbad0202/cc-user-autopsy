@@ -5,6 +5,7 @@ These are foundation-only tests — the section builders that call these
 helpers land in a later task. Here we only verify the frame/parser
 primitives and locale parity.
 """
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -14,7 +15,8 @@ sys.path.insert(0, str(SKILL_DIR / "scripts"))
 import locales  # noqa: E402
 from report_render import (  # noqa: E402
     _exhibit, _parse_ledger_narration,
-    _build_opening_band, _build_output_ledger, _build_team_ledger)
+    _build_opening_band, _build_output_ledger, _build_team_ledger,
+    _build_leak_ledger)
 
 
 class ExhibitTests(unittest.TestCase):
@@ -43,7 +45,14 @@ class NarrationParseTests(unittest.TestCase):
 
     def test_missing_sections_empty(self):
         d = _parse_ledger_narration("")
-        self.assertEqual(d, {"opening": "", "output-ledger": "", "team-ledger": ""})
+        self.assertEqual(d, {"opening": "", "output-ledger": "", "team-ledger": "",
+                             "leak-ledger": ""})
+
+    def test_parses_leak_ledger_book(self):
+        md = ("# opening\nOne sentence.\n"
+              "# leak-ledger\nLeak claim.\n\nMore leak prose.\n")
+        d = _parse_ledger_narration(md)
+        self.assertTrue(d["leak-ledger"].startswith("Leak claim."))
 
 
 class LedgerLocaleKeyTests(unittest.TestCase):
@@ -111,7 +120,103 @@ LEDGER = {"schema_version": 1,
           "sources_detected": ["claude", "codex"]}
 NARR = {"opening": "Your AI team shipped 21 commits for about $80.",
         "output-ledger": "21 commits landed in 50 days.\n\nDetail prose.",
-        "team-ledger": "Codex took the long jobs.\n\nMore prose."}
+        "team-ledger": "Codex took the long jobs.\n\nMore prose.",
+        "leak-ledger": "The repeated-instruction tax is your biggest leak.\n\nDetail."}
+
+# --- Phase 2 fixtures: blind spots + leak ledger ---
+
+BS_ALL_PASSED = {
+    "schema_version": 1,
+    "repeated_instructions": {
+        "id": "repeated_instructions", "gate_passed": True,
+        "suppressed_by_guard": False, "n": 1,
+        "metrics": {"patterns": [{
+            "exemplar": "run the tests <script>alert(1)</script>",
+            "occurrences": 7, "weeks": 4, "sources": ["claude", "codex"],
+            "est_wasted_tokens": 900,
+            "evidence": ["sid-1", "sid-2", "sid-3"]}]},
+        "reason": None},
+    "sunk_cost": {
+        "id": "sunk_cost", "gate_passed": True, "suppressed_by_guard": False,
+        "n": 3, "metrics": {"pairs": [], "accel_rate_not_achieved": 0.5,
+                            "accel_rate_fully_achieved": 0.1}, "reason": None},
+    "switch_tax": {
+        "id": "switch_tax", "gate_passed": True, "suppressed_by_guard": False,
+        "n": 60,
+        "metrics": {"multi": {"n": 25, "good_rate": 55.0,
+                              "friction_per_session": 1.2,
+                              "interrupts_per_session": 0.3},
+                    "single": {"n": 35, "good_rate": 78.0,
+                              "friction_per_session": 0.4,
+                              "interrupts_per_session": 0.1}},
+        "reason": None},
+    "graveyard": {
+        "id": "graveyard", "gate_passed": True, "suppressed_by_guard": False,
+        "n": 2,
+        "metrics": {"items": [
+            {"project_key": "old-webapp", "last_active_date": "2026-05-01",
+             "days_untouched": 40, "writes": 12, "evidence": ["sid-9"]},
+            {"project_key": "side-project", "last_active_date": "2026-05-15",
+             "days_untouched": 26, "writes": 6, "evidence": ["sid-10"]},
+        ]},
+        "reason": None},
+    "habit_drift": {"id": "habit_drift", "gate_passed": False,
+                    "suppressed_by_guard": False, "n": 0, "metrics": {},
+                    "reason": "fewer than 8 weeks"},
+    "ask_vs_ship": {
+        "id": "ask_vs_ship", "gate_passed": True, "suppressed_by_guard": False,
+        "n": 40,
+        "metrics": {"top_gap": {"category": "refactoring", "ask_share_pct": 30.0,
+                                "ship_share_pct": 8.0, "gap_pp": 22.0},
+                    "shipped_sessions": 14},
+        "reason": None},
+    "interrupt_win_rate": {
+        "id": "interrupt_win_rate", "gate_passed": True,
+        "suppressed_by_guard": False, "n": 12,
+        "metrics": {"interrupted": {"n": 12, "good_rate": 40.0},
+                    "baseline": {"n": 30, "good_rate": 70.0},
+                    "delta_pp": -30.0},
+        "reason": None},
+}
+
+BS_ALL_FAILED = {
+    "schema_version": 1,
+    "repeated_instructions": {"id": "repeated_instructions", "gate_passed": False,
+                              "suppressed_by_guard": False, "n": 0, "metrics": {},
+                              "reason": "no pattern"},
+    "sunk_cost": {"id": "sunk_cost", "gate_passed": False,
+                 "suppressed_by_guard": False, "n": 0, "metrics": {},
+                 "reason": "fewer than 3 confirmed pairs"},
+    "switch_tax": {"id": "switch_tax", "gate_passed": False,
+                  "suppressed_by_guard": False, "n": 0, "metrics": {},
+                  "reason": "no multi-source windows"},
+    "graveyard": {"id": "graveyard", "gate_passed": False,
+                 "suppressed_by_guard": False, "n": 0, "metrics": {},
+                 "reason": "fewer than 2 qualifying items"},
+    "habit_drift": {"id": "habit_drift", "gate_passed": False,
+                    "suppressed_by_guard": False, "n": 0, "metrics": {},
+                    "reason": "fewer than 8 weeks"},
+    "ask_vs_ship": {"id": "ask_vs_ship", "gate_passed": False,
+                    "suppressed_by_guard": False, "n": 0, "metrics": {},
+                    "reason": "fewer than 20 scored sessions"},
+    "interrupt_win_rate": {"id": "interrupt_win_rate", "gate_passed": False,
+                           "suppressed_by_guard": False, "n": 0, "metrics": {},
+                           "reason": "fewer than 5 sessions in a bucket"},
+}
+
+LEDGER_LEAKS = dict(LEDGER, leaks={
+    "window_weeks": 7.1,
+    "items": [
+        {"type": "repeated_instructions", "weekly_cost_usd": 4.32,
+         "weekly_tokens": 12000, "occurrences": 7, "evidence": ["sid-1"]},
+        {"type": "sunk_cost", "weekly_cost_usd": 2.10,
+         "weekly_tokens": 5000, "occurrences": 3, "evidence": ["sid-4"]},
+        {"type": "failed_session_burn", "weekly_cost_usd": 1.05,
+         "weekly_tokens": 3000, "occurrences": 5, "evidence": ["sid-7"]},
+    ],
+})
+
+LEDGER_NO_LEAKS = dict(LEDGER, leaks={"window_weeks": 7.1, "items": []})
 
 
 class OpeningBandTests(unittest.TestCase):
@@ -263,7 +368,143 @@ class TeamLedgerTests(unittest.TestCase):
         self.assertNotIn(unexpected_zero, html)
 
 
-def _minimal_ledger_analysis():
+class LeakLedgerRenderTests(unittest.TestCase):
+    def test_gate_passing_renders_section_with_exemplar_cost_fix_and_secondary(self):
+        from itertools import count
+        html = _build_leak_ledger(LEDGER_LEAKS, BS_ALL_PASSED, NARR, "en", count(1))
+        self.assertIn('id="ledger-leaks"', html)
+        # XSS marker in the repeated-instruction exemplar must be escaped.
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+        self.assertNotIn("<script>alert(1)</script>", html)
+        self.assertIn("c-leak-cost", html)
+        self.assertIn("4.32", html)  # formatted weekly cost
+        from scripts.locales import STRINGS
+        self.assertIn(STRINGS["en"]["ledger_leak_fix_label"], html)
+        self.assertIn(STRINGS["en"]["leak_fix_repeated_instructions"], html)
+        # secondary findings (#6 ask-vs-ship, #7 interrupt win-rate)
+        self.assertIn(STRINGS["en"]["ledger_secondary_findings"], html)
+        self.assertIn("refactoring", html)
+
+    def test_all_gates_failed_and_no_leak_items_suppresses_whole_section(self):
+        from itertools import count
+        html = _build_leak_ledger(LEDGER_NO_LEAKS, BS_ALL_FAILED, NARR, "en", count(1))
+        self.assertEqual(html, "")
+        self.assertNotIn('id="ledger-leaks"', html)
+
+    def test_leak_items_alone_render_even_without_opener_gates(self):
+        from itertools import count
+        bs = dict(BS_ALL_FAILED)
+        html = _build_leak_ledger(LEDGER_LEAKS, bs, NARR, "en", count(1))
+        self.assertIn('id="ledger-leaks"', html)
+        self.assertNotIn("c-blindspot", html)
+
+    def test_opener_gate_alone_renders_even_without_leak_items(self):
+        from itertools import count
+        bs = dict(BS_ALL_FAILED, repeated_instructions=BS_ALL_PASSED["repeated_instructions"])
+        html = _build_leak_ledger(LEDGER_NO_LEAKS, bs, NARR, "en", count(1))
+        self.assertIn('id="ledger-leaks"', html)
+        self.assertIn("c-blindspot", html)
+
+
+class GraveyardOpenerTests(unittest.TestCase):
+    def test_gate_passing_shows_callout_and_exhibit_rows(self):
+        from itertools import count
+        html = _build_output_ledger(LEDGER, NARR, "en", count(1), BS_ALL_PASSED)
+        self.assertIn("c-blindspot", html)
+        from scripts.locales import STRINGS
+        self.assertIn(STRINGS["en"]["blindspot_graveyard_title"], html)
+        self.assertIn("old-webapp", html)
+        self.assertIn("side-project", html)
+
+    def test_gate_failed_no_callout(self):
+        from itertools import count
+        html = _build_output_ledger(LEDGER, NARR, "en", count(1), BS_ALL_FAILED)
+        self.assertNotIn("c-blindspot", html)
+        from scripts.locales import STRINGS
+        self.assertNotIn(STRINGS["en"]["blindspot_graveyard_title"], html)
+
+
+class SwitchTaxOpenerTests(unittest.TestCase):
+    def test_gate_passing_shows_callout_with_negative_class_on_worse_rate(self):
+        from itertools import count
+        html = _build_team_ledger(CROSS, NARR, "en", count(2), BS_ALL_PASSED)
+        self.assertIn("c-blindspot", html)
+        from scripts.locales import STRINGS
+        self.assertIn(STRINGS["en"]["blindspot_switch_title"], html)
+        # multi (55.0) < single (78.0) => multi rate wrapped in negative class
+        self.assertIn("c-neg-num", html)
+        self.assertIn("55.0", html)
+        self.assertIn("78.0", html)
+
+    def test_gate_failed_no_callout(self):
+        from itertools import count
+        html = _build_team_ledger(CROSS, NARR, "en", count(2), BS_ALL_FAILED)
+        self.assertNotIn("c-blindspot", html)
+
+
+class ExhibitNumberingTests(unittest.TestCase):
+    def test_exhibits_are_strictly_consecutive_from_one_in_document_order(self):
+        from itertools import count
+        exhibit_no = count(1)
+        html = (_build_output_ledger(LEDGER, NARR, "en", exhibit_no, BS_ALL_PASSED)
+                + _build_team_ledger(CROSS, NARR, "en", exhibit_no, BS_ALL_PASSED)
+                + _build_leak_ledger(LEDGER_LEAKS, BS_ALL_PASSED, NARR, "en", exhibit_no))
+        nums = [int(n) for n in re.findall(r"EXHIBIT\s+(\d+)", html)]
+        self.assertEqual(nums, list(range(1, len(nums) + 1)))
+        self.assertGreaterEqual(len(nums), 4)  # output(1) + team(>=2) + leak(1)
+
+
+class NarrationLeakBookTests(unittest.TestCase):
+    def test_first_line_becomes_h2_and_opening_band_finding(self):
+        from itertools import count
+        leak_html = _build_leak_ledger(LEDGER_LEAKS, BS_ALL_PASSED, NARR, "en", count(1))
+        self.assertIn("The repeated-instruction tax is your biggest leak", leak_html)
+        band_html = _build_opening_band(LEDGER, NARR, "en")
+        self.assertIn("The repeated-instruction tax is your biggest leak", band_html)
+        # third finding number
+        self.assertIn('<div class="c-finding-no">3</div>', band_html)
+
+    def test_missing_book_falls_back_to_locale_title_no_fabricated_prose(self):
+        from itertools import count
+        narr = dict(NARR, **{"leak-ledger": ""})
+        html = _build_leak_ledger(LEDGER_LEAKS, BS_ALL_PASSED, narr, "en", count(1))
+        from scripts.locales import STRINGS
+        self.assertIn(STRINGS["en"]["ledger_leaks_title"], html)
+        self.assertNotIn("None", html)
+        band_html = _build_opening_band(LEDGER, narr, "en")
+        # no third finding when the leak-ledger book is empty
+        self.assertNotIn('<div class="c-finding-no">3</div>', band_html)
+
+
+class HRAbsenceTests(unittest.TestCase):
+    def test_hr_render_has_no_leak_or_blindspot_or_graveyard_markers(self):
+        # Static CSS rules for .c-blindspot etc. are always present in the
+        # stylesheet (same as LedgerAudienceGateTests' .c-exhibit check), so
+        # assert on the rendered element (class="c-blindspot") rather than
+        # the bare class-name substring, and on locale prose that only a
+        # rendered callout/exhibit would introduce.
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            html_hr = _run_build_with_ledger(
+                "hr", tmp_path, ledger=LEDGER_LEAKS, blind_spots=BS_ALL_PASSED)
+        self.assertNotIn('id="ledger-leaks"', html_hr)
+        self.assertNotIn('class="c-blindspot"', html_hr)
+        from scripts.locales import STRINGS
+        self.assertNotIn(STRINGS["en"]["blindspot_graveyard_title"], html_hr)
+        self.assertNotIn("old-webapp", html_hr)
+
+    def test_self_render_has_leak_and_blindspot_markers(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            html_self = _run_build_with_ledger(
+                "self", tmp_path, ledger=LEDGER_LEAKS, blind_spots=BS_ALL_PASSED)
+        self.assertIn('id="ledger-leaks"', html_self)
+        self.assertIn('class="c-blindspot"', html_self)
+
+
+def _minimal_ledger_analysis(ledger=None, blind_spots=None):
     """Smallest analysis-data shape (same skeleton as
     test_build_html_additions._minimal_analysis) plus ledger/cross_llm blocks,
     so we can drive build_html.py end-to-end for the HR/SELF gating test."""
@@ -306,22 +547,25 @@ def _minimal_ledger_analysis():
         },
         "scores": {"_overall": {"avg": 0, "dimensions_scored": 0, "dimensions_total": 8}},
         "_sessions": [],
-        "ledger": LEDGER,
+        "ledger": ledger if ledger is not None else LEDGER,
         "cross_llm": CROSS,
+        "blind_spots": blind_spots if blind_spots is not None else {},
     }
 
 
-def _run_build_with_ledger(audience, tmp_path):
+def _run_build_with_ledger(audience, tmp_path, ledger=None, blind_spots=None):
     """Drive build_html.py as a subprocess (same pattern as
     test_build_html_additions._run_build) with --ledger-narration wired in."""
     import subprocess
     import json as _json
-    (tmp_path / "a.json").write_text(_json.dumps(_minimal_ledger_analysis()))
+    (tmp_path / "a.json").write_text(
+        _json.dumps(_minimal_ledger_analysis(ledger=ledger, blind_spots=blind_spots)))
     (tmp_path / "s.json").write_text("{}")
     narr_md = (
         "# opening\n" + NARR["opening"] + "\n"
         "# output-ledger\n" + NARR["output-ledger"] + "\n"
         "# team-ledger\n" + NARR["team-ledger"] + "\n"
+        "# leak-ledger\n" + NARR["leak-ledger"] + "\n"
     )
     (tmp_path / "narr.md").write_text(narr_md)
     out = tmp_path / "out.html"
