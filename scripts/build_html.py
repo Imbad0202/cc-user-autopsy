@@ -124,6 +124,9 @@ def main():
     ap.add_argument("--case-study", default=None,
                     help="Optional markdown file with the strongest-single-session "
                     "case study block. Rendered for both audiences.")
+    ap.add_argument("--ledger-narration", default=None,
+                    help="Markdown with # opening / # output-ledger / # team-ledger "
+                    "books (SELF only; written by the skill in Step 3).")
     ap.add_argument("--output", required=True)
     ap.add_argument("--audience", choices=["self", "hr"], default="self",
                     help="'self' for the diagnostic letter (default); 'hr' re-orders sections "
@@ -175,6 +178,12 @@ def main():
         if p.exists():
             case_study_md = p.read_text()
 
+    ledger_narration_md = ""
+    if args.ledger_narration:
+        p = Path(args.ledger_narration).expanduser()
+        if p.exists():
+            ledger_narration_md = p.read_text()
+
     artifacts_list = load_json_or_warn(args.artifacts, "artifacts", [])
     profile_info = load_json_or_warn(args.profile, "profile", {})
     allowlist = load_json_or_warn(args.public_projects, "public-projects", {})
@@ -196,6 +205,7 @@ def main():
         category_map=category_map,
         try_this_md=try_this_md,
         case_study_md=case_study_md,
+        ledger_narration_md=ledger_narration_md,
     )
 
     out = Path(args.output).expanduser()

@@ -324,6 +324,197 @@ def _parse_ledger_narration(md: str) -> dict:
     return books
 
 
+def _first_line(text):
+    for line in (text or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _rest_lines(text):
+    lines = (text or "").splitlines()
+    seen_first = False
+    out = []
+    for line in lines:
+        if not seen_first and line.strip():
+            seen_first = True
+            continue
+        if seen_first:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+def _build_opening_band(ledger, narration, locale="en"):
+    """SELF-only opening band: kicker + LLM-written opening sentence, plus a
+    numbered-finding list built from the output-ledger / team-ledger opener
+    claims. Never fabricates prose — an empty narration renders numbers-only.
+    """
+    opening = _first_line(narration.get("opening", ""))
+    findings = []
+    for i, book in enumerate(("output-ledger", "team-ledger"), start=1):
+        claim = _first_line(narration.get(book, ""))
+        if claim:
+            findings.append(
+                '<div class="c-finding">'
+                f'<div class="c-finding-no">{i}</div>'
+                f'<div class="c-finding-head">{inline_md(claim)}</div>'
+                '</div>')
+    opening_html = (
+        f'<p class="c-finding-head" style="margin-top:14px">{inline_md(opening)}</p>'
+        if opening else "")
+    win = ledger.get("window") or {}
+    period = ""
+    if win.get("start") and win.get("end"):
+        period = (f'<p class="method">{esc(win["start"])} – {esc(win["end"])}'
+                  f' · {int(win.get("days") or 0)}d</p>')
+    return (
+        '<section class="section" id="ledger-opening">'
+        f'<div class="c-kicker">{t(locale, "ledger_opening_kicker")}</div>'
+        f'{opening_html}{period}'
+        f'{"".join(findings)}'
+        '</section>')
+
+
+def _build_output_ledger(ledger, narration, locale="en"):
+    """SELF-only output ledger: action-title head + prose + Exhibit 1
+    (git_commits, git_pushes, sessions_with_commits). Counts only — no
+    session IDs or prompt text ever flow through this builder."""
+    out = ledger.get("output") or {}
+    title = _first_line(narration.get("output-ledger", "")) or t(
+        locale, "ledger_output_title")
+    prose = _rest_lines(narration.get("output-ledger", ""))
+    prose_html = f"<div>{inline_md(prose)}</div>" if prose else ""
+    metrics = (
+        '<div class="metrics">'
+        f'<div class="metric"><div class="n">{int(out.get("git_commits") or 0)}</div>'
+        f'<div class="lbl">{t(locale, "ledger_output_commits")}</div></div>'
+        f'<div class="metric"><div class="n">{int(out.get("git_pushes") or 0)}</div>'
+        f'<div class="lbl">{t(locale, "ledger_output_pushes")}</div></div>'
+        f'<div class="metric"><div class="n">{int(out.get("sessions_with_commits") or 0)}</div>'
+        f'<div class="lbl">{t(locale, "ledger_output_sessions_with_commits")}</div></div>'
+        '</div>')
+    ex = _exhibit(1, t(locale, "ledger_output_title"), metrics,
+                  "aggregate.py ledger.output, transcript pool", locale=locale)
+    return ('<section class="section" id="ledger-output">'
+            f'<h2 class="c-sec-title">{inline_md(title)}</h2>'
+            f'{prose_html}{ex}</section>')
+
+
+_SRC_LABEL_KEYS = {"full": "ledger_source_card_full",
+                   "partial": "ledger_source_card_partial",
+                   "presence_only": "ledger_source_card_presence"}
+
+
+def _build_team_ledger(cross_llm, narration, locale="en"):
+    """SELF-only team ledger: per-source cards, then (only when a non-degraded
+    common_window exists) weekly-share / parallel-heatmap / project-matrix /
+    head-to-head exhibits. Degraded or missing window: localized degraded
+    note instead of the comparison exhibits; heatmap and matrix still render
+    since they don't compare rates across sources. Counts, dates, minutes,
+    and tokens only — no session IDs or prompt text ever flow through here."""
+    if not cross_llm or not cross_llm.get("sources"):
+        return ""
+    title = _first_line(narration.get("team-ledger", "")) or t(
+        locale, "ledger_team_title")
+    prose = _rest_lines(narration.get("team-ledger", ""))
+    prose_html = f"<div>{inline_md(prose)}</div>" if prose else ""
+
+    cards = ""
+    for s in cross_llm["sources"]:
+        label = t(locale, _SRC_LABEL_KEYS.get(s.get("coverage"),
+                                              "ledger_source_card_full"))
+        span = ""
+        if s.get("first_date") and s.get("last_date"):
+            span = f'{esc(s["first_date"])} – {esc(s["last_date"])}'
+        cards += ('<div class="c-source-card">'
+                  f'<b>{esc(s["source"])}</b> · {esc(label)}<br>'
+                  f'{int(s.get("session_count") or 0)} · {span}</div>')
+    cards = f'<div class="c-source-cards">{cards}</div>'
+
+    win = cross_llm.get("common_window")
+    parts = [cards]
+    exhibit_no = 2
+
+    if win and not win.get("degraded"):
+        note = t(locale, "ledger_common_window_note_template").format(
+            start=win["start"], end=win["end"], days=win["days"])
+        parts.append(f'<p class="method">{esc(note)}</p>')
+        # Exhibit: weekly share stacked bars
+        rows = ""
+        srcs = sorted({src for wk in cross_llm.get("weekly_share", [])
+                       for src in wk["minutes"]})
+        for wk in cross_llm.get("weekly_share", []):
+            total = sum(wk["minutes"].values()) or 1
+            segs = "".join(
+                f'<div class="c-share-seg c-src-{srcs.index(src) % 6}" '
+                f'style="width:{100 * mins / total:.1f}%" '
+                f'title="{esc(src)}: {int(mins)}"></div>'
+                for src, mins in sorted(wk["minutes"].items()))
+            rows += (f'<div class="c-share-row"><span>{esc(wk["week"])}</span>'
+                     f'<div class="c-share-bar">{segs}</div></div>')
+        parts.append(_exhibit(exhibit_no, t(locale, "ledger_weekly_share_title"),
+                              rows, "aggregate.py cross_llm.weekly_share",
+                              locale=locale))
+        exhibit_no += 1
+    else:
+        # Degraded window OR no window at all — no cross-tool comparison claim.
+        parts.append(f'<p class="method">'
+                     f'{esc(t(locale, "ledger_degraded_note"))}</p>')
+
+    # heatmap + matrix render regardless of degradation (no cross-rate claims)
+    hm = cross_llm.get("parallel", {}).get("heatmap")
+    if hm and any(any(r) for r in hm):
+        mx = max(max(r) for r in hm) or 1
+        grid = "".join(
+            f'<div style="background: rgba(176,138,46,{0.85 * c / mx:.2f})"></div>'
+            for row in hm for c in row)
+        body = (f'<div style="display:grid;grid-template-columns:repeat(24,1fr);'
+                f'gap:2px;height:120px">{grid}</div>')
+        parts.append(_exhibit(exhibit_no, t(locale, "ledger_parallel_title"),
+                              body, "aggregate.py cross_llm.parallel",
+                              locale=locale))
+        exhibit_no += 1
+
+    pm = cross_llm.get("project_matrix") or {}
+    if pm.get("projects"):
+        head = "".join(f"<th>{esc(s)}</th>" for s in pm["sources"])
+        body_rows = "".join(
+            f'<tr><td>{esc(proj)}</td>' +
+            "".join(f"<td>{c}</td>" for c in pm["counts"][i]) + "</tr>"
+            for i, proj in enumerate(pm["projects"]))
+        table = (f'<table><thead><tr><th></th>{head}</tr></thead>'
+                 f'<tbody>{body_rows}</tbody></table>')
+        parts.append(_exhibit(exhibit_no, t(locale, "ledger_matrix_title"),
+                              table, "aggregate.py cross_llm.project_matrix",
+                              locale=locale))
+        exhibit_no += 1
+
+    h2h = cross_llm.get("head_to_head")
+    if h2h and win and not win.get("degraded"):
+        def _col(name, side):
+            return ('<div>'
+                    f'<div class="c-kicker">{esc(name)}</div>'
+                    f'<div class="num">{int(side["sessions"])}</div>'
+                    f'<div class="lbl">{t(locale, "ledger_h2h_sessions")}</div>'
+                    f'<div>{int(side["active_days"])} '
+                    f'{t(locale, "ledger_h2h_active_days")}</div>'
+                    f'<div>{fmt(side["total_tokens"])} '
+                    f'{t(locale, "ledger_h2h_tokens")}</div>'
+                    f'<div>{int(side["median_duration_minutes"])} '
+                    f'{t(locale, "ledger_h2h_median_dur")}</div>'
+                    '</div>')
+        card = ('<div class="c-h2h">'
+                + _col("Claude", h2h["claude"]) + _col("Codex", h2h["codex"])
+                + '</div>')
+        parts.append(_exhibit(exhibit_no, t(locale, "ledger_h2h_title"), card,
+                              "aggregate.py cross_llm.head_to_head",
+                              locale=locale))
+
+    return ('<section class="section" id="ledger-team">'
+            f'<h2 class="c-sec-title">{inline_md(title)}</h2>'
+            f'{prose_html}{"".join(parts)}</section>')
+
+
 def sanitize_url(url: str, *, allow_mailto: bool = False) -> str:
     if not url:
         return "#"
@@ -1680,12 +1871,12 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     --c-src-4: #26231E;
     --c-src-5: #C9C4B8;
   }
-  .c-src-0 { color: var(--c-src-0); }
-  .c-src-1 { color: var(--c-src-1); }
-  .c-src-2 { color: var(--c-src-2); }
-  .c-src-3 { color: var(--c-src-3); }
-  .c-src-4 { color: var(--c-src-4); }
-  .c-src-5 { color: var(--c-src-5); }
+  .c-src-0 { color: var(--c-src-0); background: var(--c-src-0); }
+  .c-src-1 { color: var(--c-src-1); background: var(--c-src-1); }
+  .c-src-2 { color: var(--c-src-2); background: var(--c-src-2); }
+  .c-src-3 { color: var(--c-src-3); background: var(--c-src-3); }
+  .c-src-4 { color: var(--c-src-4); background: var(--c-src-4); }
+  .c-src-5 { color: var(--c-src-5); background: var(--c-src-5); }
   .c-exhibit { margin: 30px 0 6px; }
   .c-exhibit-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
   .c-exhibit-no { font-size: 11.5px; font-weight: 800; letter-spacing: 0.14em;
@@ -1723,6 +1914,8 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     $letterhead_facet_coverage <b>$facets_coverage%</b>
   </div>
 </div>
+
+$ledger_sections
 
 $identity_block
 
@@ -2371,6 +2564,7 @@ def render(
     category_map: dict = None,
     try_this_md: str = "",
     case_study_md: str = "",
+    ledger_narration_md: str = "",
 ) -> str:
     """Render the full HTML report and return it as a string.
 
@@ -2386,6 +2580,8 @@ def render(
     artifacts_list: Optional public artifact list (from --artifacts JSON).
     public_set:     Optional set of allowlisted project names (from --public-projects).
     category_map:   Optional category override dict (from --public-projects).
+    ledger_narration_md: Markdown with # opening / # output-ledger / # team-ledger
+                    books (SELF only; written by the skill in Step 3).
     """
     pr_html = md_to_html(peer_review_md)
 
@@ -3111,6 +3307,22 @@ def render(
       {self_awareness_caveat_html}
     </section>'''
 
+    # -------- SELF-only AI work ledger sections (V5 direction C) --------
+    # Opening band / output ledger / team ledger. HR must never see any of
+    # this — cross-LLM session activity is not for outside audiences.
+    # Builders themselves take only counts/dates/minutes/tokens, never
+    # session IDs or prompt text (see report_render docstrings above).
+    ledger_sections = ""
+    if audience == "self":
+        ledger_narration = _parse_ledger_narration(ledger_narration_md)
+        ledger_block = analysis.get("ledger") or {}
+        cross_block = analysis.get("cross_llm") or {}
+        if ledger_block:
+            ledger_sections += _build_opening_band(ledger_block, ledger_narration, locale)
+            ledger_sections += _build_output_ledger(ledger_block, ledger_narration, locale)
+        if cross_block:
+            ledger_sections += _build_team_ledger(cross_block, ledger_narration, locale)
+
     # Assemble via string.Template to avoid CSS brace escaping
     subs = {
         "html_lang": t(locale, "html_lang"),
@@ -3165,6 +3377,7 @@ def render(
         "method_caveats_body": narrative.methodology_caveats_body(),
         # Template blocks
         "chart_layout_js": _load_chart_layout_js(),
+        "ledger_sections": ledger_sections,
         "identity_block": identity_block,
         "hero_block": hero_block,
         "profile_section": profile_section,
