@@ -198,7 +198,7 @@ across Claude rows and full/partial-coverage cross-LLM rows (`coverage ==
 
 `metrics.patterns` reports the top 5 patterns by occurrence count; each
 carries the most-common raw exemplar (≤120 chars), a lower-bound
-`est_wasted_tokens = (occurrences - 1) * len(exemplar) // 4` (only the
+`est_wasted_tokens = (occurrences - 1) * (len(exemplar) // 4)` (only the
 retyped text — thinking/re-reading time not counted), and up to 3 evidence
 session IDs.
 
@@ -212,11 +212,17 @@ harder without changing approach), followed by a fast, similar-prompt
 success, is the signature of "should have restarted sooner."
 
 A confirmed pair = a `not_achieved` session with `token_accel >=
-_BS_ACCEL_FLAG` (**provisional v1** `1.5`), followed by a later
-`fully_achieved` (or better) session whose normalized prompt has Jaccard
-similarity `>= _BS_SIMILARITY_MIN` (**provisional v1** `0.5`) to the failed
-session's, finishing in `<= _BS_RETRY_MAX_DURATION_SHARE` (**provisional
-v1** `0.5`, i.e. half) of the failed session's minutes.
+_BS_ACCEL_FLAG` (**provisional v1** `1.5`), followed by a later session
+whose outcome is good (`is_good()`, i.e. `fully_achieved` OR
+`mostly_achieved`) and whose normalized prompt has Jaccard similarity
+`>= _BS_SIMILARITY_MIN` (**provisional v1** `0.5`) to the failed session's,
+finishing in `<= _BS_RETRY_MAX_DURATION_SHARE` (**provisional v1** `0.5`,
+i.e. half) of the failed session's minutes. Note the counterexample guard
+below uses a narrower baseline than the retry qualification: it measures
+the acceleration rate in `fully_achieved` sessions only (not
+`mostly_achieved`), so a pair's retry can qualify on `mostly_achieved`
+while the guard's baseline rate is computed strictly from `fully_achieved`
+sessions.
 
 | Threshold | Value (provisional v1) |
 |-----------|-------------------------|

@@ -238,6 +238,9 @@ def main() -> None:
     assert 'class="c-blindspot"' not in hr_html, (
         "HR build must not render blind-spot callout elements"
     )
+    assert 'class="c-blindspot"' in self_html, (
+        "SELF build must render blind-spot callout elements"
+    )
 
     # cross-LLM prompt text must never reach ANY output (spec §4)
     for name, html_text in (("self", self_html), ("hr", hr_html)):

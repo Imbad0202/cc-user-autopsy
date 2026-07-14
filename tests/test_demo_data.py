@@ -127,14 +127,23 @@ class CrossLlmDemoDataTests(unittest.TestCase):
         self.assertGreaterEqual(len(pbs), 5)
 
 
+_full_pipeline_cache = None
+
+
 def _run_full_pipeline():
     """Regenerate the demo tree and run the real pipeline (scan_transcripts +
     scan_codex + scan_grok + aggregate.py, all via subprocess, same as
-    tests/smoke_test.py) over it exactly once. Returns the parsed
-    analysis-data.json. Shared by both blind-spot test classes below so the
-    (expensive) pipeline doesn't re-run per class, and so every consumer
-    sees the same --cross-llm-rows-complete analysis-data.json rather than
-    risking a partial one from run-order-dependent caching."""
+    tests/smoke_test.py) over it. Returns the parsed analysis-data.json.
+
+    Both blind-spot test classes below call this from their own
+    setUpClass, so without caching the (expensive) pipeline runs twice per
+    test session. Results are deterministic (seed=42 demo data), so the
+    first result is cached at module level and reused for every subsequent
+    call — the pipeline itself still only runs once."""
+    global _full_pipeline_cache
+    if _full_pipeline_cache is not None:
+        return _full_pipeline_cache
+
     _regen_demo()
     transcript_rows = OUT_DIR / "transcript-rows.jsonl"
     codex_rows = OUT_DIR / "codex-rows.jsonl"
@@ -161,7 +170,8 @@ def _run_full_pipeline():
         "--cross-llm-rows", str(grok_rows),
         "--output", str(analysis_path))
 
-    return json.loads(analysis_path.read_text())
+    _full_pipeline_cache = json.loads(analysis_path.read_text())
+    return _full_pipeline_cache
 
 
 class BlindSpotDemoGateTests(unittest.TestCase):

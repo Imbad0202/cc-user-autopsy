@@ -133,6 +133,16 @@ for dim, metrics in scores.items():
   change) — do not infer "no leaks found" from its absence, only from an
   empty `items` list on a present block.
 - No existing `ledger` fields changed or removed.
+- **`autopsy-history.jsonl` snapshot shape differs from `analysis-data.json`'s
+  `ledger.leaks`.** SELF builds append one line to `autopsy-history.jsonl`
+  (`build_html.append_history_snapshot`) whose `ledger.leaks` field is a
+  **compact list** — each item is `{type, weekly_cost_usd, weekly_tokens,
+  occurrences}` with no `evidence` sids — derived from but not identical to
+  `analysis-data.json`'s `ledger.leaks`, which is a **dict**
+  (`{window_weeks, items: [...]}`) whose `items` entries additionally carry
+  an `evidence: [sid, ...]` list. Phase 3's trend-ledger implementer should
+  read shapes per source: list-of-leak-dicts from the history file, the
+  `{window_weeks, items}` dict from `analysis-data.json`.
 
 ---
 

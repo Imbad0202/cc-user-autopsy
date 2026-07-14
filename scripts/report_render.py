@@ -526,7 +526,12 @@ def _build_team_ledger(cross_llm, narration, locale="en", exhibit_no=None,
             multi=multi_rate, single=single_rate)
         if multi_rate is not None and single_rate is not None and multi_rate < single_rate:
             # Wrap only the worse (multi-tool) rate — negative-red is for
-            # bad numbers, not the whole sentence.
+            # bad numbers, not the whole sentence. .replace(..., 1) takes
+            # the FIRST match, which relies on both locales' templates
+            # rendering {multi} before {single} (true today in both en and
+            # zh_TW `blindspot_switch_template`); if a future template
+            # reorders them, or if single_rate happens to equal multi_rate
+            # numerically, this would paint the wrong number red.
             needle = f"{multi_rate}%"
             sentence_html = esc(sentence).replace(
                 esc(needle), f'<span class="c-neg-num">{esc(needle)}</span>', 1)
