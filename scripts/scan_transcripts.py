@@ -645,6 +645,13 @@ def main():
             orphan["git_pushes"] = (orphan.get("git_pushes") or 0) + usage["git_pushes"]
             orphan["_assistant_output_pairs"] = (
                 orphan.get("_assistant_output_pairs") or []) + usage["output_seq"]
+            # Orphan activity windows: merge the subagent record timestamps
+            # so Pass 3 builds segments (and an active-duration) for the
+            # orphan row too — otherwise _row_windows collapses a
+            # multi-hour delegated run to the 1-minute minimum and
+            # concurrency/team-ledger math undercounts it.
+            orphan["_all_ts"] = (
+                orphan.get("_all_ts") or []) + usage["record_timestamps"]
             # Keep the earliest ts seen across fragments as the canonical start.
             ts = usage.get("_earliest_ts", "")
             if ts and (not orphan.get("start_time") or ts < orphan["start_time"]):
@@ -665,14 +672,15 @@ def main():
     # Fix 1 (round 12): also rebuild `segments` from the merged _all_ts
     # (parent timestamps + any subagent record_timestamps merged in Pass 2)
     # via the same segments_and_duration() helper cross_llm_common already
-    # provides for "sort, split on idle gaps, format as local-iso pairs" —
-    # only its segments half is used; duration_minutes keeps its own
-    # full-span semantics (computed in scan_one from first/last timestamp,
-    # not summed active-segment time). Rows without subagent_usages entries
-    # have a single-source _all_ts list identical to what scan_one already
-    # used to build `segments`, so re-sorting and re-splitting is a no-op
-    # and their segments stay byte-identical (regression guard). Orphan
-    # rows never had an `_all_ts` key, so they're unaffected.
+    # provides for "sort, split on idle gaps, format as local-iso pairs".
+    # Parent rows use only its segments half; their duration_minutes keeps
+    # scan_one's full-span semantics (first/last timestamp). Orphan rows
+    # (no parent transcript) get BOTH: segments from their subagent record
+    # timestamps and duration_minutes from the summed active-segment time.
+    # Rows without subagent_usages entries have a single-source _all_ts
+    # list identical to what scan_one already used to build `segments`, so
+    # re-sorting and re-splitting is a no-op and their segments stay
+    # byte-identical (regression guard).
     #
     # Fix 2 (round 12): uses_* flags are recomputed once per row here (not
     # per subagent merge in Pass 2) for rows that received a subagent
@@ -688,7 +696,16 @@ def main():
                 row["token_accel"] = _compute_token_accel(pairs)
             all_ts = row.pop("_all_ts", None)
             if all_ts is not None:
-                row["segments"] = segments_and_duration(all_ts)[0] if all_ts else None
+                segs, active_min = (segments_and_duration(all_ts)
+                                    if all_ts else (None, 0))
+                row["segments"] = segs
+                # Orphan rows have no parent transcript to define a
+                # full-span duration, so their duration IS the summed
+                # active-segment time (otherwise a multi-hour delegated
+                # run reads as 0 minutes). Parent rows keep scan_one's
+                # full-span duration_minutes semantics.
+                if row.get("orphan_subagent_only") and not row.get("duration_minutes"):
+                    row["duration_minutes"] = active_min
             if row.pop("_merged_subagent_tools", False):
                 row.update(_derive_tool_flags(row["tool_counts"]))
                 # Orphan rows ARE subagent output by definition — the name

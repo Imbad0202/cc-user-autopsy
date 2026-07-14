@@ -162,7 +162,7 @@ for dim, metrics in scores.items():
 
 ## 2026-07-14 — additive: `first_prompt_hash` row field (`transcript-rows.jsonl` / `*-rows.jsonl`)
 
-`scan_transcripts.py`, `scan_codex.py`, and `scan_grok.py` now additionally emit a `first_prompt_hash` field per row: a sha1 identity key over the normalized FULL prompt text (computed before the 500-char display truncation adapters apply to `first_prompt`), or `null` when there's no usable prompt text. `bs_repeated_instructions` groups by this hash when present, falling back to `normalize_prompt(first_prompt)` for legacy rows that predate this field — this prevents two different prompts that merely share a 500-char truncated prefix from false-merging, and lets an identical long Claude prompt still match its truncated cross-tool copy. No raw prompt text is added; the field is purely an identity key.
+`scan_transcripts.py`, `scan_codex.py`, and `scan_grok.py` now additionally emit a `first_prompt_hash` field per row: a sha1 identity key over the normalized FULL prompt text (computed before the 500-char display truncation adapters apply to `first_prompt`), or `null` when there's no usable prompt text. `bs_repeated_instructions` groups by this hash when present, falling back to `prompt_identity(first_prompt)` (the sha1 of the normalized text, computed at grouping time) for legacy rows that predate this field, so mixed-version rows share one hash key space — this prevents two different prompts that merely share a 500-char truncated prefix from false-merging, and lets an identical long Claude prompt still match its truncated cross-tool copy. No raw prompt text is added; the field is purely an identity key.
 
 ---
 

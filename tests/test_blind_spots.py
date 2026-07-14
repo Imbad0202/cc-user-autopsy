@@ -810,6 +810,23 @@ class GraveyardTests(unittest.TestCase):
         keys = {i["project_key"] for i in out.get("metrics", {}).get("items", [])}
         self.assertIn("u/tmp-tools", keys)
 
+    def test_scratchpad_matches_whole_component_only(self):
+        # "scratchpad" must match a complete path component, never an
+        # arbitrary substring: /home/u/scratchpad-tools is a legitimate
+        # project; /home/u/scratchpad and /a/scratchpad/b are scratch.
+        rows = [
+            _grave_row("g1", BASE, "/home/u/scratchpad-tools"),
+            _grave_row("g2", BASE, "/home/u/scratchpad"),
+            _grave_row("g3", BASE + timedelta(days=1), "/a/scratchpad/b"),
+            _grave_row("g4", BASE + timedelta(days=3),
+                       "/home/u/projects/docs-site"),
+        ]
+        out = bs_graveyard(rows, WINDOW_END)
+        keys = {i["project_key"] for i in out.get("metrics", {}).get("items", [])}
+        self.assertIn("u/scratchpad-tools", keys)
+        self.assertNotIn("u/scratchpad", keys)
+        self.assertNotIn("scratchpad/b", keys)
+
     def test_same_session_without_recent_segment_is_graveyard(self):
         # Same fixture as above, but WITHOUT the recent-ending segment —
         # only start+duration (60 min), which ends long before window_end

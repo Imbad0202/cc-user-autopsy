@@ -316,7 +316,7 @@ all of:
 | Minimum substantive writes (Edit+Write+NotebookEdit) | `_BS_GRAVEYARD_MIN_WRITES = 5` |
 | Staleness horizon | `_BS_GRAVEYARD_HORIZON_DAYS = 14` (spec §13) |
 | Zero commits on that latest row | `git_commits == 0` |
-| Not a scratch path | excludes `_SCRATCH_PATH_MARKERS = ("/tmp/", "/scratchpad", "/private/tmp/")` |
+| Not a scratch path | excludes scratch roots (`/tmp`, `/private/tmp` as the path or a path-root prefix) and any path containing a complete `scratchpad` component (`/home/u/scratchpad` yes, `/home/u/scratchpad-tools` no) |
 | Project key resolvable | excludes `(unknown)` / non-shippable keys |
 | Minimum qualifying items | `_BS_GRAVEYARD_MIN_ITEMS = 2` |
 

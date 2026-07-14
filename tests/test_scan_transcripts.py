@@ -301,6 +301,42 @@ class ScanTranscriptsTests(unittest.TestCase):
             self.assertTrue(row["uses_mcp"])
             self.assertTrue(row["uses_subagent"])
 
+    def test_orphan_subagent_rows_carry_segments_and_active_duration(self):
+        """An orphan row must expose its subagent activity windows: segments
+        split at idle gaps and duration_minutes = summed active time, so a
+        multi-hour delegated run isn't collapsed to the 1-minute minimum by
+        _row_windows."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pdir = tmp / "projects" / "p"
+            pdir.mkdir(parents=True)
+            orphan_parent = "99999999-8888-7777-6666-555555555553"
+
+            def _rec(ts):
+                return json.dumps(
+                    {"type": "assistant", "timestamp": ts,
+                     "sessionId": orphan_parent,
+                     "message": {"role": "assistant",
+                                 "model": "claude-haiku-4-5", "content": [],
+                                 "usage": {"input_tokens": 1, "output_tokens": 1,
+                                           "cache_creation_input_tokens": 0,
+                                           "cache_read_input_tokens": 0}}})
+            (pdir / "agent-orphan3.jsonl").write_text("\n".join([
+                _rec("2026-04-18T00:00:00.000Z"),
+                _rec("2026-04-18T00:10:00.000Z"),
+                # 10 days idle, then a second burst
+                _rec("2026-04-28T00:00:00.000Z"),
+                _rec("2026-04-28T00:05:00.000Z"),
+            ]) + "\n")
+            out = tmp / "out.jsonl"
+            r = _run_scanner(tmp / "projects", out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertEqual(len(row["segments"]), 2)
+            self.assertEqual(row["duration_minutes"], 15)  # 10 + 5, not 0
+
     def test_skips_non_transcript_files(self):
         """Files like skill-injections.jsonl must not produce rows."""
         with tempfile.TemporaryDirectory() as tmp:

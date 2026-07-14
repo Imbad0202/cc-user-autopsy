@@ -2477,7 +2477,19 @@ def bs_interrupt_win_rate(rated):
 _BS_GRAVEYARD_MIN_WRITES = 5
 _BS_GRAVEYARD_HORIZON_DAYS = 14   # spec §13
 _BS_GRAVEYARD_MIN_ITEMS = 2
-_SCRATCH_PATH_MARKERS = ("/tmp/", "/scratchpad", "/private/tmp/")
+# Scratch exclusions (spec §5 #4): roots match the whole path or a
+# path-root prefix; component names match a complete path component only
+# ("/home/u/scratchpad" yes, "/home/u/scratchpad-tools" no).
+_SCRATCH_ROOTS = ("/tmp", "/private/tmp")
+_SCRATCH_COMPONENTS = ("scratchpad",)
+
+
+def _is_scratch_path(path_lower):
+    if any(path_lower == r or path_lower.startswith(r + "/")
+           for r in _SCRATCH_ROOTS):
+        return True
+    return any(c in _SCRATCH_COMPONENTS
+               for c in path_lower.split("/") if c)
 _WRITE_TOOLS = ("Edit", "Write", "NotebookEdit")
 _BS_ASKSHIP_MIN_RATED = 20
 _BS_ASKSHIP_MIN_SHIPPED = 5
@@ -2505,14 +2517,7 @@ def bs_graveyard(activity_rows, window_end):
         key = normalize_project_path(r.get("project_path") or "")
         if not is_shippable_project_key(key):
             continue
-        # normalize_project_path() strips trailing slashes, so a project
-        # rooted exactly at a scratch root ("/tmp", "/private/tmp") no
-        # longer contains the "/tmp/"-style marker as a substring. Match
-        # the marker as the whole (trailing-slash-stripped) path, as a
-        # path-root prefix, or (unchanged) anywhere in the path.
-        p = key.lower()
-        if any(p == m.rstrip("/") or p.startswith(m.rstrip("/") + "/") or m in p
-               for m in _SCRATCH_PATH_MARKERS):
+        if _is_scratch_path(key.lower()):
             continue
         windows = _row_windows(r)
         if not windows:
