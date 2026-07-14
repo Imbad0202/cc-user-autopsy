@@ -341,6 +341,38 @@ class RedactedSchemaTests(unittest.TestCase):
     def test_redacted_keys_include_token_accel(self):
         self.assertIn("token_accel", aggregate._REDACTED_META_KEYS)
 
+    def test_redacted_keys_include_segments(self):
+        # Fix 5: segments are timestamps only (no content) — dropping them
+        # from the redaction allowlist forces cross-machine rows back onto
+        # the full-span [start, start+duration] fallback, which counts idle
+        # gaps as active time in the switch-tax / parallel-overlap sweeps.
+        self.assertIn("segments", aggregate._REDACTED_META_KEYS)
+
+    def test_load_redacted_round_trips_segments(self):
+        # A redacted-rows dump that carries segments must have them survive
+        # load_redacted intact, so downstream _row_windows() sees real
+        # idle-gap-aware windows instead of falling back to full-span.
+        sid = "30303030-0000-0000-0000-000000000003"
+        segments = [
+            ["2026-04-01T10:00:00+00:00", "2026-04-01T10:05:00+00:00"],
+            ["2026-04-11T09:00:00+00:00", "2026-04-11T09:05:00+00:00"],
+        ]
+        row = {
+            "session_id": sid,
+            "start_time": "2026-04-01T10:00:00+00:00",
+            "duration_minutes": 14400,
+            "segments": segments,
+            "first_prompt_len": 5,
+            "source_machine": "test-machine",
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "sessions-redacted.jsonl"
+            path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            metas, facets, source_by_sid = aggregate.load_redacted(path)
+        self.assertEqual(metas[sid]["segments"], segments)
+        windows = aggregate._row_windows(metas[sid])
+        self.assertEqual(len(windows), 2)
+
 
 class TokenAccelTests(unittest.TestCase):
     def _scan_with_outputs(self, outputs):

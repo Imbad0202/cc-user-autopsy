@@ -28,9 +28,9 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from cross_llm_common import split_segments, to_local_iso
+    from cross_llm_common import prompt_identity, split_segments, to_local_iso
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_transcripts
-    from scripts.cross_llm_common import split_segments, to_local_iso
+    from scripts.cross_llm_common import prompt_identity, split_segments, to_local_iso
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
@@ -363,6 +363,11 @@ def scan_one(path: Path):
         "uses_web_search": uses_web_search,
         "uses_web_fetch": uses_web_fetch,
         "first_prompt": first_prompt,
+        # Identity key computed on the FULL prompt text — first_prompt above
+        # is not truncated here (scan_transcripts has no 500-char cap), but
+        # the hash is still emitted so this row can exact-match against a
+        # truncated copy from scan_codex/scan_grok of the same prompt.
+        "first_prompt_hash": prompt_identity(first_prompt),
         "user_response_times": response_times,
         "message_hours": msg_hours,
         "lines_added": 0,

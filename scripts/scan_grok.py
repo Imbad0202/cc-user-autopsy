@@ -12,10 +12,12 @@ from urllib.parse import unquote
 
 try:
     from cross_llm_common import (
-        parse_jsonl_object, parse_ts, segments_and_duration, to_local_iso, write_rows)
+        parse_jsonl_object, parse_ts, prompt_identity, segments_and_duration,
+        to_local_iso, write_rows)
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_grok
     from scripts.cross_llm_common import (
-        parse_jsonl_object, parse_ts, segments_and_duration, to_local_iso, write_rows)
+        parse_jsonl_object, parse_ts, prompt_identity, segments_and_duration,
+        to_local_iso, write_rows)
 
 DEFAULT_SESSIONS_DIR = Path.home() / ".grok" / "sessions"
 
@@ -46,7 +48,8 @@ def scan_sessions_dir(root: Path):
                     parse_errors += 1
                     continue
                 s = sessions.setdefault(
-                    sid, {"ts": [], "prompts": 0, "bash": 0, "first": None})
+                    sid, {"ts": [], "prompts": 0, "bash": 0, "first": None,
+                          "first_hash": None})
                 s["ts"].append(ts)
                 s["prompts"] += 1
                 if rec.get("is_bash"):
@@ -54,7 +57,12 @@ def scan_sessions_dir(root: Path):
                 if s["first"] is None:
                     text = rec.get("prompt")
                     if isinstance(text, str) and text.strip():
-                        s["first"] = text.strip()[:500]
+                        stripped = text.strip()
+                        # Hash the FULL prompt before truncating for
+                        # display (Fix 3) — identity must survive the
+                        # 500-char display cap below.
+                        s["first_hash"] = prompt_identity(stripped)
+                        s["first"] = stripped[:500]
         for sid, s in sessions.items():
             ts = sorted(s["ts"])
             segments, duration = segments_and_duration(ts)
@@ -73,6 +81,7 @@ def scan_sessions_dir(root: Path):
                 "cache_creation_input_tokens": None,
                 "model_counts": None,
                 "first_prompt": s["first"],
+                "first_prompt_hash": s["first_hash"],
                 "source": "grok",
                 "coverage": "partial",
             })

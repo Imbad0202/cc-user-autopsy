@@ -13,9 +13,9 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 try:
-    from cross_llm_common import parse_jsonl_object
+    from cross_llm_common import normalize_prompt, parse_jsonl_object, prompt_identity
 except ImportError:  # pragma: no cover - exercised when imported as scripts.aggregate
-    from scripts.cross_llm_common import parse_jsonl_object
+    from scripts.cross_llm_common import normalize_prompt, parse_jsonl_object, prompt_identity
 
 DEFAULT_DATA_DIR = Path.home() / ".claude/usage-data"
 META_DIR = DEFAULT_DATA_DIR / "session-meta"
@@ -256,27 +256,10 @@ def bucket_prompt_len(n: int) -> str:
 
 # --- Phase 2 shared helpers (blind-spot engine) ---
 
-_NORM_KEEP_RE = re.compile(r"[^\w一-鿿]+")
-_NORM_WS_RE = re.compile(r"\s+")
-
-
-def normalize_prompt(text):
-    """Normalize an instruction for exact-match repetition detection.
-
-    Deliberately exact-match only (v1): lowercased, punctuation folded to
-    spaces, whitespace collapsed. No truncation — identity uses the full
-    normalized string, so two long instructions that only differ after a
-    shared prefix must NOT collapse into one pattern (zero false positives
-    beats higher recall for a tax the user will be told to fix). Sources
-    already cap first_prompt at 500 chars upstream, so this never runs
-    unbounded. No fuzzy matching either. Display truncation (the ≤120-char
-    exemplar shown to the user) happens separately in bs_repeated_instructions.
-    """
-    if not isinstance(text, str):
-        return ""
-    t = _NORM_KEEP_RE.sub(" ", text.lower())
-    return _NORM_WS_RE.sub(" ", t).strip()
-
+# normalize_prompt / prompt_identity live in cross_llm_common.py (imported
+# above) — shared with scan_transcripts.py / scan_codex.py / scan_grok.py,
+# which call prompt_identity() on the full pre-truncation prompt text to
+# emit the additive first_prompt_hash row field (see bs_repeated_instructions).
 
 _CJK_RE = re.compile(r"[一-鿿]")
 
@@ -369,6 +352,7 @@ _REDACTED_META_KEYS = {
     "model_counts",
     "hit_output_limit",
     "token_accel",
+    "segments",  # timestamps only, no content — safe to carry through redaction
 }
 _REDACTED_FACETS_KEYS = {
     "session_id", "outcome", "claude_helpfulness", "session_type",
@@ -2104,10 +2088,16 @@ def _bs_result(id_, gate, metrics=None, n=0, reason=None, guarded=False):
 def bs_repeated_instructions(claude_rows, cross_rows, window_start=None, window_end=None):
     """Spec §5 #1 — repeated-instruction tax.
 
-    Exact-match on normalize_prompt(first_prompt) across Claude + full/
-    partial cross-LLM rows. Not outcome-guarded by design: a repeated
-    instruction is a tax whether or not the sessions succeed (see rubric).
-    Wasted-token estimate is a lower bound: only the retyped prompt text.
+    Grouping key is `row["first_prompt_hash"]` when present (sha1 of the
+    FULL, pre-truncation prompt text — Fix 3), else
+    normalize_prompt(first_prompt) as a legacy-row fallback. The hash is
+    computed by the scanners over the full prompt before they truncate
+    first_prompt to 500 chars for display, so two prompts sharing a 500-char
+    prefix but differing later no longer false-merge, and an identical long
+    Claude prompt still matches its truncated cross-tool copy. Not
+    outcome-guarded by design: a repeated instruction is a tax whether or
+    not the sessions succeed (see rubric). Wasted-token estimate is a lower
+    bound: only the retyped prompt text.
 
     window_start/window_end (aware datetimes, optional): when BOTH are
     given, rows whose parsed start_time falls outside [window_start,
@@ -2128,6 +2118,10 @@ def bs_repeated_instructions(claude_rows, cross_rows, window_start=None, window_
     for row in list(claude_rows) + list(cross_rows):
         if row.get("coverage") == "presence_only":
             continue
+        # The <20-char floor always applies to the normalized (possibly
+        # truncated-display) text — even when a hash key is present, hash
+        # rows carry first_prompt truncated to 500 chars, far above the
+        # floor, so this is a no-op for them in practice.
         norm = normalize_prompt(row.get("first_prompt"))
         if len(norm) < _BS_MIN_PATTERN_CHARS:
             continue
@@ -2136,7 +2130,8 @@ def bs_repeated_instructions(claude_rows, cross_rows, window_start=None, window_
             continue
         if windowed and not (win_start_d <= dt.date() <= win_end_d):
             continue
-        occ.setdefault(norm, []).append({
+        key = row.get("first_prompt_hash") or norm
+        occ.setdefault(key, []).append({
             "week": week_key(dt),
             "source": row.get("source") or "claude",
             "sid": row.get("session_id") or "",
@@ -2342,6 +2337,13 @@ def bs_switch_tax(rated, activity_rows, cross_rows):
     multi_iv = _multi_source_intervals(comparable_pool, cross_rows)
     if not multi_iv:
         return _bs_result("switch_tax", False, reason="no multi-source windows")
+    # sid -> row map over the Claude comparable pool (activity rows plus the
+    # synthesized meta-only `extra` rows above) so each rated session can be
+    # probed with ITS OWN segments via _row_windows, instead of one
+    # contiguous [start, start+duration] span that treats idle gaps inside a
+    # resumed session as active — a cross-tool row landing in that idle gap
+    # would otherwise falsely overlap and mis-bucket the session multi-tool.
+    row_by_sid = {r.get("session_id"): r for r in comparable_pool}
     multi, single = [], []
     for s in rated:
         st = _parse_dt(s.get("start"))
@@ -2349,12 +2351,24 @@ def bs_switch_tax(rated, activity_rows, cross_rows):
             continue
         if not (win_start_d <= st.date() <= win_end_d):
             continue
-        # Mirror _row_windows' 1-minute minimum: a 0-minute session would
-        # otherwise yield an empty [st, st) probe interval that never
-        # overlaps anything, always bucketing it single-tool even when it
-        # started inside a real multi-source window.
-        en = st + timedelta(minutes=max(s.get("duration_min") or 0, 1))
-        hit = any(a < en and st < b for a, b in multi_iv)
+        matching_row = row_by_sid.get(s.get("sid"))
+        if matching_row is None:
+            # No matching row (shouldn't normally happen — every rated
+            # session either has a real activity row or a synthesized one —
+            # kept as a defensive fallback): synthesize a start+duration row
+            # and reuse _row_windows so the 1-minute-minimum expansion for
+            # 0-minute sessions lives in exactly one place.
+            matching_row = {"start_time": s.get("start"),
+                            "duration_minutes": s.get("duration_min") or 0}
+        # Segment-aware probe: respects the row's real activity windows
+        # (idle gaps excluded). Meta-only synthesized rows have no segments,
+        # so _row_windows falls back to their own [start, start+max(dur,1)]
+        # span — same result as before for them.
+        probe_windows = _row_windows(matching_row)
+        # Overlap = any probe window intersects any multi-source interval.
+        hit = any(pw_start < iv_end and iv_start < pw_end
+                  for pw_start, pw_end in probe_windows
+                  for iv_start, iv_end in multi_iv)
         (multi if hit else single).append(s)
     if len(multi) < _BS_SWITCH_MIN_PER_BUCKET or len(single) < _BS_SWITCH_MIN_PER_BUCKET:
         return _bs_result("switch_tax", False,
@@ -2589,25 +2603,81 @@ def bs_habit_drift(rated):
 
 _BS_FAILED_BURN_MIN_SESSIONS = 5
 
+# Cheapest known input $/1M across PRICING — the unambiguous lower-bound
+# input rate shared by _leak_cost_usd (unknown-model fallback) and the
+# repeated-instructions leak item (no per-occurrence model attribution to
+# price against, see below).
+_CHEAPEST_INPUT_RATE = min(p["input"] for p in PRICING.values())
 
-def _dominant_input_rate(rated):
-    """Input $/1M of the most-used model across the rated pool.
 
-    Leaks are lower-bound accounting only (see compute_leaks docstring): an
-    unknown/legacy model prices at the CHEAPEST known input rate, not the
-    Opus fallback the cost panel uses (_FALLBACK_PRICING) — that fallback's
-    over-report policy belongs to the cost panel, not the leak ledger, whose
-    guarantee is that every dollar traces to tokens the evidence actually
-    shows without inflating the estimate."""
-    counts = {}
-    for s in rated:
-        for m, n in (s.get("model_counts") or {}).items():
-            counts[_normalize_model_id(m)] = counts.get(_normalize_model_id(m), 0) + n
-    if counts:
-        top = max(counts, key=counts.get)
-        if top in PRICING:
-            return PRICING[top]["input"]
-    return min(p["input"] for p in PRICING.values())
+def _leak_cost_usd(sessions):
+    """Lower-bound USD estimate for leak-ledger items (sunk_cost,
+    failed_session_burn). Same blended-by-assistant-message-share-across-
+    models shape as compute_api_equivalent_cost, but with the OPPOSITE
+    pricing policy: this function is a floor, that one is a ceiling.
+
+    compute_api_equivalent_cost (the cost panel) deliberately over-reports:
+    an unknown/missing model prices at Opus (_FALLBACK_PRICING), and
+    cache_creation tokens price at the 2x-input cache_write rate (the 1h
+    ephemeral-tier upper bound) — appropriate for a panel whose job is "this
+    is at most roughly what these sessions would cost." The leak ledger's
+    job is the opposite: every dollar it shows must be a floor the reader
+    can trust is not inflated. So here:
+      (a) unknown/missing models price at the CHEAPEST known rate per token
+          type (min over PRICING), not Opus;
+      (b) cache_creation tokens price at the model's base INPUT rate, not
+          cache_write — a cache write costs AT LEAST the base input rate,
+          so pricing it there is still a valid lower bound without assuming
+          which TTL tier (5m/1h) was actually used;
+      (c) cache_read tokens price at the model's own cache_read rate, same
+          as the cost panel — cache reads are cheap and well-defined
+          regardless of tier, no lower-bound ambiguity to resolve.
+    """
+    if not sessions:
+        return 0.0
+    cheapest_in = _CHEAPEST_INPUT_RATE
+    cheapest_out = min(p["output"] for p in PRICING.values())
+    cheapest_cr = min(p["cache_read"] for p in PRICING.values())
+
+    model_msgs = Counter()
+    for s in sessions:
+        for m, c in (s.get("model_counts") or {}).items():
+            model_msgs[_normalize_model_id(m)] += c
+    total_msgs = sum(model_msgs.values())
+    # No model info at all -> one synthetic unknown-model bucket, so
+    # blended() below has a single code path for "unknown model" and "no
+    # model info" instead of two (weights={} would otherwise need its own
+    # early-return branch).
+    weights = ({None: 1.0} if total_msgs == 0
+               else {m: c / total_msgs for m, c in model_msgs.items()})
+
+    def blended(token_type, cheapest):
+        total = 0.0
+        for m, w in weights.items():
+            p = PRICING.get(m)
+            total += w * (p[token_type] if p else cheapest)
+        return total
+
+    in_rate = blended("input", cheapest_in)
+    out_rate = blended("output", cheapest_out)
+    # cache_creation prices at each model's base INPUT rate (lower bound),
+    # falling back to the cheapest known INPUT rate for unknown models —
+    # same blend as in_rate above, reused rather than recomputed.
+    cw_rate = in_rate
+    cr_rate = blended("cache_read", cheapest_cr)
+
+    total_in = sum(s.get("input_tokens", 0) or 0 for s in sessions)
+    total_out = sum(s.get("output_tokens", 0) or 0 for s in sessions)
+    total_cw = sum(s.get("cache_create_tokens", 0) or 0 for s in sessions)
+    total_cr = sum(s.get("cache_read_tokens", 0) or 0 for s in sessions)
+
+    return round(
+        (total_in / 1e6) * in_rate +
+        (total_out / 1e6) * out_rate +
+        (total_cw / 1e6) * cw_rate +
+        (total_cr / 1e6) * cr_rate,
+        2,
+    )
 
 
 def compute_leaks(blind_spots, rated, window):
@@ -2667,7 +2737,7 @@ def compute_leaks(blind_spots, rated, window):
         sources = sorted({src for p in pats for src in (p.get("sources") or [])})
         items.append({"type": "repeated_instructions",
                       "weekly_cost_usd": round(
-                          claude_tokens_week / 1e6 * _dominant_input_rate(rated), 2),
+                          claude_tokens_week / 1e6 * _CHEAPEST_INPUT_RATE, 2),
                       "weekly_tokens": tokens_week,
                       "occurrences": sum(p["occurrences"] for p in pats),
                       "evidence": pats[0]["evidence"],
@@ -2688,7 +2758,7 @@ def compute_leaks(blind_spots, rated, window):
         if failed:
             items.append({"type": "sunk_cost",
                           "weekly_cost_usd": round(
-                              compute_api_equivalent_cost(failed) / weeks, 2),
+                              _leak_cost_usd(failed) / weeks, 2),
                           "weekly_tokens": int(sum(s.get("total_tokens") or 0
                                                    for s in failed) / weeks),
                           "occurrences": len(failed),
@@ -2699,7 +2769,7 @@ def compute_leaks(blind_spots, rated, window):
     if len(burn) >= _BS_FAILED_BURN_MIN_SESSIONS:
         items.append({"type": "failed_session_burn",
                       "weekly_cost_usd": round(
-                          compute_api_equivalent_cost(burn) / weeks, 2),
+                          _leak_cost_usd(burn) / weeks, 2),
                       "weekly_tokens": int(sum(s.get("total_tokens") or 0
                                                for s in burn) / weeks),
                       "occurrences": len(burn),

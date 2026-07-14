@@ -4,7 +4,7 @@ from pathlib import Path
 
 from scripts.aggregate import (
     bs_repeated_instructions, bs_sunk_cost, counterexample_similar,
-    normalize_prompt, prompt_similarity, week_key,
+    normalize_prompt, prompt_identity, prompt_similarity, week_key,
     bs_switch_tax, bs_interrupt_win_rate)
 
 
@@ -92,11 +92,13 @@ BASE = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
 INSTR = "Always reply in zh-TW and run the full pytest suite before you claim done"
 
 
-def _prompt_row(sid, start, prompt, source=None, coverage=None):
+def _prompt_row(sid, start, prompt, source=None, coverage=None, prompt_hash=None):
     row = {"session_id": sid, "start_time": start.isoformat(),
            "first_prompt": prompt}
     if source:
         row["source"], row["coverage"] = source, coverage
+    if prompt_hash is not None:
+        row["first_prompt_hash"] = prompt_hash
     return row
 
 
@@ -220,6 +222,58 @@ class RepeatedInstructionTests(unittest.TestCase):
             rows, [], window_start=window_start, window_end=window_end)
         self.assertTrue(out["gate_passed"])
         self.assertEqual(out["metrics"]["patterns"][0]["occurrences"], 7)
+
+    def test_shared_500_char_prefix_hash_rows_do_not_merge(self):
+        # Fix 3: two codex rows whose (truncated-to-500-char) first_prompt
+        # text shares a prefix but whose first_prompt_hash values were
+        # computed on genuinely different full prompts must NOT merge into
+        # one pattern, even though their displayed text looks identical
+        # up to 500 chars.
+        shared_prefix = "always run the full pytest suite before claiming done " * 10
+        self.assertGreater(len(shared_prefix), 500)
+        full_a = shared_prefix + "then update the changelog"
+        full_b = shared_prefix + "then update the readme instead"
+        hash_a, hash_b = prompt_identity(full_a), prompt_identity(full_b)
+        self.assertNotEqual(hash_a, hash_b)
+        display = shared_prefix[:500]  # what a real adapter would truncate to
+        rows_a = [_prompt_row(f"a{i}", BASE + timedelta(weeks=i % 3, days=i),
+                              display, source="codex", coverage="full",
+                              prompt_hash=hash_a) for i in range(5)]
+        rows_b = [_prompt_row(f"b{i}", BASE + timedelta(weeks=i % 3, days=i),
+                              display, source="codex", coverage="full",
+                              prompt_hash=hash_b) for i in range(5)]
+        out = bs_repeated_instructions(rows_a + rows_b, [])
+        self.assertTrue(out["gate_passed"])
+        occs = [p["occurrences"] for p in out["metrics"]["patterns"]]
+        # Two distinct patterns of 5 each, never one merged pattern of 10.
+        self.assertEqual(sorted(occs, reverse=True)[:2], [5, 5])
+
+    def test_identical_long_prompt_claude_and_codex_merge_via_hash(self):
+        # Fix 3: an identical 600-char prompt sent once through Claude
+        # (untruncated first_prompt) and via codex (truncated to 500 chars
+        # for display) must still merge into one pattern because both rows
+        # carry the same first_prompt_hash computed on the full text.
+        long_prompt = "please refactor the ingestion retry pipeline cleanly " * 12
+        self.assertGreater(len(long_prompt), 500)
+        h = prompt_identity(long_prompt)
+        claude_rows = [_prompt_row(f"c{i}", BASE + timedelta(weeks=i % 3, days=i),
+                                   long_prompt, prompt_hash=h) for i in range(3)]
+        codex_rows = [_prompt_row(f"x{i}", BASE + timedelta(weeks=i, hours=2),
+                                  long_prompt[:500], source="codex",
+                                  coverage="full", prompt_hash=h) for i in range(2)]
+        out = bs_repeated_instructions(claude_rows, codex_rows)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["patterns"][0]["occurrences"], 5)
+
+    def test_legacy_rows_without_hash_still_group_by_normalized_text(self):
+        # Rows predating Fix 3 carry no first_prompt_hash at all — must fall
+        # back to normalize_prompt(first_prompt) grouping, unchanged.
+        rows = [_prompt_row(f"c{i}", BASE + timedelta(weeks=i % 3, days=i), INSTR)
+                for i in range(5)]
+        self.assertNotIn("first_prompt_hash", rows[0])
+        out = bs_repeated_instructions(rows, [])
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["patterns"][0]["occurrences"], 5)
 
 
 FAIL_PROMPT = "refactor the payment reconciliation pipeline to stream batches"
@@ -432,6 +486,93 @@ class SwitchTaxTests(unittest.TestCase):
             act.append(_act_row(f"pre{i}", t))
         out = bs_switch_tax(rated, act, cross)
         self.assertFalse(out["gate_passed"])
+
+    def _segment_probe_fixture(self, gap_codex_offset):
+        """m1..m20 straightforward multi-tool mornings + m0-anchor (an extra
+        multi-tool pair used only to pin the common window, see below) + m0
+        (whose activity row carries two real segments split by a 10-day
+        idle gap) + 20 single-tool sessions. m0's own codex partner (x0) is
+        placed at `gap_codex_offset` from m0's segment-1 end, so the caller
+        controls whether x0 lands inside the idle gap or on the real second
+        segment. The m0-anchor pair means removing m0 from the multi bucket
+        (Case A) still leaves multi at the 21-session baseline, clearing the
+        20-session floor either way.
+
+        A separate codex row (x0-anchor), paired with its OWN claude activity
+        row (m0-anchor, a plain unsegmented session on day 0 that is not
+        m0), pins codex's earliest presence to day 0 without touching m0's
+        own probe windows — otherwise, when x0 itself is pushed days out
+        (Case A), codex's earliest occurrence would shift later and exclude
+        m0's whole day-0 session from the common window, making the test
+        assert nothing about segment-awareness."""
+        rated, act, cross = [], [], []
+        seg1_start = BASE
+        seg1_end = seg1_start + timedelta(minutes=60)
+        # seg2 lands on day 10.5 (not an integer day offset) so its window
+        # never coincides with the day-indexed m1..m20 multi-source hours
+        # (each at HH:10-11:00 on its own integer day) or their single-tool
+        # siblings — isolating the assertions to m0's own segment/gap logic.
+        seg2_start = seg1_start + timedelta(days=10, hours=12)
+        seg2_end = seg2_start + timedelta(minutes=60)
+        rated.append(_rated("m0", seg1_start, "not_achieved",
+                            friction={"buggy_code": 1}))
+        act.append({
+            "session_id": "m0", "project_path": "/p",
+            "start_time": seg1_start.isoformat(),
+            # Full-span duration a naive [start, start+duration] probe would
+            # use — 10+ days — deliberately much larger than either real
+            # segment, so a bug that ignores segments would make an
+            # idle-gap codex row wrongly overlap.
+            "duration_minutes": int((seg2_end - seg1_start).total_seconds() / 60),
+            "segments": [
+                [seg1_start.isoformat(), seg1_end.isoformat()],
+                [seg2_start.isoformat(), seg2_end.isoformat()],
+            ],
+        })
+        # m0-anchor / x0-anchor: an UNRELATED multi-tool pair on day 0 that
+        # exists solely to pin codex's earliest date to day 0. Counted as
+        # rated (contributes to the multi bucket, distinct from m1..m20).
+        anchor_t = seg1_start + timedelta(hours=3)  # different hour, no overlap risk with m0
+        rated.append(_rated("m0-anchor", anchor_t, "fully_achieved"))
+        act.append(_act_row("m0-anchor", anchor_t))
+        cross.append(_codex_act("x0-anchor", anchor_t + timedelta(minutes=10)))
+        cross.append(_codex_act("x0", seg1_end + gap_codex_offset))
+        for i in range(1, 21):  # 20 more straightforward multi-tool mornings
+            t = BASE + timedelta(days=i)
+            rated.append(_rated(f"m{i}", t, "not_achieved" if i % 2 else
+                                "fully_achieved", friction={"buggy_code": 1}))
+            act.append(_act_row(f"m{i}", t))
+            cross.append(_codex_act(f"x{i}", t + timedelta(minutes=10)))
+        for i in range(20):  # single-tool, same local day as its m_i sibling
+            t = BASE + timedelta(days=i, hours=2)
+            rated.append(_rated(f"s{i}", t, "fully_achieved"))
+            act.append(_act_row(f"s{i}", t))
+        return rated, act, cross
+
+    def test_segment_aware_probe_gap_lands_single_bucket(self):
+        # Fix 1: codex row strictly inside m0's idle gap (between its two
+        # real segments) must NOT overlap m0's segment-aware probe windows
+        # — m0 lands single-tool despite a naive full-span probe wrongly
+        # overlapping it (the 10+ day duration_minutes spans the gap).
+        rated, act, cross = self._segment_probe_fixture(timedelta(days=5))
+        out = bs_switch_tax(rated, act, cross)
+        self.assertTrue(out["gate_passed"])
+        # Baseline multi bucket = m0-anchor + m1..m20 = 21; m0 excluded.
+        self.assertEqual(out["metrics"]["multi"]["n"], 21)
+        self.assertEqual(out["metrics"]["single"]["n"], 21)  # m0 joins single
+
+    def test_segment_aware_probe_overlap_lands_multi_bucket(self):
+        # Codex row starting 10 minutes into m0's real second segment
+        # ([seg1_end + 10d11h10min] = [seg2_start + 10min], not the idle
+        # gap) so it genuinely overlaps that segment's [start, start+60min]
+        # window — m0 lands multi-tool.
+        rated, act, cross = self._segment_probe_fixture(
+            timedelta(days=10, hours=11, minutes=10))
+        out = bs_switch_tax(rated, act, cross)
+        self.assertTrue(out["gate_passed"])
+        # Baseline 21 + m0 included = 22.
+        self.assertEqual(out["metrics"]["multi"]["n"], 22)
+        self.assertEqual(out["metrics"]["single"]["n"], 20)
 
 
 class InterruptWinRateTests(unittest.TestCase):
