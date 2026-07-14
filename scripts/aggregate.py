@@ -11,6 +11,11 @@ from collections import Counter, defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
+try:
+    from cross_llm_common import parse_jsonl_object
+except ImportError:  # pragma: no cover - exercised when imported as scripts.aggregate
+    from scripts.cross_llm_common import parse_jsonl_object
+
 DEFAULT_DATA_DIR = Path.home() / ".claude/usage-data"
 META_DIR = DEFAULT_DATA_DIR / "session-meta"
 FACETS_DIR = DEFAULT_DATA_DIR / "facets"
@@ -315,6 +320,11 @@ def load_cross_llm_rows(paths):
 
     Returns (rows, parse_errors_by_source). Bad lines are skipped and
     counted under the source guessed from the row, else "(unknown)".
+    A trailing ``{"_meta": true, "source": ..., "parse_errors": N}`` line
+    (see docs/SCHEMA-CHANGES.md) is consumed into the same errors dict
+    instead of being treated as a session row — it's how the scanner's own
+    skip-count (only visible on stderr otherwise) reaches
+    cross_llm.sources[].parse_errors.
     These rows NEVER enter scoring_metas/activity_metas — the 9-dim
     rubric and the existing panels stay Claude-only by design (spec §6).
     """
@@ -328,10 +338,13 @@ def load_cross_llm_rows(paths):
                 line = line.strip()
                 if not line:
                     continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
+                row = parse_jsonl_object(line)
+                if row is None:
                     errors["(unknown)"] = errors.get("(unknown)", 0) + 1
+                    continue
+                if row.get("_meta"):
+                    src = row.get("source") or "(unknown)"
+                    errors[src] = errors.get(src, 0) + int(row.get("parse_errors") or 0)
                     continue
                 if not row.get("source") or not row.get("start_time"):
                     src = row.get("source") or "(unknown)"
@@ -1495,7 +1508,13 @@ def compute_aggregates(sessions, rated, facets_coverage):
 
 
 def _row_windows(row):
-    """Activity windows for a row: explicit segments, else start+duration."""
+    """Activity windows for a row: explicit segments, else start+duration.
+
+    Zero-length windows (a single-event session's [t, t] segment, or a
+    duration_minutes of 0) are expanded to a minimum of 1 minute — otherwise
+    they contribute 0 minutes to weekly_share and no presence to the
+    parallel-overlap sweep, silently vanishing from both.
+    """
     segs = row.get("segments")
     out = []
     if segs:
@@ -1505,6 +1524,8 @@ def _row_windows(row):
             except (TypeError, IndexError):
                 continue
             if s and e and e >= s:
+                if e == s:
+                    e = s + timedelta(minutes=1)
                 out.append((s, e))
         if out:
             return out
@@ -1556,6 +1577,76 @@ def _project_key(path_str):
     return Path(path_str).name if path_str else "(unknown)"
 
 
+def _merge_intervals(intervals):
+    """Merge a list of (start, end) datetime tuples into a sorted list of
+    non-overlapping (start, end) tuples (touching/overlapping intervals
+    from the SAME source are unioned so that source is counted once)."""
+    if not intervals:
+        return []
+    ordered = sorted(intervals, key=lambda p: p[0])
+    merged = [list(ordered[0])]
+    for s, e in ordered[1:]:
+        if s <= merged[-1][1]:
+            if e > merged[-1][1]:
+                merged[-1][1] = e
+        else:
+            merged.append([s, e])
+    return [(s, e) for s, e in merged]
+
+
+def _sweep_concurrent_intervals(rows, windows):
+    """True-overlap sweep line across sources.
+
+    Per source: merge that source's own activity windows into a union of
+    non-overlapping intervals (so a source's own back-to-back/overlapping
+    sessions are never double counted). Then sweep +1 at each merged
+    interval's start and -1 at its end across ALL sources, producing the
+    piecewise-constant "number of distinct sources active" function.
+
+    Returns (concurrent_intervals, source_count_by_instant_change) where
+    concurrent_intervals is a list of (start, end, n_sources) covering
+    every maximal sub-interval with a constant concurrency count > 0.
+    """
+    by_source = defaultdict(list)
+    for r in rows:
+        for s, e in windows.get(id(r), []):
+            by_source[r["source"]].append((s, e))
+
+    events = []  # (time, delta) — delta is +1 at interval start, -1 at end
+    for src, ivals in by_source.items():
+        for s, e in _merge_intervals(ivals):
+            if e <= s:
+                continue
+            events.append((s, 1))
+            events.append((e, -1))
+
+    if not events:
+        return []
+
+    events.sort(key=lambda ev: (ev[0], -ev[1]))  # starts (+1) before ends (-1) at same instant
+    result = []
+    count = 0
+    prev_t = None
+    for t, delta in events:
+        if prev_t is not None and t > prev_t and count > 0:
+            result.append((prev_t, t, count))
+        count += delta
+        prev_t = t
+    return result
+
+
+def _bucket_concurrent_intervals_by_hour(concurrent_intervals):
+    """Bucket concurrency>=1 sub-intervals into (date, hour) -> max concurrency
+    touching that bucket, splitting at local midnight boundaries."""
+    hour_max = {}  # (date, hour) -> max concurrency seen in that bucket
+    for s, e, n in concurrent_intervals:
+        for day, ss, ee in _split_at_midnight(s, e):
+            for h in _hours_touched(day, ss, ee):
+                key = (day, h)
+                hour_max[key] = max(hour_max.get(key, 0), n)
+    return hour_max
+
+
 def compute_cross_llm(claude_rows, cross_rows):
     """Build the cross_llm block. claude_rows = activity-pool row dicts.
 
@@ -1580,9 +1671,20 @@ def compute_cross_llm(claude_rows, cross_rows):
     windows = {id(r): _row_windows(r) for r in comparable}
 
     # --- source cards ---
+    # Every source in the known set gets a card, even when never detected —
+    # spec: absent sources render "not detected" rather than being omitted.
+    _KNOWN_SOURCES = ("claude", "codex", "grok", "antigravity")
     sources = []
-    for src in sorted(rows_by_source):
-        rs = rows_by_source[src]
+    for src in sorted(set(_KNOWN_SOURCES) | set(rows_by_source)):
+        rs = rows_by_source.get(src)
+        if not rs:
+            sources.append({
+                "source": src, "coverage": None, "session_count": 0,
+                "first_date": None, "last_date": None,
+                "total_input_tokens": None, "total_output_tokens": None,
+                "parse_errors": 0, "detected": False,
+            })
+            continue
         dates = sorted(d for d in (start_dt[id(r)] for r in rs) if d)
 
         def _tok(key, _rs=rs):
@@ -1598,6 +1700,7 @@ def compute_cross_llm(claude_rows, cross_rows):
             "total_input_tokens": _tok("input_tokens"),
             "total_output_tokens": _tok("output_tokens"),
             "parse_errors": 0,
+            "detected": True,
         })
 
     # --- common window across comparable sources ---
@@ -1616,33 +1719,69 @@ def compute_cross_llm(claude_rows, cross_rows):
                          "days": days, "degraded": days < 14}
 
     # --- weekly share (active minutes per ISO week per source) ---
+    # When a common_window exists, the renderer's note tells the reader the
+    # cross-tool comparison is scoped to that window — so windows are
+    # clipped to [window start, window end] (dates inclusive) before
+    # aggregation; activity fully outside the window contributes nothing.
+    # Without a common_window (or when degraded — the renderer hides the
+    # chart anyway), keep the unclipped behavior.
+    clip_start = clip_end = None
+    if common_window is not None:
+        clip_start = datetime.combine(
+            date.fromisoformat(common_window["start"]), time.min, tzinfo=timezone.utc)
+        clip_end = datetime.combine(
+            date.fromisoformat(common_window["end"]) + timedelta(days=1), time.min,
+            tzinfo=timezone.utc)
+
     weekly = {}
     for r in comparable:
         for s, e in windows[id(r)]:
+            if clip_start is not None:
+                cs, ce = max(s, clip_start), min(e, clip_end)
+                if ce <= cs:
+                    continue  # window falls fully outside the common window
+                s, e = cs, ce
             wk = f"{s.isocalendar()[0]}-W{s.isocalendar()[1]:02d}"
             weekly.setdefault(wk, {}).setdefault(r["source"], 0)
             weekly[wk][r["source"]] += round((e - s).total_seconds() / 60)
     weekly_share = [{"week": wk, "minutes": mins}
                     for wk, mins in sorted(weekly.items())]
 
-    # --- parallel detection (hour buckets, midnight-split) ---
-    hour_sources = {}   # (date, hour) -> set(sources)
+    # --- parallel detection: true interval overlap via sweep line ---
+    # Per source, merge that source's own activity windows first (so a
+    # source's own overlapping/adjacent sessions count as one presence);
+    # then sweep across sources to find sub-intervals where >=2 distinct
+    # sources are simultaneously active. Only THOSE sub-intervals are
+    # bucketed into the hour heatmap — two sessions that merely touch the
+    # same hour without ever running concurrently no longer count.
+    concurrent_intervals = _sweep_concurrent_intervals(comparable, windows)
+    concurrency_hour_max = _bucket_concurrent_intervals_by_hour(concurrent_intervals)
+
+    # Hours touched by >=1 source at all (regardless of concurrency) — one
+    # pass, used both to derive hours_single_source = touched - multi AND
+    # to floor daily_max at 1 for days that never reach concurrency>=2.
+    touched_hours = set()
     for r in comparable:
         for s, e in windows[id(r)]:
             for day, ss, ee in _split_at_midnight(s, e):
                 for h in _hours_touched(day, ss, ee):
-                    hour_sources.setdefault((day, h), set()).add(r["source"])
+                    touched_hours.add((day, h))
+
     heatmap = [[0] * 24 for _ in range(7)]
-    daily = {}
-    multi = single = 0
-    for (day, h), srcs in hour_sources.items():
-        n = len(srcs)
-        daily[day] = max(daily.get(day, 0), n)
+    daily = defaultdict(int)  # date -> max concurrent sources that day
+    multi = 0
+    for (day, h), n in concurrency_hour_max.items():
+        daily[day] = max(daily[day], n)
         if n >= 2:
             heatmap[day.weekday()][h] += 1
             multi += 1
-        else:
-            single += 1
+    # Days with only single-source activity (no concurrency>=2 sub-interval
+    # touched that day) still need a daily_max entry — max_parallel 1.
+    # Derived from touched_hours (already computed above) rather than a
+    # fresh walk over comparable/windows.
+    for day, _h in touched_hours:
+        daily[day] = max(daily[day], 1)
+    single = len(touched_hours) - multi
     parallel = {
         "heatmap": heatmap,
         "daily_max": [{"date": d.isoformat(), "max_parallel": m}
@@ -1684,13 +1823,24 @@ def compute_cross_llm(claude_rows, cross_rows):
                     inside.append((r, d))
             if not inside:
                 return None
-            durs = sorted(r.get("duration_minutes") or 0 for r, _ in inside)
-            toks = [(r.get("input_tokens") or 0) + (r.get("output_tokens") or 0)
-                    for r, _ in inside]
+            durs = [r.get("duration_minutes") or 0 for r, _ in inside]
+            # total_tokens: sum only rows that carry at least one token
+            # field, so a row missing both input/output doesn't silently
+            # count as 0 and drag the total down. If NO row in the window
+            # has token data at all, emit None rather than a misleading 0.
+            tok_rows = [
+                (r.get("input_tokens"), r.get("output_tokens"))
+                for r, _ in inside
+                if r.get("input_tokens") is not None or r.get("output_tokens") is not None
+            ]
+            total_tokens = (
+                sum((i or 0) + (o or 0) for i, o in tok_rows)
+                if tok_rows else None
+            )
             return {"sessions": len(inside),
                     "active_days": len({d.date() for _, d in inside}),
-                    "total_tokens": sum(toks),
-                    "median_duration_minutes": durs[len(durs) // 2]}
+                    "total_tokens": total_tokens,
+                    "median_duration_minutes": round(statistics.median(durs))}
 
         claude_side, codex_side = _side("claude"), _side("codex")
         if claude_side and codex_side:

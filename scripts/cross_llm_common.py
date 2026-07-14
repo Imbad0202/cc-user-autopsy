@@ -24,6 +24,20 @@ def parse_ts(s) -> Optional[datetime]:
         return None
 
 
+def parse_jsonl_object(line: str) -> Optional[dict]:
+    """Parse one JSONL line, returning the dict or None if the line is
+    malformed JSON OR syntactically valid JSON that isn't an object (a bare
+    number/string/array). Shared by scan_codex.py, scan_grok.py, and
+    aggregate.load_cross_llm_rows so "is this line a usable record" is
+    defined in exactly one place instead of three matching isinstance
+    checks."""
+    try:
+        rec = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
 def to_local_iso(dt: datetime) -> str:
     return dt.astimezone().isoformat()
 
