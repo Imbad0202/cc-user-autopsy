@@ -78,7 +78,8 @@ def append_history_snapshot(history_path, analysis, audience):
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except OSError as exc:
+    except Exception as exc:
+        # spec: append failure warns, never fails the build
         print(f"warning: could not append history snapshot: {exc}",
               file=sys.stderr)
 

@@ -45,6 +45,15 @@ class SnapshotTests(unittest.TestCase):
             bad = Path(td)  # is a dir, not a file
             append_history_snapshot(bad, ANALYSIS, "self")  # must not raise
 
+    def test_malformed_analysis_shapes_do_not_raise(self):
+        # scores/output as non-dict truthy values (e.g. from a malformed or
+        # foreign analysis-data.json) must warn, not crash the build.
+        malformed = {"scores": ["not", "a", "dict"],
+                     "ledger": {"output": "nope"}}
+        with tempfile.TemporaryDirectory() as td:
+            hist = Path(td) / "autopsy-history.jsonl"
+            append_history_snapshot(hist, malformed, "self")  # must not raise
+
 
 if __name__ == "__main__":
     unittest.main()
