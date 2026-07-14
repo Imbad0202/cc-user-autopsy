@@ -9,6 +9,9 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+OUT_DIR = Path("/tmp/cc-autopsy-demo")
 
 
 def _regen_demo():
@@ -92,6 +95,36 @@ class DemoLabelStressTests(unittest.TestCase):
         self.assertGreaterEqual(longest, 22,
                                 f"longest project name only {longest} chars; "
                                 "add a long-named project to stress chart labels")
+
+
+class CrossLlmDemoDataTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        _regen_demo()
+
+    def test_codex_demo_tree(self):
+        files = list((OUT_DIR / "codex-sessions").glob("*/*/*/rollout-*.jsonl"))
+        self.assertGreaterEqual(len(files), 30)
+        # at least one file must span multiple days (resumed session)
+        from scripts.scan_codex import scan_one
+        multi = 0
+        for f in files:
+            row, errors = scan_one(f)
+            self.assertIsNotNone(row, f)
+            self.assertEqual(errors, 0, f)
+            if row["segments"] and len(row["segments"]) > 1:
+                multi += 1
+        self.assertGreaterEqual(multi, 1)
+
+    def test_grok_demo_tree_contains_xss_marker(self):
+        hists = list((OUT_DIR / "grok-sessions").glob("*/prompt_history.jsonl"))
+        self.assertGreaterEqual(len(hists), 2)
+        blob = "".join(h.read_text() for h in hists)
+        self.assertIn("GROK_PRIVATE_MARKER", blob)
+
+    def test_antigravity_demo_files(self):
+        pbs = list((OUT_DIR / "antigravity-conversations").glob("*.pb"))
+        self.assertGreaterEqual(len(pbs), 5)
 
 
 if __name__ == "__main__":

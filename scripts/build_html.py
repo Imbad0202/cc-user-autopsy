@@ -8,6 +8,7 @@ This file is the CLI entry point.  All rendering logic lives in report_render.py
 import argparse
 import json
 import sys
+from datetime import date
 from pathlib import Path
 
 from locales import STRINGS
@@ -41,6 +42,46 @@ from report_render import (  # noqa: F401  (re-exported for test compatibility)
     SAFE_URL_SCHEMES_WITH_MAILTO,
     weekday_labels,
 )
+
+
+DEFAULT_HISTORY_FILE = Path.home() / ".claude" / "usage-data" / "autopsy-history.jsonl"
+
+
+def append_history_snapshot(history_path, analysis, audience):
+    """Append a one-line trend snapshot after a successful SELF build.
+
+    The trend ledger (Phase 3) reads this file; it ships day one so
+    history starts accumulating immediately. Never fails the build.
+    """
+    if audience != "self":
+        return
+    try:
+        scores = {}
+        for key, val in (analysis.get("scores") or {}).items():
+            if isinstance(val, dict) and "score" in val:
+                scores[key] = val["score"]
+            elif isinstance(val, (int, float)):
+                scores[key] = val
+        ledger = analysis.get("ledger") or {}
+        entry = {
+            "date": date.today().isoformat(),
+            "schema_version": 1,
+            "scores": scores,
+            "badges": [],
+            "ledger": {
+                "git_commits": (ledger.get("output") or {}).get("git_commits"),
+                "sessions": (analysis.get("meta") or {}).get("total_sessions"),
+                "sources_detected": ledger.get("sources_detected") or [],
+            },
+        }
+        path = Path(history_path).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        # spec: append failure warns, never fails the build
+        print(f"warning: could not append history snapshot: {exc}",
+              file=sys.stderr)
 
 
 def _load_narrative(locale: str):
@@ -83,6 +124,9 @@ def main():
     ap.add_argument("--case-study", default=None,
                     help="Optional markdown file with the strongest-single-session "
                     "case study block. Rendered for both audiences.")
+    ap.add_argument("--ledger-narration", default=None,
+                    help="Markdown with # opening / # output-ledger / # team-ledger "
+                    "books (SELF only; written by the skill in Step 3).")
     ap.add_argument("--output", required=True)
     ap.add_argument("--audience", choices=["self", "hr"], default="self",
                     help="'self' for the diagnostic letter (default); 'hr' re-orders sections "
@@ -107,6 +151,11 @@ def main():
              "zh_TW = Traditional Chinese (peer-review prose must be rewritten "
              "natively, see SKILL.md Step 4.5).",
     )
+    ap.add_argument(
+        "--history-file", default=str(DEFAULT_HISTORY_FILE),
+        help="Trend-snapshot jsonl appended after each successful self build. "
+             "Corrupt lines are tolerated on read (Phase 3).",
+    )
     args = ap.parse_args()
 
     data = json.loads(Path(args.input).expanduser().read_text())
@@ -129,6 +178,12 @@ def main():
         if p.exists():
             case_study_md = p.read_text()
 
+    ledger_narration_md = ""
+    if args.ledger_narration:
+        p = Path(args.ledger_narration).expanduser()
+        if p.exists():
+            ledger_narration_md = p.read_text()
+
     artifacts_list = load_json_or_warn(args.artifacts, "artifacts", [])
     profile_info = load_json_or_warn(args.profile, "profile", {})
     allowlist = load_json_or_warn(args.public_projects, "public-projects", {})
@@ -150,12 +205,15 @@ def main():
         category_map=category_map,
         try_this_md=try_this_md,
         case_study_md=case_study_md,
+        ledger_narration_md=ledger_narration_md,
     )
 
     out = Path(args.output).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html_out)
     print(f"wrote {out} ({out.stat().st_size} bytes)", file=sys.stderr)
+
+    append_history_snapshot(Path(args.history_file), data, args.audience)
 
 
 if __name__ == "__main__":

@@ -8,8 +8,13 @@ import json
 import statistics
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+
+try:
+    from cross_llm_common import parse_jsonl_object
+except ImportError:  # pragma: no cover - exercised when imported as scripts.aggregate
+    from scripts.cross_llm_common import parse_jsonl_object
 
 DEFAULT_DATA_DIR = Path.home() / ".claude/usage-data"
 META_DIR = DEFAULT_DATA_DIR / "session-meta"
@@ -107,6 +112,46 @@ def compute_api_equivalent_cost(sessions):
 
 def parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def _parse_dt(s):
+    """Null-safe ISO parse. Reuses parse_iso; returns None on any bad input
+    instead of raising, since cross-LLM adapter rows may carry missing or
+    malformed timestamps (unknown is never imputed, per spec).
+
+    Always returns an aware datetime (assumes UTC for naive input), THEN
+    converts to the system's local zone via astimezone(). Cross-LLM rows
+    come from adapters that may or may not include a UTC offset in
+    start_time — Claude rows are always UTC ('Z'), adapter rows carry a
+    local offset. Mixing naive and aware datetimes in the same max()/min()/
+    comparison call raises TypeError and would abort the whole aggregate
+    run, so aware-normalization alone is required. But comparison/ordering
+    across aware datetimes with DIFFERENT offsets is correct in Python —
+    the real problem is every downstream .date()/.hour/calendar-bucketing
+    call (_split_at_midnight, _hours_touched, ISO week labels, common_window
+    dates) reads the calendar day/hour in whatever offset a value happens to
+    carry, so two truly-overlapping rows from different sources can land in
+    different calendar-day/hour buckets and silently miss each other. Every
+    value leaving this helper is therefore also normalized to ONE consistent
+    zone (system local — matches what the adapters emit) so all
+    calendar-bucketing downstream compares apples to apples.
+
+    Note: this is OS-local, not the pipeline's configurable --tz (see
+    detect_tz()/main()) — _parse_dt is a free function called from many
+    sites inside compute_cross_llm without a tz parameter threaded through.
+    In the default ("auto") case both resolve to the same zone; a mismatch
+    is only possible if a user explicitly overrides --tz to a different
+    zone than their OS. Acceptable for this fix's scope; revisit if
+    --tz-aware cross-LLM bucketing is ever needed."""
+    if not s:
+        return None
+    try:
+        dt = parse_iso(s)
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone()
 
 
 def normalize_project_path(path: str) -> str:
@@ -287,6 +332,45 @@ def load_transcript_rows(path: Path):
             continue
         metas[sid] = r
     return metas, facets
+
+
+def load_cross_llm_rows(paths):
+    """Load adapter-emitted rows (scan_codex/grok/antigravity output).
+
+    Returns (rows, parse_errors_by_source). Bad lines are skipped and
+    counted under the source guessed from the row, else "(unknown)".
+    A trailing ``{"_meta": true, "source": ..., "parse_errors": N}`` line
+    (see docs/SCHEMA-CHANGES.md) is consumed into the same errors dict
+    instead of being treated as a session row — it's how the scanner's own
+    skip-count (only visible on stderr otherwise) reaches
+    cross_llm.sources[].parse_errors.
+    These rows NEVER enter scoring_metas/activity_metas — the 9-dim
+    rubric and the existing panels stay Claude-only by design (spec §6).
+    """
+    rows, errors = [], {}
+    for p in paths:
+        path = Path(p).expanduser()
+        if not path.is_file():
+            continue
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                row = parse_jsonl_object(line)
+                if row is None:
+                    errors["(unknown)"] = errors.get("(unknown)", 0) + 1
+                    continue
+                if row.get("_meta"):
+                    src = row.get("source") or "(unknown)"
+                    errors[src] = errors.get(src, 0) + int(row.get("parse_errors") or 0)
+                    continue
+                if not row.get("source") or not row.get("start_time"):
+                    src = row.get("source") or "(unknown)"
+                    errors[src] = errors.get(src, 0) + 1
+                    continue
+                rows.append(row)
+    return rows, errors
 
 
 def load_redacted(path: Path):
@@ -1442,6 +1526,483 @@ def compute_aggregates(sessions, rated, facets_coverage):
     return result
 
 
+def _row_windows(row):
+    """Activity windows for a row: explicit segments, else start+duration.
+
+    Zero-length windows (a single-event session's [t, t] segment, or a
+    duration_minutes of 0) are expanded to a minimum of 1 minute — otherwise
+    they contribute 0 minutes to weekly_share and no presence to the
+    parallel-overlap sweep, silently vanishing from both.
+    """
+    segs = row.get("segments")
+    out = []
+    if segs:
+        for pair in segs:
+            try:
+                s, e = _parse_dt(pair[0]), _parse_dt(pair[1])
+            except (TypeError, IndexError):
+                continue
+            if s and e and e >= s:
+                if e == s:
+                    e = s + timedelta(minutes=1)
+                out.append((s, e))
+        if out:
+            return out
+    s = _parse_dt(row.get("start_time") or "")
+    if not s:
+        return []
+    dur = row.get("duration_minutes") or 0
+    return [(s, s + timedelta(minutes=max(dur, 1)))]
+
+
+def _split_at_midnight(start, end):
+    """Yield (day_date, seg_start, seg_end) pieces, split at local midnights."""
+    cur = start
+    while cur.date() < end.date():
+        boundary = datetime.combine(
+            cur.date() + timedelta(days=1), time.min, tzinfo=cur.tzinfo)
+        yield cur.date(), cur, boundary
+        cur = boundary
+    if cur < end or cur == start:
+        # Skip the zero-length terminal piece a window ending exactly at
+        # local midnight would otherwise produce (23:00-00:00 must count
+        # one active day, not two) — but still yield instantaneous
+        # single-point windows (cur == start) so they aren't dropped.
+        yield cur.date(), cur, end
+
+
+def _hours_touched(day, ss, ee):
+    """Hour-of-day buckets (0-23) touched by the half-open interval
+    [ss, ee) within a single calendar `day`. Uses minutes-since-midnight
+    rather than raw .hour comparisons: a naive `range(ss.hour, ee.hour+1)`
+    approach either double-counts sessions that end exactly on an hour
+    boundary, or (worse) counts a phantom extra hour past the window end
+    for any same-hour or minute-carrying end time. `ee` may legitimately
+    fall on the next calendar day's midnight (the exclusive end produced
+    by `_split_at_midnight`'s last piece of a day) — that is treated as
+    minute 1440 of `day`, giving hour 23 rather than an empty range.
+    """
+    def _minute_of_day(dt):
+        if dt.date() > day:
+            return 24 * 60
+        return dt.hour * 60 + dt.minute + dt.second / 60
+
+    start_m = _minute_of_day(ss)
+    end_m = _minute_of_day(ee)
+    if end_m <= start_m:
+        return []
+    start_h = int(start_m // 60)
+    # The last touched minute is end_m - epsilon (end is exclusive).
+    end_h = int((end_m - 1e-9) // 60)
+    return list(range(start_h, min(end_h, 23) + 1))
+
+
+def _project_key(path_str):
+    return Path(path_str).name if path_str else "(unknown)"
+
+
+def _merge_intervals(intervals):
+    """Merge a list of (start, end) datetime tuples into a sorted list of
+    non-overlapping (start, end) tuples (touching/overlapping intervals
+    from the SAME source are unioned so that source is counted once)."""
+    if not intervals:
+        return []
+    ordered = sorted(intervals, key=lambda p: p[0])
+    merged = [list(ordered[0])]
+    for s, e in ordered[1:]:
+        if s <= merged[-1][1]:
+            if e > merged[-1][1]:
+                merged[-1][1] = e
+        else:
+            merged.append([s, e])
+    return [(s, e) for s, e in merged]
+
+
+def _sweep_concurrent_intervals(rows, windows):
+    """True-overlap sweep line across sources.
+
+    Per source: merge that source's own activity windows into a union of
+    non-overlapping intervals (so a source's own back-to-back/overlapping
+    sessions are never double counted). Then sweep +1 at each merged
+    interval's start and -1 at its end across ALL sources, producing the
+    piecewise-constant "number of distinct sources active" function.
+
+    Returns (concurrent_intervals, source_count_by_instant_change) where
+    concurrent_intervals is a list of (start, end, n_sources) covering
+    every maximal sub-interval with a constant concurrency count > 0.
+    """
+    by_source = defaultdict(list)
+    for r in rows:
+        for s, e in windows.get(id(r), []):
+            by_source[r["source"]].append((s, e))
+
+    events = []  # (time, delta) — delta is +1 at interval start, -1 at end
+    for src, ivals in by_source.items():
+        for s, e in _merge_intervals(ivals):
+            if e <= s:
+                continue
+            events.append((s, 1))
+            events.append((e, -1))
+
+    if not events:
+        return []
+
+    events.sort(key=lambda ev: (ev[0], -ev[1]))  # starts (+1) before ends (-1) at same instant
+    result = []
+    count = 0
+    prev_t = None
+    for t, delta in events:
+        if prev_t is not None and t > prev_t and count > 0:
+            result.append((prev_t, t, count))
+        count += delta
+        prev_t = t
+    return result
+
+
+def _bucket_concurrent_intervals_by_hour(concurrent_intervals):
+    """Bucket concurrency>=1 sub-intervals into (date, hour) -> max concurrency
+    touching that bucket, splitting at local midnight boundaries."""
+    hour_max = {}  # (date, hour) -> max concurrency seen in that bucket
+    for s, e, n in concurrent_intervals:
+        for day, ss, ee in _split_at_midnight(s, e):
+            for h in _hours_touched(day, ss, ee):
+                key = (day, h)
+                hour_max[key] = max(hour_max.get(key, 0), n)
+    return hour_max
+
+
+def compute_cross_llm(claude_rows, cross_rows):
+    """Build the cross_llm block. claude_rows = activity-pool row dicts.
+
+    Cross-LLM rows never enter scoring_metas/activity_metas; this function
+    only reads the two row lists it's given and returns a new block, so
+    the 9-dim scores and existing panels stay untouched (spec §6).
+    """
+    tagged = [dict(r, source="claude", coverage="full") for r in claude_rows]
+    all_rows = tagged + list(cross_rows)
+    comparable = [r for r in all_rows if r.get("coverage") != "presence_only"]
+
+    # One pass up front: group rows by source and parse each row's
+    # start_time / activity windows exactly once; every block below reads
+    # these instead of re-filtering and re-parsing the same rows.
+    rows_by_source = {}
+    for r in all_rows:
+        rows_by_source.setdefault(r["source"], []).append(r)
+    comparable_by_source = {}
+    for r in comparable:
+        comparable_by_source.setdefault(r["source"], []).append(r)
+    start_dt = {id(r): _parse_dt(r.get("start_time") or "") for r in all_rows}
+    windows = {id(r): _row_windows(r) for r in comparable}
+
+    # Per-row (first, last) activity instant used for coverage ranges (source
+    # cards' first_date/last_date). For comparable rows, use the row's
+    # windows (min window start, max window end) — a resumed segment days
+    # after the first one must extend last_date, not just start_time. Windows
+    # are only computed for `comparable` rows (see `windows` above); presence-
+    # only rows keep using start_time for both ends, per spec.
+    row_range = {}
+    for r in all_rows:
+        rid = id(r)
+        ws = windows.get(rid)
+        if ws:
+            row_range[rid] = (min(s for s, _ in ws), max(e for _, e in ws))
+        else:
+            d = start_dt[rid]
+            row_range[rid] = (d, d) if d else (None, None)
+
+    def _rows_span(rs):
+        """(earliest first, latest last) across a set of rows' row_range
+        entries, or (None, None) if none have a resolvable range."""
+        firsts = [a for a, _ in (row_range[id(r)] for r in rs) if a]
+        lasts = [b for _, b in (row_range[id(r)] for r in rs) if b]
+        return (min(firsts) if firsts else None, max(lasts) if lasts else None)
+
+    # --- source cards ---
+    # Every source in the known set gets a card, even when never detected —
+    # spec: absent sources render "not detected" rather than being omitted.
+    _KNOWN_SOURCES = ("claude", "codex", "grok", "antigravity")
+    sources = []
+    for src in sorted(set(_KNOWN_SOURCES) | set(rows_by_source)):
+        rs = rows_by_source.get(src)
+        if not rs:
+            sources.append({
+                "source": src, "coverage": None, "session_count": 0,
+                "first_date": None, "last_date": None,
+                "total_input_tokens": None, "total_output_tokens": None,
+                "parse_errors": 0, "detected": False,
+            })
+            continue
+        first, last = _rows_span(rs)
+
+        def _tok(key, _rs=rs):
+            vals = [r.get(key) for r in _rs if isinstance(r.get(key), int)]
+            return sum(vals) if vals else None
+
+        sources.append({
+            "source": src,
+            "coverage": rs[0].get("coverage", "full"),
+            "session_count": len(rs),
+            "first_date": first.date().isoformat() if first else None,
+            "last_date": last.date().isoformat() if last else None,
+            "total_input_tokens": _tok("input_tokens"),
+            "total_output_tokens": _tok("output_tokens"),
+            "parse_errors": 0,
+            "detected": True,
+        })
+
+    # --- common window across comparable sources ---
+    # Uses row_range (windows-derived) rather than start_dt directly, so a
+    # resumed segment's later end also extends the window used for
+    # common_window overlap math (same rationale as source cards above).
+    per_source_range = {}
+    for src, rs in comparable_by_source.items():
+        first, last = _rows_span(rs)
+        if first and last:
+            per_source_range[src] = (first, last)
+    common_window = None
+    if len(per_source_range) >= 2:
+        start = max(a for a, _ in per_source_range.values())
+        end = min(b for _, b in per_source_range.values())
+        days = max((end - start).days, 0)
+        common_window = {"start": start.date().isoformat(),
+                         "end": end.date().isoformat(),
+                         "days": days, "degraded": days < 14}
+
+    # --- weekly share (active minutes per ISO week per source) ---
+    # When a common_window exists, the renderer's note tells the reader the
+    # cross-tool comparison is scoped to that window — so windows are
+    # clipped to [window start, window end] (dates inclusive) before
+    # aggregation; activity fully outside the window contributes nothing.
+    # Without a common_window (or when degraded — the renderer hides the
+    # chart anyway), keep the unclipped behavior.
+    clip_start = clip_end = None
+    if common_window is not None:
+        # Boundaries must be local-zone midnights, matching the tzinfo
+        # _parse_dt normalizes every row datetime to (system local, via
+        # astimezone() — see _parse_dt's docstring). Building these as UTC
+        # midnights instead (the original bug) silently drops activity in
+        # positive-UTC-offset zones: local midnight on the window's first
+        # day falls BEFORE the wrongly-UTC clip_start, so real activity
+        # between local midnight and that boundary gets clipped away.
+        # datetime.min/max().astimezone() has no tz to convert FROM, so we
+        # instead combine the naive date/time and attach the local offset
+        # directly via .astimezone() on an already-local reference value.
+        clip_start = datetime.combine(
+            date.fromisoformat(common_window["start"]), time.min).astimezone()
+        clip_end = datetime.combine(
+            date.fromisoformat(common_window["end"]) + timedelta(days=1),
+            time.min).astimezone()
+
+    def _clip(s, e):
+        """Clip window (s, e) to [clip_start, clip_end]; None if it falls
+        fully outside. clip_start is None (no common_window) means no clip."""
+        if clip_start is None:
+            return (s, e)
+        cs, ce = max(s, clip_start), min(e, clip_end)
+        return (cs, ce) if ce > cs else None
+
+    weekly = {}
+    for r in comparable:
+        for s, e in windows[id(r)]:
+            clipped = _clip(s, e)
+            if clipped is None:
+                continue
+            s, e = clipped
+            wk = f"{s.isocalendar()[0]}-W{s.isocalendar()[1]:02d}"
+            weekly.setdefault(wk, {}).setdefault(r["source"], 0)
+            weekly[wk][r["source"]] += round((e - s).total_seconds() / 60)
+    weekly_share = [{"week": wk, "minutes": mins}
+                    for wk, mins in sorted(weekly.items())]
+
+    # --- scope to common window for cross-source comparisons ---
+    # Spec §13: cross-source comparison charts (parallel heatmap, project x
+    # tool matrix) degrade to per-source panels below 14 days. When a
+    # healthy (non-degraded) common_window exists, clip both windows AND row
+    # membership to it before parallel detection / matrix counting, so
+    # activity outside the window a reader is told the comparison covers
+    # doesn't leak in. When degraded or absent, keep full history in the
+    # emitted blocks (schema stability) — report_render.py is responsible
+    # for suppressing the exhibit in that case, not aggregate.py for hiding
+    # the data.
+    if common_window is not None and not common_window["degraded"]:
+        scoped_windows = {}
+        scoped_comparable = []
+        for r in comparable:
+            rid = id(r)
+            clipped = [c for s, e in windows[rid] if (c := _clip(s, e)) is not None]
+            if clipped:
+                scoped_windows[rid] = clipped
+                scoped_comparable.append(r)
+    else:
+        scoped_windows = windows
+        scoped_comparable = comparable
+
+    # --- parallel detection: true interval overlap via sweep line ---
+    # Per source, merge that source's own activity windows first (so a
+    # source's own overlapping/adjacent sessions count as one presence);
+    # then sweep across sources to find sub-intervals where >=2 distinct
+    # sources are simultaneously active. Only THOSE sub-intervals are
+    # bucketed into the hour heatmap — two sessions that merely touch the
+    # same hour without ever running concurrently no longer count.
+    concurrent_intervals = _sweep_concurrent_intervals(scoped_comparable, scoped_windows)
+    concurrency_hour_max = _bucket_concurrent_intervals_by_hour(concurrent_intervals)
+
+    # Hours touched by >=1 source at all (regardless of concurrency) — one
+    # pass, used both to derive hours_single_source = touched - multi AND
+    # to floor daily_max at 1 for days that never reach concurrency>=2.
+    touched_hours = set()
+    for r in scoped_comparable:
+        for s, e in scoped_windows[id(r)]:
+            for day, ss, ee in _split_at_midnight(s, e):
+                for h in _hours_touched(day, ss, ee):
+                    touched_hours.add((day, h))
+
+    heatmap = [[0] * 24 for _ in range(7)]
+    daily = defaultdict(int)  # date -> max concurrent sources that day
+    multi = 0
+    for (day, h), n in concurrency_hour_max.items():
+        daily[day] = max(daily[day], n)
+        if n >= 2:
+            heatmap[day.weekday()][h] += 1
+            multi += 1
+    # Days with only single-source activity (no concurrency>=2 sub-interval
+    # touched that day) still need a daily_max entry — max_parallel 1.
+    # Derived from touched_hours (already computed above) rather than a
+    # fresh walk over comparable/windows.
+    for day, _h in touched_hours:
+        daily[day] = max(daily[day], 1)
+    single = len(touched_hours) - multi
+    parallel = {
+        "heatmap": heatmap,
+        "daily_max": [{"date": d.isoformat(), "max_parallel": m}
+                      for d, m in sorted(daily.items())],
+        "hours_multi_source": multi,
+        "hours_single_source": single,
+    }
+
+    # --- project x tool matrix (top 10 projects by total sessions) ---
+    # Row membership scoped the same way as parallel detection above.
+    matrix = {}
+    for r in scoped_comparable:
+        proj = _project_key(r.get("project_path") or "")
+        matrix.setdefault(proj, {}).setdefault(r["source"], 0)
+        matrix[proj][r["source"]] += 1
+    top = sorted(matrix.items(), key=lambda kv: -sum(kv[1].values()))[:10]
+    matrix_sources = sorted(comparable_by_source)
+    project_matrix = {
+        "projects": [p for p, _ in top],
+        "sources": matrix_sources,
+        "counts": [[counts.get(s, 0) for s in matrix_sources]
+                   for _, counts in top],
+    }
+
+    # --- head-to-head: claude vs codex inside the common window ---
+    # NOTE: head_to_head is computed and emitted even when common_window is
+    # degraded (days < 14); report_render.py gates its display on
+    # `not win.get("degraded")`, so any other consumer of analysis-data.json
+    # must check common_window.degraded itself before trusting this block.
+    head_to_head = None
+    if common_window and {"claude", "codex"} <= set(per_source_range):
+        window_start_date = date.fromisoformat(common_window["start"])
+        window_end_date = date.fromisoformat(common_window["end"])
+
+        def _side(src):
+            # Membership: a session is "inside" the window when ANY of its
+            # activity windows intersects the common window — matching how
+            # the parallel/project_matrix blocks above select rows (via
+            # `windows`/`_clip`), rather than filtering on start_time alone.
+            # A session that STARTED before the window but was resumed with
+            # a segment inside it (a real rollout-file pattern for these
+            # adapters) is counted by the matrix/heatmap but was previously
+            # excluded here — the two exhibits describing the same window
+            # must agree on which sessions fall inside it.
+            inside = []
+            for r in comparable_by_source.get(src, []):
+                clipped = [c for s, e in windows[id(r)] if (c := _clip(s, e)) is not None]
+                if clipped:
+                    inside.append((r, clipped))
+            if not inside:
+                return None
+            # Duration: only the minutes that actually fall INSIDE the
+            # common window (clipped segments), so a resumed session with
+            # one minute in-window doesn't smuggle in hours of pre-window
+            # activity under a "common window" heading.
+            durs = [
+                round(sum((e - s).total_seconds() for s, e in clipped) / 60)
+                for _, clipped in inside
+            ]
+            # total_tokens: sum only rows that carry at least one token
+            # field, so a row missing both input/output doesn't silently
+            # count as 0 and drag the total down. If NO row in the window
+            # has token data at all, emit None rather than a misleading 0.
+            # Token counts are SESSION-level facts (adapters get one
+            # cumulative figure per session, not per segment), so a session
+            # partially inside the window contributes its full total —
+            # apportioning by time would be imputation, which this pipeline
+            # forbids. Consumers should read this as "tokens of sessions
+            # active in the window".
+            tok_rows = [
+                (r.get("input_tokens"), r.get("output_tokens"))
+                for r, _ in inside
+                if r.get("input_tokens") is not None or r.get("output_tokens") is not None
+            ]
+            total_tokens = (
+                sum((i or 0) + (o or 0) for i, o in tok_rows)
+                if tok_rows else None
+            )
+            # active_days: distinct calendar days covered by the CLIPPED
+            # windows inside the common window (a clipped window spanning
+            # local midnight contributes each day it touches).
+            active_days = {
+                day for _, clipped in inside
+                for s, e in clipped
+                for day, _ss, _ee in _split_at_midnight(s, e)
+            }
+            return {"sessions": len(inside),
+                    "active_days": len(active_days),
+                    "total_tokens": total_tokens,
+                    "median_duration_minutes": round(statistics.median(durs))}
+
+        claude_side, codex_side = _side("claude"), _side("codex")
+        if claude_side and codex_side:
+            head_to_head = {"window_days": common_window["days"],
+                            "claude": claude_side, "codex": codex_side}
+
+    return {"sources": sources, "common_window": common_window,
+            "weekly_share": weekly_share, "parallel": parallel,
+            "project_matrix": project_matrix, "head_to_head": head_to_head}
+
+
+def compute_ledger(activity_metas, cross_llm):
+    rows = list(activity_metas.values())
+    dates = sorted(d for d in (_parse_dt(r.get("start_time") or "")
+                               for r in rows) if d)
+    commits = sum(r.get("git_commits") or 0 for r in rows)
+    pushes = sum(r.get("git_pushes") or 0 for r in rows)
+    with_commits = sum(1 for r in rows if (r.get("git_commits") or 0) > 0)
+    return {
+        "schema_version": 1,
+        "window": {
+            "start": dates[0].date().isoformat() if dates else None,
+            "end": dates[-1].date().isoformat() if dates else None,
+            "days": (dates[-1] - dates[0]).days if len(dates) > 1 else 0,
+        },
+        "output": {"git_commits": commits, "git_pushes": pushes,
+                   "sessions_with_commits": with_commits},
+        # cross_llm.sources always has one card per known source, including
+        # undetected ones (detected: false, session_count 0) — see the
+        # "detected" field added in the codex-fix-wave. Filter to sources
+        # that actually produced rows this run; `.get("detected", True)` and
+        # the session_count fallback keep this correct for pre-"detected"-
+        # field JSON where every listed source was, by construction, one
+        # that had rows.
+        "sources_detected": [
+            s["source"] for s in cross_llm["sources"]
+            if s.get("detected", True) or (s.get("session_count") or 0) > 0
+        ],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR),
@@ -1458,6 +2019,10 @@ def main():
                         help="Path to sessions-redacted.jsonl from another machine. "
                              "Can be given multiple times. Each row augments the session pool. "
                              "Local sessions take precedence on session_id collisions.")
+    parser.add_argument("--cross-llm-rows", action="append", default=[],
+                        help="Path to scan_codex/grok/antigravity output jsonl. "
+                             "Repeatable. Rows feed the cross_llm/ledger blocks "
+                             "only — never the 9-dim scoring pool.")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir).expanduser()
@@ -1615,6 +2180,25 @@ def main():
             "source_machine": source_by_sid.get(s["sid"], "local"),
         } for s in sessions],
     }
+
+    # cross_llm / ledger: additive top-level blocks, computed from the same
+    # activity-pool rows compute_activity() uses (activity_metas in
+    # --transcript-rows mode, else metas in session-meta mode) plus any
+    # --cross-llm-rows adapter output. Never touches scoring_metas/
+    # activity_metas themselves — read-only inputs to a new output block.
+    activity_rows = activity_metas if activity_metas is not None else metas
+    cross_rows, cross_errors = load_cross_llm_rows(args.cross_llm_rows)
+    cross_llm = compute_cross_llm(list(activity_rows.values()), cross_rows)
+    for card in cross_llm["sources"]:
+        card["parse_errors"] = cross_errors.get(card["source"], 0)
+    # Errors bucketed under "(unknown)" (malformed JSON, or a row missing
+    # both `source` and `start_time` so no source could be guessed) never
+    # attach to any per-source card — surface them as a separate count so
+    # they aren't silently dropped from the report. 0 default keeps older
+    # consumers that don't check this key unaffected.
+    cross_llm["unattributed_parse_errors"] = cross_errors.get("(unknown)", 0)
+    final["cross_llm"] = cross_llm
+    final["ledger"] = compute_ledger(activity_rows, cross_llm)
 
     out.write_text(json.dumps(final, ensure_ascii=False, indent=2))
     print(f"wrote {out} ({out.stat().st_size} bytes)", file=sys.stderr)

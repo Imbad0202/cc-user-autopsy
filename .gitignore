@@ -55,3 +55,4 @@ usage-data/
 credentials.json
 secrets.json
 auth.json
+.gstack/

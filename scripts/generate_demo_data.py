@@ -4,6 +4,7 @@ then run the full pipeline to produce assets/example-output.html.
 No identifiable information; all projects/sids/summaries are fabricated.
 """
 import json
+import os
 import random
 import shutil
 import string
@@ -17,13 +18,18 @@ OUT_DIR = Path("/tmp/cc-autopsy-demo")
 META_DIR = OUT_DIR / "usage-data/session-meta"
 FACETS_DIR = OUT_DIR / "usage-data/facets"
 PROJECTS_DIR = OUT_DIR / "projects"
+CODEX_DIR = OUT_DIR / "codex-sessions"
+GROK_DIR = OUT_DIR / "grok-sessions"
+ANTIGRAVITY_DIR = OUT_DIR / "antigravity-conversations"
 # Wipe stale outputs from previous runs — without this, transcript files
 # accumulate across regenerations and metrics drift toward whichever schema
 # was most recent (e.g. half the assistant records lack `model`).
-for d in (META_DIR, FACETS_DIR, PROJECTS_DIR):
+for d in (META_DIR, FACETS_DIR, PROJECTS_DIR, CODEX_DIR, GROK_DIR, ANTIGRAVITY_DIR):
     if d.exists():
         shutil.rmtree(d)
     d.mkdir(parents=True, exist_ok=True)
+
+DEMO_PROJECTS_CROSS = ["webapp", "data-pipeline", "infra"]
 
 PROJECTS = [
     "acme-dashboard",
@@ -419,6 +425,88 @@ def gen_transcript(sid, meta, facet):
     return lines
 
 
+def _codex_line(ts, type_, payload):
+    return json.dumps({"timestamp": ts.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                       "type": type_, "payload": payload})
+
+
+def gen_codex_sessions(now, n=32):
+    for i in range(n):
+        start = now - timedelta(days=int(random.triangular(0, 60, 20)),
+                                hours=random.randint(0, 12))
+        sid = mk_sid()
+        proj = random.choice(DEMO_PROJECTS_CROSS)
+        cwd = f"/home/user/projects/{proj}"
+        lines = [
+            _codex_line(start, "session_meta", {"id": sid, "cwd": cwd}),
+            _codex_line(start, "turn_context",
+                        {"model": "gpt-5.4", "effort": "high", "cwd": cwd}),
+        ]
+        t = start
+        for turn in range(random.randint(1, 6)):
+            t += timedelta(minutes=random.randint(1, 8))
+            lines.append(_codex_line(t, "event_msg",
+                                     {"type": "user_message",
+                                      "message": f"demo codex prompt {turn}"}))
+            t += timedelta(minutes=random.randint(1, 5))
+            lines.append(_codex_line(t, "response_item",
+                                     {"type": "function_call", "name": "shell"}))
+            lines.append(_codex_line(t, "event_msg",
+                                     {"type": "agent_message", "message": "ok"}))
+        lines.append(_codex_line(t, "event_msg", {"type": "token_count", "info": {
+            "total_token_usage": {
+                "input_tokens": random.randint(5000, 90000),
+                "cached_input_tokens": random.randint(1000, 30000),
+                "output_tokens": random.randint(500, 9000),
+                "reasoning_output_tokens": random.randint(100, 3000),
+                "total_tokens": 0}}}))
+        if i == 0:  # one resumed session spanning days (real-world case)
+            t2 = t + timedelta(days=6)
+            lines.append(_codex_line(t2, "event_msg",
+                                     {"type": "user_message", "message": "resume"}))
+            lines.append(_codex_line(t2 + timedelta(minutes=4), "event_msg",
+                                     {"type": "agent_message", "message": "ok"}))
+        day_dir = CODEX_DIR / start.strftime("%Y/%m/%d")
+        day_dir.mkdir(parents=True, exist_ok=True)
+        fname = f"rollout-{start.strftime('%Y-%m-%dT%H-%M-%S')}-{sid}.jsonl"
+        (day_dir / fname).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def gen_grok_sessions(now, n=16):
+    from urllib.parse import quote
+    dirs = {p: GROK_DIR / quote(f"/home/user/projects/{p}", safe="")
+            for p in DEMO_PROJECTS_CROSS[:2]}
+    for d in dirs.values():
+        d.mkdir(parents=True, exist_ok=True)
+    marker_written = False
+    for i in range(n):
+        start = now - timedelta(days=int(random.triangular(0, 60, 25)))
+        sid = mk_sid()
+        proj = random.choice(list(dirs))
+        lines = []
+        for k in range(random.randint(1, 4)):
+            prompt = f"demo grok prompt {k}"
+            if not marker_written:
+                prompt = '<script>alert("grok")</script> GROK_PRIVATE_MARKER'
+                marker_written = True
+            lines.append(json.dumps({
+                "timestamp": (start + timedelta(minutes=3 * k))
+                .strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                "session_id": sid, "prompt": prompt,
+                "is_bash": random.random() < 0.2}, ensure_ascii=False))
+        with open(dirs[proj] / "prompt_history.jsonl", "a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+
+
+def gen_antigravity_files(now, n=6):
+    ANTIGRAVITY_DIR.mkdir(parents=True, exist_ok=True)
+    for _ in range(n):
+        p = ANTIGRAVITY_DIR / f"{mk_sid()}.pb"
+        p.write_bytes(b"\x0a\x00")
+        age = now - timedelta(days=int(random.triangular(0, 60, 15)))
+        os.utime(p, (age.timestamp(), age.timestamp()))
+
+
 def main():
     # Generate ~280 sessions over 14 weeks
     now = datetime(2026, 4, 10, tzinfo=timezone.utc)
@@ -460,8 +548,13 @@ def main():
             for rec in transcript:
                 fp.write(json.dumps(rec) + "\n")
 
+    gen_codex_sessions(now)
+    gen_grok_sessions(now)
+    gen_antigravity_files(now)
+
     print(f"Generated {len(sessions_meta)} meta, {len(sessions_facets)} facets, {len(pick_sids)} transcripts")
-    print(f"Output dirs:\n  {META_DIR}\n  {FACETS_DIR}\n  {PROJECTS_DIR}")
+    print(f"Output dirs:\n  {META_DIR}\n  {FACETS_DIR}\n  {PROJECTS_DIR}\n"
+          f"  {CODEX_DIR}\n  {GROK_DIR}\n  {ANTIGRAVITY_DIR}")
 
 
 if __name__ == "__main__":

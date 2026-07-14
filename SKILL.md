@@ -19,6 +19,7 @@ A self-contained HTML report at `~/.claude/usage-data/cc-user-autopsy.html` (or 
 
 **SELF audit layout** (private diagnostic letter):
 
+0. **AI work ledger** (opening band, output ledger, team ledger) — SELF-only, rendered before everything else including the usage snapshot; see Step 3b.
 1. **Usage snapshot** §01 — activity panel (cache, models, cost, characteristics) + a 4-tile behavior strip (commits / interactive time / Task agent % / MCP %). Replaces the old 8-tile metric grid. Benchmark caveat at the top.
 2. **Reading guide** — short paragraph orienting the four-zone story (when / how / where stuck / cost).
 3. **Peer review** §02 — Claude-written story in 4 sections plus a "connecting it back" paragraph. Comes BEFORE scoring so the grid reads as an index, not a verdict.
@@ -48,12 +49,16 @@ Step 0   → ASK which version (self / hr / both) and which locale (en / zh_TW).
            For HR, collect profile + public-projects allowlist + artifacts BEFORE running.
 Step 1a  → scripts/scan_transcripts.py     (merges subagent tokens into parent sessions)
 Step 1b  → scripts/aggregate.py            (combines transcript-rows + session-meta + facets)
+Step 1c  → scripts/scan_codex.py / scan_grok.py / scan_antigravity.py  (optional, cross-LLM)
+           re-run aggregate.py with --cross-llm-rows (repeatable)
 Step 2   → scripts/sample_sessions.py      (picks 15-24 representative sessions)
 Step 3   → Claude writes peer-review.{audience}.{locale}.md  (V4 story format)
+Step 3b  → Claude writes ledger-narration.md (SELF only, V5 addition; opening/output/team)
 Step 3.5 → Claude writes try-this-week.{locale}.md (SELF only)
            Claude writes case-study.{self|hr}.{locale}.md (BOTH audiences, two files)
 Step 4.5 → (zh_TW only) rewrite the EN peer review natively into zh_TW
 Step 4   → scripts/build_html.py with --peer-review --try-this --case-study --audience --locale
+           (SELF adds --ledger-narration and --history-file; HR gets --history-file only)
 Step 5   → open the HTML in browser and tell the user
 ```
 
@@ -137,6 +142,36 @@ Activity metrics (tokens, cache, models, cost, active_days) come from the **full
 9-dim scores come from the **session-meta pool**, which has LLM-derived labels (outcome, friction, goal categories) but partial coverage of history.
 
 If both numbers disagree (e.g. activity shows 150 sessions, scoring shows 420), that's expected. The HTML scope_note explains this to the reader.
+
+### Step 1c — Cross-LLM scan (optional; enables the AI work ledger)
+
+If the user works across multiple AI coding tools (Codex CLI, Grok CLI, Antigravity), run the three adapters before re-aggregating. Each adapter is safe to run even if its source directory doesn't exist — it just emits zero rows, don't skip the step to "check first."
+
+```bash
+python3 scripts/scan_codex.py --output /tmp/cc-autopsy/codex-rows.jsonl
+python3 scripts/scan_grok.py --output /tmp/cc-autopsy/grok-rows.jsonl
+python3 scripts/scan_antigravity.py --output /tmp/cc-autopsy/anti-rows.jsonl
+```
+
+(Defaults: `~/.codex/sessions`, `~/.grok/sessions`, `~/.gemini/antigravity/conversations` — no need to pass `--sessions-dir` / `--conversations-dir` unless the user's install is non-standard.)
+
+Then re-run `aggregate.py` with the three outputs added:
+
+```bash
+python3 scripts/aggregate.py \
+  --transcript-rows /tmp/cc-autopsy/transcript-rows.jsonl \
+  --cross-llm-rows /tmp/cc-autopsy/codex-rows.jsonl \
+  --cross-llm-rows /tmp/cc-autopsy/grok-rows.jsonl \
+  --cross-llm-rows /tmp/cc-autopsy/anti-rows.jsonl \
+  --output /tmp/cc-autopsy/analysis-data.json
+```
+
+Coverage tiers, one sentence each:
+- **Codex — full**: tokens, models, and transcript content are all read, same shape as Claude's own transcript pool.
+- **Grok — partial**: only prompt text and timestamps are available; no token counts, no model names.
+- **Antigravity — presence-only**: no parsing of conversation content at all, just file count and mtime (the format has no public schema, so the scanner deliberately does not reverse-engineer it).
+
+`--cross-llm-rows` only feeds the `cross_llm` / `ledger` blocks (Step 3b's ledger narration, specifically the team-ledger book). **The 9-dim scores stay Claude-only** — cross-LLM rows never enter the scoring pool.
 
 ### If you skip Step 1a
 
@@ -244,6 +279,55 @@ Length target: 700–1000 words. The story format runs longer than the old 3+3+1
 - **Every claim cites a number from `analysis-data.json` or a session ID from `samples.json`.** Numbers are the spine.
 - **Connect zones causally.** The "connecting it back" paragraph must state which zone is upstream (cause) and which is downstream (effect). If you can't connect them, the story isn't ready.
 - **Pick ONE load-bearing fix.** The story has to end with "fix this upstream zone first" so the reader has somewhere to act. Don't list 5 things — pick the strongest leverage point and say so.
+- **No em-dash overuse in zh_TW.** Use commas, colons, or new sentences. Per `feedback_writing_style`: 中文寫作不濫用破折號。
+
+## Step 3b — Write the AI work ledger narration (SELF only, V5 addition)
+
+The ledger narration is a **separate file from the peer review**, feeding a **separate, earlier-rendered block** in the HTML (before the usage snapshot and the peer review). It is not a replacement for Step 3's four-zone story — both files are written and passed to the build for a SELF report.
+
+Where the peer review (Step 3) is a diagnostic story about the user's own habits, the ledger is an **audit-style record of what the AI team (Claude Code plus any other AI CLIs the user runs) actually delivered**, written under strict audit-discipline rules — a ledger a reader should be able to trust, not a narrative that talks them into a conclusion.
+
+Write to `/tmp/cc-autopsy/ledger-narration.md`. Structure is exactly three `# ` headings (case-insensitive, but write them lowercase to match the source), each parsed as **first line = the opener claim, everything after = body prose**:
+
+```markdown
+# opening
+
+<ONE sentence: what the AI team delivered this period, what it cost, and the
+biggest leak if one is known. This is the "thirty-second read" — a reader who
+stops here still has the headline.>
+
+# output-ledger
+
+<First line: the opener claim for the output ledger (e.g. "42 commits shipped
+across 6 projects at an estimated $38 API-equivalent cost.").
+Rest: body prose backing the claim — deliverables, counts, costs, all
+evidence-backed per the audit-discipline rules below.>
+
+# team-ledger
+
+<First line: the opener claim for the team ledger (e.g. "Claude Code carried
+81% of active days; Codex covered the other 19%, mostly late-night sessions.").
+Rest: body prose on how work split across sources in `cross_llm.sources` —
+coverage tier caveats apply (see Step 1c): only claim what the tier can prove.>
+```
+
+Pass the file to the build with `--ledger-narration /tmp/cc-autopsy/ledger-narration.md` (SELF builds only — HR never sees the ledger; see the audience table below).
+
+### Audit-discipline writing rules (apply to every sentence in ledger-narration.md)
+
+This is a ledger, not a pep talk. Write it the way an auditor writes a finding, not the way a coach writes feedback:
+
+- **Numbers before adjectives.** Every evaluative adjective ("heavy", "light", "consistent", "sparse") must anchor to a specific number and the threshold that number is being judged against. An adjective with no number behind it is a claim with no evidence — cut it or find the number.
+- **No cheerleading, no sandwiching.** Don't wrap a weak finding in praise to soften it, and don't manufacture praise to balance a criticism. State what the data shows.
+- **Positive claims need evidence at the same bar as negative claims.** A good number gets exactly the same sourcing discipline as a bad one. If a positive claim can't be sourced to `analysis-data.json` / `cross_llm` / `ledger`, it gets cut — same as an unsourceable negative claim would.
+- **Self-referential comparison only.** Compare the user's own numbers across time or across sources (this week vs last, Claude Code vs Codex). Never compare to other users or invoke "better than most" — there is no peer population this pipeline has measured.
+- **Lower-bound accounting.** Only count deliverables the evidence actually backs. If a commit, a session, or a claimed output can't be tied to a row in the data, it does not go in the count. When in doubt, undercount.
+
+### How to write ledger-narration.md well
+
+- **Be honest and direct.** No sandwiching. No performance-review platitudes.
+- **Every claim cites a number from `analysis-data.json` (including its `cross_llm` / `ledger` blocks) or a session ID from `samples.json`.** Numbers are the spine.
+- **The opening line is load-bearing.** It has to survive as a standalone "thirty-second read" — assume some readers stop there.
 - **No em-dash overuse in zh_TW.** Use commas, colons, or new sentences. Per `feedback_writing_style`: 中文寫作不濫用破折號。
 
 ### HR audience format (different file, different format)
@@ -366,12 +450,13 @@ python3 scripts/build_html.py \
   --peer-review /tmp/cc-autopsy/peer-review.{locale}.md \
   --try-this /tmp/cc-autopsy/try-this-week.{locale}.md \
   --case-study /tmp/cc-autopsy/case-study.self.{locale}.md \
+  --ledger-narration /tmp/cc-autopsy/ledger-narration.md \
   --locale {locale} \
   --profile ~/.claude/cc-autopsy-profile.json \
   --output ~/.claude/usage-data/cc-user-autopsy.html
 ```
 
-`--try-this` and `--case-study` are V4 additions. Both expect markdown files produced in Step 3.5.
+`--try-this` and `--case-study` are V4 additions. Both expect markdown files produced in Step 3.5. `--ledger-narration` is a V5 addition (SELF only, Step 3b) — if omitted, the ledger sections simply don't render, the rest of the build is unaffected. On a successful SELF build, `build_html.py` also appends one line to `--history-file` (default `~/.claude/usage-data/autopsy-history.jsonl`) as a trend snapshot; this never fails the build even if the write errors.
 
 ### For a hiring-manager / portfolio audience
 
@@ -499,12 +584,15 @@ The `aggregate.py` script assigns each user a 1-10 score across 9 dimensions usi
 
 Read `references/scoring-rubric.md` for the exact threshold logic if you need to discuss or override scores.
 
-## V4 audience-conditional rendering
+## Audience-conditional rendering
 
 The same `build_html.py` produces both audiences from one analysis-data.json. Key conditional rules to be aware of when modifying the renderer:
 
 | Aspect | SELF | HR |
 |---|---|---|
+| Opening band | rendered | absent |
+| Output ledger | rendered | absent |
+| Team ledger | rendered | absent |
 | Hero block | Diagnostic letter framing | Practice summary framing |
 | Overview / activity | Merged "usage snapshot" + 4-tile behavior strip | Profile card + activity panel + benchmark caveat |
 | Reading guide vs zone-map | Short reading-guide paragraph | Full visual 4-zone map (first-time reader) |
@@ -520,6 +608,8 @@ The same `build_html.py` produces both audiences from one analysis-data.json. Ke
 | Methodology | Full content but styled as footer (small font) | Compact disclosure note only |
 | sid8 prefixes | Shown everywhere | Stripped from all chrome AND from peer-review prose |
 
+Cross-LLM prompt text (e.g. Grok's `prompt_history.jsonl` entries) never renders in any external version of the report — the ledger builders only ever take counts, dates, minutes, and tokens from cross-LLM rows, never raw prompt text, and the whole ledger is gated `audience == "self"` besides.
+
 When adding a new block, ask: does this block convey diagnostic value (SELF) or hiring signal (HR)? If only one, gate it with `if audience == "..."`. If both, ensure HR-side has no sid / private project leak.
 
 ## Known limits
@@ -533,10 +623,14 @@ When adding a new block, ask: does this block convey diagnostic value (SELF) or 
 ## Files
 
 - `scripts/scan_transcripts.py` — walks `~/.claude/projects/`, merges subagent tokens into parents, writes transcript-rows.jsonl
-- `scripts/aggregate.py` — combines transcript rows + session-meta + facets, writes analysis-data.json (includes cost estimate via `PRICING` table)
+- `scripts/cross_llm_common.py` — shared helpers for the three cross-LLM adapters below (row shape, idle-gap segment splitting, timestamp parsing)
+- `scripts/scan_codex.py` — full-tier adapter: walks `~/.codex/sessions`, writes tokens/models/transcript-shaped rows to codex-rows.jsonl
+- `scripts/scan_grok.py` — partial-tier adapter: walks `~/.grok/sessions`, writes prompt-text/timestamp rows (no tokens/models) to grok-rows.jsonl
+- `scripts/scan_antigravity.py` — presence-only adapter: walks `~/.gemini/antigravity/conversations`, writes file count + mtime only (no content parsing) to anti-rows.jsonl
+- `scripts/aggregate.py` — combines transcript rows + session-meta + facets, writes analysis-data.json (includes cost estimate via `PRICING` table); `--cross-llm-rows` (repeatable) feeds the additive `cross_llm` / `ledger` blocks only
 - `scripts/sample_sessions.py` — picks representative sessions, writes samples.json
-- `scripts/build_html.py` — CLI entry point. Wires `--peer-review`, `--try-this`, `--case-study`, `--audience`, `--locale`, `--profile`, `--public-projects`, `--artifacts` into the renderer.
-- `scripts/report_render.py` — all HTML rendering logic. Owns the audience-conditional branches (SELF vs HR), claim-indexed evidence selectors, and section ordering.
+- `scripts/build_html.py` — CLI entry point. Wires `--peer-review`, `--try-this`, `--case-study`, `--ledger-narration`, `--audience`, `--locale`, `--profile`, `--public-projects`, `--artifacts`, `--history-file` into the renderer. Also owns `append_history_snapshot()` — the SELF-only, warn-never-fail trend-snapshot append to `--history-file` (default `~/.claude/usage-data/autopsy-history.jsonl`) that runs after a successful build.
+- `scripts/report_render.py` — all HTML rendering logic. Owns the audience-conditional branches (SELF vs HR), claim-indexed evidence selectors, section ordering, and the SELF-only ledger builders (`_parse_ledger_narration`, `_build_opening_band`, `_build_output_ledger`, `_build_team_ledger`).
 - `scripts/locales.py` — single source of truth for every UI chrome string. Both locales must share the same key set (enforced by tests). Two locales: `en` (canonical), `zh_TW`.
 - `scripts/narrative_en.py` / `scripts/narrative_zh.py` — locale-specific narrative helpers (outcome labels, evidence badges, methodology sub-blocks).
 - `tests/test_scan_transcripts.py` — scanner unit tests

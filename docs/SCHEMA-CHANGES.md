@@ -40,6 +40,60 @@ for dim, metrics in scores.items():
 **Purpose:** Canonical signal for "should the pattern sentence be rendered for this dimension." Replaces the legacy convention of `pattern == None` meaning "don't emit."
 **Semantics:** `True` iff both subgroups needed for the pattern comparison met `_PATTERN_MIN_SAMPLE` (and any other per-dim preconditions). Older JSON from before this PR lacks the field; consumers should treat missing as `False` and skip rendering.
 
+### `cross_llm.sources[].parse_errors` (int)
+
+**Added:** 2026-07-14
+**Purpose:** Count of malformed/incomplete lines skipped from a given `--cross-llm-rows` input (missing `source` or `start_time`, or invalid JSON — bucketed under `"(unknown)"` when the source can't be guessed). 0 for `claude` (always internally derived, never file-loaded) and for any source with no parse failures.
+
+## 2026-07-14 — additive: `cross_llm` and `ledger` top-level blocks (V5 Phase 1)
+
+- `cross_llm`: cross-tool sources / common_window / weekly_share / parallel /
+  project_matrix / head_to_head. Present even with no external sources
+  (sources then lists only `claude`). Fields inside rows may be null —
+  unknown is never imputed.
+- `ledger`: schema_version 1; window / output counters / sources_detected.
+- No existing fields changed or removed.
+
+## 2026-07-14 — additive: `cross_llm.sources[].detected` (bool) + adapter `_meta` line (codex-fix-wave)
+
+- `cross_llm.sources[]` now always contains one card per known source
+  (`claude`, `codex`, `grok`, `antigravity`), even when a source produced
+  no rows for this run. Undetected cards carry `"detected": false` and null
+  out every measured field (`coverage`, `session_count: 0`, `first_date`,
+  `last_date`, `total_input_tokens`, `total_output_tokens`); detected cards
+  gain `"detected": true`. Undetected sources never appear inside
+  `weekly_share`, `parallel`, `project_matrix`, or `head_to_head` — those
+  structures are unchanged.
+- Consumers reading `cross_llm.sources` before this change treated a
+  missing source as "not run" implicitly (source absent from the list).
+  After this change, absence is impossible — check `detected` instead.
+- `scan_codex.py` and `scan_grok.py` now append one trailing
+  `{"_meta": true, "source": "<codex|grok>", "parse_errors": N}` line to
+  their output jsonl, carrying the scanner's own malformed-line skip count
+  (previously only printed to stderr). `aggregate.load_cross_llm_rows()`
+  consumes `_meta` lines into its `parse_errors_by_source` return value
+  instead of treating them as session rows, so
+  `cross_llm.sources[].parse_errors` now reflects adapter-side parse
+  failures, not just aggregate-side ones. `scan_antigravity.py` is
+  unaffected (it lists protobuf files by mtime; no JSON-line parsing to
+  fail).
+
+## 2026-07-14 — additive: `cross_llm.unattributed_parse_errors` (int) (codex-fix-wave round 3)
+
+**Added:** 2026-07-14
+**Purpose:** Count of malformed `--cross-llm-rows` lines that `load_cross_llm_rows` bucketed under `"(unknown)"` because no `source` could be guessed from the line (invalid JSON, or a row missing both `source` and `start_time`). Previously these errors were silently invisible — they never attached to any per-source card, since `cross_llm.sources[].parse_errors` only carries errors attributed to a known source. 0 default when no unattributed errors occurred.
+
+## 2026-07-14 — semantics tightened: `ledger.sources_detected` (codex-fix-wave round 2)
+
+- `compute_ledger` now filters `cross_llm.sources` to entries with
+  `detected: true` (or `session_count > 0` for JSON predating the
+  `detected` field) before listing them in `ledger.sources_detected`.
+  Previously every known source (`claude`, `codex`, `grok`, `antigravity`)
+  was copied verbatim, so an undetected source (one that produced zero
+  rows this run) falsely appeared "detected" in the ledger. No field was
+  added or removed — this is a correctness fix to which sources
+  `sources_detected` includes.
+
 ---
 
 *Maintained alongside `scripts/aggregate.py`. When adding, deprecating, or removing fields, update this file in the same commit.*

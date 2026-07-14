@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>樣張 C · 專業商業報告</title>
+<style>
+  :root {
+    --paper: #FFFFFF;
+    --ink: #26231E;
+    --ink-2: #5C5850;
+    --ink-3: #918C82;
+    --rule: #E6E3DC;
+    --rule-strong: #26231E;
+    --gold: #B08A2E;         /* 主色：重點與註解標記 */
+    --gold-deep: #7E6119;    /* 主色深階：小字可讀 */
+    --gold-soft: rgba(176, 138, 46, 0.12);
+    --neg: #9C201A;          /* 負值紅：只給壞數字 */
+    --sans: ui-sans-serif, system-ui, -apple-system, "PingFang TC", "Noto Sans CJK TC", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 15px; line-height: 1.8;
+    font-variant-numeric: tabular-nums;
+  }
+  .doc { max-width: 980px; margin: 0 auto; padding: 60px 40px 90px; }
+
+  /* ---------- 封面帶 ---------- */
+  .cover { border-bottom: 3px solid var(--ink); padding-bottom: 30px; }
+  .cover .doctype { font-size: 12.5px; letter-spacing: 0.22em; color: var(--gold-deep); font-weight: 700; }
+  .cover h1 { font-size: 38px; font-weight: 800; letter-spacing: 0.01em; line-height: 1.25; margin-top: 10px; }
+  .cover .meta { display: flex; gap: 34px; margin-top: 18px; font-size: 13px; color: var(--ink-2); flex-wrap: wrap; }
+  .cover .meta b { color: var(--ink); font-weight: 600; }
+  .cover .conf { margin-left: auto; color: var(--ink-3); letter-spacing: 0.08em; }
+
+  /* ---------- 執行摘要 ---------- */
+  .exec { padding: 44px 0 12px; }
+  .exec h2, .sec > h2 { font-size: 13px; letter-spacing: 0.24em; color: var(--ink-3); font-weight: 700; margin-bottom: 22px; }
+  .finding { display: grid; grid-template-columns: 64px 1fr; gap: 20px; padding: 18px 0; border-bottom: 1px solid var(--rule); }
+  .finding:last-of-type { border-bottom: none; }
+  .finding .no { font-size: 30px; font-weight: 800; color: var(--gold); line-height: 1.2; }
+  .finding .head { font-size: 19px; font-weight: 700; line-height: 1.6; }
+  .finding .head .neg { color: var(--neg); }
+  .finding .sup { font-size: 13.5px; color: var(--ink-2); margin-top: 4px; }
+  .finding .sup .ref { color: var(--gold-deep); font-weight: 600; }
+
+  /* ---------- 章節 ---------- */
+  .sec { padding: 46px 0 8px; border-top: 1px solid var(--rule); margin-top: 26px; }
+  .sec .title { font-size: 23px; font-weight: 800; line-height: 1.5; max-width: 30em; letter-spacing: 0.005em; }
+  .sec .title .neg { color: var(--neg); }
+  .sec .intro { font-size: 14px; color: var(--ink-2); max-width: 46em; margin-top: 10px; }
+
+  /* ---------- Exhibit ---------- */
+  .exhibit { margin: 30px 0 6px; }
+  .exhibit .ex-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+  .exhibit .ex-no { font-size: 11.5px; font-weight: 800; letter-spacing: 0.14em; color: var(--gold-deep); white-space: nowrap; }
+  .exhibit .ex-t { font-size: 14px; font-weight: 600; color: var(--ink); }
+  .exhibit .src { font-size: 11.5px; color: var(--ink-3); margin-top: 10px; }
+  .exhibit svg { display: block; width: 100%; height: auto; }
+
+  /* 橫條列 */
+  .hbars { display: grid; gap: 10px; max-width: 720px; }
+  .hbar { display: grid; grid-template-columns: 150px 1fr 90px; align-items: center; gap: 14px; font-size: 13.5px; }
+  .hbar .lab { color: var(--ink); }
+  .hbar .track { height: 20px; position: relative; }
+  .hbar .track i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--ink); opacity: 0.82; }
+  .hbar.neg .track i { background: var(--neg); opacity: 1; }
+  .hbar .val { font-weight: 600; }
+  .hbar.neg .val, .hbar.neg .lab { color: var(--neg); }
+
+  /* 註解標記（簽名元素） */
+  .callout-dot { fill: none; stroke: #B08A2E; stroke-width: 2.5; }
+  .callout-lab { font-weight: 700; fill: #7E6119; }
+
+  /* 小倍數 */
+  .panels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 26px; }
+  .panel .p-t { font-size: 13px; font-weight: 700; }
+  .panel .p-s { font-size: 11.5px; color: var(--ink-3); margin-bottom: 6px; }
+
+  /* 對比大數 */
+  .bignums { display: flex; gap: 54px; flex-wrap: wrap; margin-top: 6px; }
+  .bignums .cell .v { font-size: 40px; font-weight: 800; line-height: 1.15; }
+  .bignums .cell .v.neg { color: var(--neg); }
+  .bignums .cell .v.gold { color: var(--gold-deep); }
+  .bignums .cell .k { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+
+  /* 表格 */
+  table { border-collapse: collapse; width: 100%; }
+  .btable { font-size: 14px; margin-top: 6px; }
+  .btable th {
+    text-align: left; font-size: 11.5px; letter-spacing: 0.1em; color: var(--ink-3);
+    font-weight: 700; border-bottom: 2px solid var(--ink); padding: 0 16px 9px 0;
+  }
+  .btable th.num, .btable td.num { text-align: right; }
+  .btable td { border-bottom: 1px solid var(--rule); padding: 12px 16px 12px 0; vertical-align: top; }
+  .btable tr:hover td { background: rgba(38, 35, 30, 0.02); }
+  .btable .neg { color: var(--neg); font-weight: 600; white-space: nowrap; }
+  .btable .gain { color: var(--gold-deep); font-weight: 600; white-space: nowrap; }
+  .btable .foot td { border-bottom: none; font-size: 11.5px; color: var(--ink-3); padding-top: 10px; }
+  .ev { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+
+  /* 認證 */
+  .certrow { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 4px; }
+  .cert {
+    border: 1px solid var(--rule); border-top: 3px solid var(--gold);
+    padding: 14px 18px 12px; min-width: 250px;
+  }
+  .cert .c-t { font-size: 14.5px; font-weight: 700; display: flex; align-items: baseline; gap: 10px; }
+  .cert .c-t .ok { color: var(--gold-deep); font-size: 12px; letter-spacing: 0.14em; }
+  .cert .c-c { font-size: 12px; color: var(--ink-2); margin-top: 4px; line-height: 1.9; }
+  .cert.pending { border-top-color: var(--rule); }
+  .cert.pending .c-t { color: var(--ink-3); }
+
+  /* 熱圖 */
+  .heat { display: grid; grid-template-columns: 40px repeat(24, 1fr); gap: 2px; max-width: 740px; }
+  .heat .hcell { aspect-ratio: 1 / 0.7; background: #F2F0EB; }
+  .heat .rowlab { font-size: 11px; color: var(--ink-3); align-self: center; }
+  .heat-x { display: grid; grid-template-columns: 40px repeat(24, 1fr); gap: 2px; max-width: 740px; font-size: 10px; color: var(--ink-3); margin-top: 4px; }
+  .heat-x span { text-align: center; }
+
+  /* 建議行動 */
+  .rec { border-top: 3px solid var(--ink); margin-top: 40px; padding-top: 34px; }
+  .rec .title { font-size: 23px; font-weight: 800; }
+
+  footer {
+    margin-top: 60px; padding-top: 16px; border-top: 1px solid var(--rule);
+    display: flex; justify-content: space-between; font-size: 11.5px; color: var(--ink-3);
+  }
+
+  @media (max-width: 880px) {
+    .doc { padding: 36px 20px 64px; }
+    .panels { grid-template-columns: repeat(2, 1fr); }
+    .finding { grid-template-columns: 44px 1fr; }
+    .cover h1 { font-size: 30px; }
+    .cover .conf { margin-left: 0; }
+  }
+  @media print { @page { size: A4; margin: 15mm; } .sec { break-inside: avoid-page; } }
+</style>
+</head>
+<body>
+<div class="doc">
+
+  <!-- ============ 封面帶 ============ -->
+  <header class="cover">
+    <div class="doctype">AI 工作季度檢視</div>
+    <h1>產出達標，但每週 6.1 小時<br>的損耗有明確回收路徑</h1>
+    <div class="meta">
+      <span>期間　<b>2026-04-16 至 07-14</b>（90 天）</span>
+      <span>評估標準　<b>v5.0（暫定）</b></span>
+      <span>資料　<b>四個 CLI 來源</b></span>
+      <span class="conf">內部文件・僅供本人</span>
+    </div>
+  </header>
+
+  <!-- ============ 執行摘要 ============ -->
+  <section class="exec">
+    <h2>執行摘要</h2>
+
+    <div class="finding">
+      <div class="no">1</div>
+      <div>
+        <div class="head">產出速率高於標準線：90 天交付 47 項有證據的產出，每活躍週 3.9 項。</div>
+        <div class="sup">程式碼 31、簡報 6、報告 5、部署 3、發布 skill 2。採證據下限計數，口頭完成不計。<span class="ref">Exhibit 1</span></div>
+      </div>
+    </div>
+
+    <div class="finding">
+      <div class="no">2</div>
+      <div>
+        <div class="head"><span class="neg">每週 6.1 小時損耗可回收</span>，其中一半來自同一件事：重複教學。</div>
+        <div class="sup">同組偏好 90 天內重教 47 次，且跨工具零共享：教過 Claude 的，Codex 又從零教一次。<span class="ref">Exhibit 4</span></div>
+      </div>
+    </div>
+
+    <div class="finding">
+      <div class="no">3</div>
+      <div>
+        <div class="head">平行開三家以上時，中斷率升至 <span class="neg">2.4 倍</span>，多工有帳面上的代價。</div>
+        <div class="sup">高平行時段中斷率 9.6%，單工時段 4.0%。成果標籤僅 Claude 有，信心中等。<span class="ref">Exhibit 3</span></div>
+      </div>
+    </div>
+
+    <div class="finding">
+      <div class="no">4</div>
+      <div>
+        <div class="head">9 項半成品沉睡中，其中 3 項完成度逾八成，只差臨門一腳。</div>
+        <div class="sup">實質寫入、未 commit、14 天未再訪。最接近完成的一項：18 頁簡報完成 15 頁。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 一、產出 ============ -->
+  <section class="sec">
+    <h2>一　產出</h2>
+    <div class="title">交付結構以程式碼為主力，但 16% 的實質開工從未走到交付</div>
+    <p class="intro">交付採證據下限計數（commit、輸出檔、部署與發布紀錄）。半成品以紅色並列，作為產出結構的反壓項。</p>
+
+    <div class="exhibit">
+      <div class="ex-head"><span class="ex-no">EXHIBIT 1</span><span class="ex-t">交付構成與半成品，90 天，件數</span></div>
+      <div class="hbars">
+        <div class="hbar"><span class="lab">程式碼（commit 為據）</span><span class="track"><i style="width:100%"></i></span><span class="val">31　66%</span></div>
+        <div class="hbar"><span class="lab">簡報</span><span class="track"><i style="width:19.4%"></i></span><span class="val">6　13%</span></div>
+        <div class="hbar"><span class="lab">分析報告</span><span class="track"><i style="width:16.1%"></i></span><span class="val">5　11%</span></div>
+        <div class="hbar"><span class="lab">部署上線</span><span class="track"><i style="width:9.7%"></i></span><span class="val">3　6%</span></div>
+        <div class="hbar"><span class="lab">發布之 skill</span><span class="track"><i style="width:6.5%"></i></span><span class="val">2　4%</span></div>
+        <div class="hbar neg"><span class="lab">半成品（未交付）</span><span class="track"><i style="width:29%"></i></span><span class="val">9　—</span></div>
+      </div>
+      <div class="src">資料來源：本機 transcripts 與 commit 紀錄；樣張為合成資料。半成品定義：實質寫入、未 commit、14 天未再訪。</div>
+    </div>
+  </section>
+
+  <!-- ============ 二、團隊 ============ -->
+  <section class="sec">
+    <h2>二　工具組合</h2>
+    <div class="title">Claude 承擔主力、Codex 次之；平行超過三家，中斷代價開始出現</div>
+    <p class="intro">四個工具依資料完整度以各自單位呈現，不做跨單位換算。發現 3 的中斷率對比見 Exhibit 3。</p>
+
+    <div class="exhibit">
+      <div class="ex-head"><span class="ex-no">EXHIBIT 2</span><span class="ex-t">每週工作量，13 週，各面板縱軸獨立</span></div>
+      <div class="panels">
+        <div class="panel">
+          <div class="p-t">Claude Code</div>
+          <div class="p-s">場次／週・資料完整</div>
+          <svg viewBox="0 0 220 96">
+            <line x1="0" y1="86" x2="220" y2="86" stroke="#E6E3DC" stroke-width="1"/>
+            <rect x="4" y="46.5" width="11" height="39.5" fill="#26231E" opacity=".8"/><rect x="20.5" y="41.4" width="11" height="44.6" fill="#26231E" opacity=".8"/><rect x="37" y="37.6" width="11" height="48.4" fill="#26231E" opacity=".8"/><rect x="53.5" y="32.5" width="11" height="53.5" fill="#26231E" opacity=".8"/><rect x="70" y="40.1" width="11" height="45.9" fill="#26231E" opacity=".8"/><rect x="86.5" y="35" width="11" height="51" fill="#26231E" opacity=".8"/><rect x="103" y="30" width="11" height="56" fill="#26231E" opacity=".8"/><rect x="119.5" y="36.3" width="11" height="49.7" fill="#26231E" opacity=".8"/><rect x="136" y="38.8" width="11" height="47.2" fill="#26231E" opacity=".8"/><rect x="152.5" y="33.7" width="11" height="52.3" fill="#26231E" opacity=".8"/><rect x="169" y="28.7" width="11" height="57.3" fill="#B08A2E"/><rect x="185.5" y="37.6" width="11" height="48.4" fill="#26231E" opacity=".8"/><rect x="202" y="40.1" width="11" height="45.9" fill="#26231E" opacity=".8"/>
+            <text x="174.5" y="21" font-size="11" font-weight="700" fill="#7E6119" text-anchor="middle" font-family="ui-sans-serif, system-ui">峰值 45</text>
+          </svg>
+        </div>
+        <div class="panel">
+          <div class="p-t">Codex</div>
+          <div class="p-s">場次／週・資料完整</div>
+          <svg viewBox="0 0 220 96">
+            <line x1="0" y1="86" x2="220" y2="86" stroke="#E6E3DC" stroke-width="1"/>
+            <rect x="4" y="63.1" width="11" height="22.9" fill="#26231E" opacity=".8"/><rect x="20.5" y="60.6" width="11" height="25.4" fill="#26231E" opacity=".8"/><rect x="37" y="58" width="11" height="28" fill="#26231E" opacity=".8"/><rect x="53.5" y="54.2" width="11" height="31.8" fill="#26231E" opacity=".8"/><rect x="70" y="61.8" width="11" height="24.2" fill="#26231E" opacity=".8"/><rect x="86.5" y="56.7" width="11" height="29.3" fill="#26231E" opacity=".8"/><rect x="103" y="52.9" width="11" height="33.1" fill="#B08A2E"/><rect x="119.5" y="59.3" width="11" height="26.7" fill="#26231E" opacity=".8"/><rect x="136" y="60.6" width="11" height="25.4" fill="#26231E" opacity=".8"/><rect x="152.5" y="55.5" width="11" height="30.5" fill="#26231E" opacity=".8"/><rect x="169" y="51.6" width="11" height="34.4" fill="#26231E" opacity=".8"/><rect x="185.5" y="58" width="11" height="28" fill="#26231E" opacity=".8"/><rect x="202" y="59.3" width="11" height="26.7" fill="#26231E" opacity=".8"/>
+            <text x="108.5" y="44" font-size="11" font-weight="700" fill="#7E6119" text-anchor="middle" font-family="ui-sans-serif, system-ui">峰值 27</text>
+          </svg>
+        </div>
+        <div class="panel">
+          <div class="p-t">Grok CLI</div>
+          <div class="p-s">提問數／週・部分資料</div>
+          <svg viewBox="0 0 220 96">
+            <line x1="0" y1="86" x2="220" y2="86" stroke="#E6E3DC" stroke-width="1"/>
+            <rect x="4" y="75.8" width="11" height="10.2" fill="#918C82"/><rect x="20.5" y="70.7" width="11" height="15.3" fill="#918C82"/><rect x="37" y="73.3" width="11" height="12.7" fill="#918C82"/><rect x="53.5" y="65.6" width="11" height="20.4" fill="#918C82"/><rect x="70" y="68.2" width="11" height="17.8" fill="#918C82"/><rect x="86.5" y="70.7" width="11" height="15.3" fill="#918C82"/><rect x="103" y="63.1" width="11" height="22.9" fill="#918C82"/><rect x="119.5" y="73.3" width="11" height="12.7" fill="#918C82"/><rect x="136" y="70.7" width="11" height="15.3" fill="#918C82"/><rect x="152.5" y="68.2" width="11" height="17.8" fill="#918C82"/><rect x="169" y="65.6" width="11" height="20.4" fill="#918C82"/><rect x="185.5" y="70.7" width="11" height="15.3" fill="#918C82"/><rect x="202" y="73.3" width="11" height="12.7" fill="#918C82"/>
+            <text x="108.5" y="52" font-size="10.5" fill="#5C5850" text-anchor="middle" font-family="ui-sans-serif, system-ui">單位不同，不與左二者跨比</text>
+          </svg>
+        </div>
+        <div class="panel">
+          <div class="p-t">Antigravity</div>
+          <div class="p-s">出席／週・僅出席訊號</div>
+          <svg viewBox="0 0 220 96">
+            <line x1="0" y1="86" x2="220" y2="86" stroke="#E6E3DC" stroke-width="1"/>
+            <circle cx="26" cy="78" r="4" fill="#918C82"/><circle cx="59" cy="78" r="4" fill="#918C82"/><circle cx="75.5" cy="78" r="4" fill="#918C82"/><circle cx="125" cy="78" r="4" fill="#918C82"/><circle cx="158" cy="78" r="4" fill="#918C82"/><circle cx="191" cy="78" r="4" fill="#918C82"/>
+            <circle cx="9.5" cy="78" r="4" fill="none" stroke="#C9C4BA" stroke-width="1.4"/><circle cx="42.5" cy="78" r="4" fill="none" stroke="#C9C4BA" stroke-width="1.4"/><circle cx="92" cy="78" r="4" fill="none" stroke="#C9C4BA" stroke-width="1.4"/><circle cx="108.5" cy="78" r="4" fill="none" stroke="#C9C4BA" stroke-width="1.4"/><circle cx="141.5" cy="78" r="4" fill="none" stroke="#C9C4BA" stroke-width="1.4"/><circle cx="174.5" cy="78" r="4" fill="none" stroke="#C9C4BA" stroke-width="1.4"/><circle cx="207.5" cy="78" r="4" fill="none" stroke="#C9C4BA" stroke-width="1.4"/>
+            <text x="110" y="52" font-size="10.5" fill="#918C82" text-anchor="middle" font-family="ui-sans-serif, system-ui">實心＝該週有出席</text>
+          </svg>
+        </div>
+      </div>
+      <div class="src">資料來源：各 CLI 本機紀錄；金色＝該面板峰值週。2026-04-20 至 07-13。</div>
+    </div>
+
+    <div class="exhibit">
+      <div class="ex-head"><span class="ex-no">EXHIBIT 3</span><span class="ex-t">中斷率：單工對高平行時段</span></div>
+      <svg viewBox="0 0 720 150" style="max-width:720px">
+        <line x1="150" y1="104" x2="700" y2="104" stroke="#E6E3DC" stroke-width="1"/>
+        <text x="0" y="42" font-size="13" fill="#26231E" font-family="ui-sans-serif, system-ui">單工時段</text>
+        <rect x="150" y="26" width="229" height="22" fill="#26231E" opacity=".8"/>
+        <text x="387" y="42" font-size="13" font-weight="600" fill="#26231E" font-family="ui-sans-serif, system-ui">4.0%　n=182</text>
+        <text x="0" y="86" font-size="13" fill="#26231E" font-family="ui-sans-serif, system-ui">高平行（≥3 家）</text>
+        <rect x="150" y="70" width="550" height="22" fill="#9C201A"/>
+        <text x="560" y="63" font-size="13" font-weight="600" fill="#9C201A" font-family="ui-sans-serif, system-ui">9.6%　n=64</text>
+        <g font-family="ui-sans-serif, system-ui">
+          <circle cx="435" cy="81" r="15" fill="none" stroke="#B08A2E" stroke-width="2.5"/>
+          <line x1="435" y1="96" x2="435" y2="118" stroke="#B08A2E" stroke-width="1.6"/>
+          <text x="443" y="136" font-size="13" class="callout-lab">差距 2.4×，即發現 3</text>
+        </g>
+      </svg>
+      <div class="src">資料來源：session-meta 中斷紀錄 × 跨工具時間重疊；成果標籤僅 Claude 有，信心中等。</div>
+    </div>
+
+    <div class="exhibit">
+      <div class="ex-head"><span class="ex-no">EXHIBIT 4</span><span class="ex-t">平行時段分布，週 × 時，同時開啟之工具數</span></div>
+      <div class="heat" id="heat"></div>
+      <div class="heat-x" id="heatx"></div>
+      <div class="src">顏色越深＝同時開越多家（0 至 4）。高平行集中於週二、三晚間，正是 Exhibit 3 高中斷率的時段。</div>
+    </div>
+  </section>
+
+  <!-- ============ 三、損耗 ============ -->
+  <section class="sec">
+    <h2>三　損耗</h2>
+    <div class="title"><span class="neg">每週 6.1 小時</span>流向三個已定位的破口，各有一個當週可完成的修法</div>
+
+    <div class="exhibit">
+      <div class="ex-head"><span class="ex-no">EXHIBIT 5</span><span class="ex-t">損耗構成與回收路徑，估計週時數（區間中值）</span></div>
+      <table class="btable">
+        <thead><tr><th style="width:17%">破口</th><th>機制</th><th class="num">週損耗</th><th style="width:31%">修法</th><th class="num">預期回收</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>重複教學</b></td>
+            <td>同組偏好 90 天重教 47 次（Claude 31／Codex 16），跨工具零共享</td>
+            <td class="num neg">3.1 小時</td>
+            <td>把重複前三名寫進共用指示檔，兩家共用一份</td>
+            <td class="num gain">約 2.5 小時</td>
+          </tr>
+          <tr>
+            <td><b>沉沒成本</b></td>
+            <td>該重開的 session 續凹；對照組顯示重開平均 11 分鐘解決</td>
+            <td class="num neg">1.8 小時</td>
+            <td>訂一條規則：同題三回合無進展即重開</td>
+            <td class="num gain">約 1.2 小時</td>
+          </tr>
+          <tr>
+            <td><b>深夜時段</b></td>
+            <td>23 時後 friction 為日間 2.7 倍，產出無對應增加</td>
+            <td class="num neg">1.2 小時</td>
+            <td>23 時後只跑批次任務，不做互動除錯</td>
+            <td class="num gain">約 0.8 小時</td>
+          </tr>
+          <tr class="foot">
+            <td colspan="5">證據：重複教學 <span class="ev">a3f8c2e1、0d97b3aa 等 47 場</span>・沉沒成本對照 <span class="ev">9b2d44f0 → 61c8e2d7</span>・深夜 friction <span class="ev">c7e1a90d 等 12 場</span>。信心：前二高、深夜中。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="bignums">
+      <div class="cell"><div class="v neg">6.1 小時</div><div class="k">每週損耗合計</div></div>
+      <div class="cell"><div class="v gold">4.5 小時</div><div class="k">三個修法的預期回收</div></div>
+      <div class="cell"><div class="v">3 項</div><div class="k">全部可在一週內完成</div></div>
+    </div>
+  </section>
+
+  <!-- ============ 四、達標與趨勢 ============ -->
+  <section class="sec">
+    <h2>四　達標與趨勢</h2>
+    <div class="title">六項標準通過兩項；趨勢基線再兩次產製後建立</div>
+    <p class="intro">通過判準公開於評估標準 v5.0，任何人可對自己的資料重跑驗證。未過門檻之項目不列示。</p>
+
+    <div class="certrow">
+      <div class="cert">
+        <div class="c-t">委派 <span class="ok">✓ 達標</span></div>
+        <div class="c-c">Task agent 42%（門檻 30%）・良率 71%（門檻 65%）・n=182</div>
+      </div>
+      <div class="cert">
+        <div class="c-t">交付節奏 <span class="ok">✓ 達標</span></div>
+        <div class="c-c">3.9 項／活躍週（門檻 2.0）・證據下限計・13 週</div>
+      </div>
+      <div class="cert pending">
+        <div class="c-t">趨勢基線</div>
+        <div class="c-c">需 3 份快照，目前 1／3。下兩次產製後起算，屆時本節加入歷次對比。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 建議行動 ============ -->
+  <section class="rec">
+    <div class="title">建議行動：先修重複教學，這一項就回收一半損耗</div>
+    <table class="btable" style="margin-top:20px">
+      <thead><tr><th style="width:6%">序</th><th>行動</th><th class="num">預期回收</th><th style="width:18%">完成時限</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>盤點重複指示前三名，寫進 Claude 與 Codex 的共用指示檔</td><td class="num gain">2.5 小時／週</td><td>本週</td></tr>
+        <tr><td>2</td><td>建立「三回合無進展即重開」的個人規則，貼在常用工作區</td><td class="num gain">1.2 小時／週</td><td>本週</td></tr>
+        <tr><td>3</td><td>檢視 3 項完成度逾八成的半成品，決定收尾或正式棄案</td><td class="num gain">一次性了結</td><td>兩週內</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>
+    <span>AI 工作季度檢視・2026-07-14 產製</span>
+    <span>樣張 C・合成資料，非任何真實使用者之紀錄</span>
+  </footer>
+</div>
+
+<script>
+(function () {
+  var days = ["一", "二", "三", "四", "五", "六", "日"];
+  var data = [
+    [0,0,0,0,0,0,0,1,2,3,3,2,1,1,2,3,3,2,2,1,2,3,2,1],
+    [0,0,0,0,0,0,0,1,2,3,4,3,1,1,2,3,4,3,2,2,3,4,3,1],
+    [0,0,0,0,0,0,0,1,2,3,4,3,1,1,3,3,3,3,2,2,3,4,3,2],
+    [0,0,0,0,0,0,0,1,2,3,3,2,1,1,2,3,3,2,2,1,2,3,2,1],
+    [0,0,0,0,0,0,0,1,2,2,3,2,1,1,2,2,3,2,1,1,2,2,1,1],
+    [0,0,0,0,0,0,0,0,1,1,2,2,1,1,1,2,2,1,1,1,1,2,1,0],
+    [0,0,0,0,0,0,0,0,1,1,1,1,1,0,1,1,2,1,1,1,1,1,1,0]
+  ];
+  var heat = document.getElementById("heat");
+  var alphas = [0, 0.15, 0.33, 0.58, 0.85];
+  data.forEach(function (row, d) {
+    var lab = document.createElement("div");
+    lab.className = "rowlab"; lab.textContent = days[d];
+    heat.appendChild(lab);
+    row.forEach(function (v, h) {
+      var c = document.createElement("div");
+      c.className = "hcell";
+      if (v > 0) c.style.background = "rgba(176,138,46," + alphas[v] + ")";
+      c.title = "週" + days[d] + " " + h + " 時・同時 " + v + " 家";
+      heat.appendChild(c);
+    });
+  });
+  var hx = document.getElementById("heatx");
+  hx.appendChild(document.createElement("span"));
+  for (var h = 0; h < 24; h++) {
+    var s = document.createElement("span");
+    s.textContent = (h % 6 === 0) ? h : "";
+    hx.appendChild(s);
+  }
+})();
+</script>
+</body>
+</html>

@@ -406,6 +406,39 @@ STRINGS = {
             "Session IDs are not exposed. Do not infer relative ranking against other users; "
             "no cohort baseline exists."
         ),
+        # --- V5 ledger ---
+        "ledger_exhibit_label": "EXHIBIT",
+        "ledger_source_prefix": "Source:",
+        "ledger_opening_kicker": "AI WORK LEDGER",
+        "ledger_output_title": "Output ledger",
+        "ledger_team_title": "Team ledger",
+        "ledger_source_card_full": "full data",
+        "ledger_source_card_partial": "partial data",
+        "ledger_source_card_presence": "presence only",
+        "ledger_not_detected": "not detected",
+        "ledger_degraded_note": (
+            "Overlap between sources is under 14 days; sources are shown "
+            "separately instead of compared."
+        ),
+        "ledger_common_window_note_template": (
+            "Cross-tool comparisons cover the common window {start} to "
+            "{end} ({days} days)."
+        ),
+        "ledger_weekly_share_title": "Weekly active minutes by tool",
+        "ledger_parallel_title": "Multi-tool parallel hours (weekday x hour)",
+        "ledger_matrix_title": "Projects by tool",
+        "ledger_h2h_title": "Claude vs Codex, common window",
+        "ledger_h2h_sessions": "sessions",
+        "ledger_h2h_active_days": "active days",
+        "ledger_h2h_tokens": "total tokens",
+        "ledger_h2h_median_dur": "median session length (min)",
+        "ledger_output_commits": "git commits",
+        "ledger_output_pushes": "git pushes",
+        "ledger_output_sessions_with_commits": "sessions that shipped commits",
+        "ledger_parse_errors_template": "{n} unparseable lines skipped",
+        "ledger_unknown_parse_errors_template": (
+            "{n} lines from unrecognized sources skipped"
+        ),
     },
     "zh_TW": {
         # --- Document chrome ---
@@ -765,6 +798,35 @@ STRINGS = {
             "非白名單上的專案名稱已匿名化，對話 ID 不對外揭露。"
             "請勿據此推論相對於其他使用者的位置：沒有 cohort 比較組。"
         ),
+        # --- V5 ledger ---
+        "ledger_exhibit_label": "圖表",
+        "ledger_source_prefix": "資料來源:",
+        "ledger_opening_kicker": "AI 工作總帳",
+        "ledger_output_title": "產出帳",
+        "ledger_team_title": "團隊帳",
+        "ledger_source_card_full": "完整資料",
+        "ledger_source_card_partial": "部分資料",
+        "ledger_source_card_presence": "僅偵測到活動",
+        "ledger_not_detected": "未偵測到",
+        "ledger_degraded_note": (
+            "工具間資料重疊期不足 14 天, 改為分開呈現不做比較。"
+        ),
+        "ledger_common_window_note_template": (
+            "跨工具比較僅涵蓋共同期間 {start} 至 {end}, 共 {days} 天。"
+        ),
+        "ledger_weekly_share_title": "各工具每週活躍分鐘數",
+        "ledger_parallel_title": "多工具並行時段 (星期 x 小時)",
+        "ledger_matrix_title": "專案 x 工具分佈",
+        "ledger_h2h_title": "Claude 與 Codex 共同期間對照",
+        "ledger_h2h_sessions": "場次",
+        "ledger_h2h_active_days": "活躍天數",
+        "ledger_h2h_tokens": "token 總量",
+        "ledger_h2h_median_dur": "session 長度中位數 (分)",
+        "ledger_output_commits": "git commit 數",
+        "ledger_output_pushes": "git push 數",
+        "ledger_output_sessions_with_commits": "有 commit 產出的 session 數",
+        "ledger_parse_errors_template": "略過 {n} 行無法解析",
+        "ledger_unknown_parse_errors_template": "另有 {n} 行來源無法辨識, 已略過",
     },
 }
 
