@@ -270,6 +270,37 @@ class ScanTranscriptsTests(unittest.TestCase):
             # Marked as orphan so downstream knows it lacks a parent transcript
             self.assertTrue(row.get("orphan_subagent_only"))
 
+    def test_orphan_subagent_tool_calls_refresh_derived_flags(self):
+        """An orphan row whose subagent made an MCP call must report
+        uses_mcp True (flags derive from the merged tool_counts), while
+        uses_subagent stays True by definition even though the name
+        predicate can't see the rotated-away parent's Agent call."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pdir = tmp / "projects" / "p"
+            pdir.mkdir(parents=True)
+            orphan_parent = "99999999-8888-7777-6666-555555555554"
+            (pdir / "agent-orphan2.jsonl").write_text(
+                json.dumps({"type": "assistant", "timestamp": "2026-04-18T00:00:03.000Z",
+                            "sessionId": orphan_parent,
+                            "message": {"role": "assistant", "model": "claude-haiku-4-5",
+                                        "content": [{"type": "tool_use",
+                                                     "name": "mcp__foo__bar",
+                                                     "input": {}}],
+                                        "usage": {"input_tokens": 5, "output_tokens": 7,
+                                                  "cache_creation_input_tokens": 0,
+                                                  "cache_read_input_tokens": 0}}}) + "\n"
+            )
+            out = tmp / "out.jsonl"
+            r = _run_scanner(tmp / "projects", out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertGreaterEqual(row["tool_counts"].get("mcp__foo__bar", 0), 1)
+            self.assertTrue(row["uses_mcp"])
+            self.assertTrue(row["uses_subagent"])
+
     def test_skips_non_transcript_files(self):
         """Files like skill-injections.jsonl must not produce rows."""
         with tempfile.TemporaryDirectory() as tmp:

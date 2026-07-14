@@ -636,6 +636,11 @@ def main():
             tc = Counter(orphan.get("tool_counts") or {})
             tc.update(usage["tool_counts"])
             orphan["tool_counts"] = dict(tc)
+            # Orphan rows merge subagent tool calls too — mark them so
+            # Pass 3 refreshes the derived uses_* flags exactly like it
+            # does for merged parent rows (uses_mcp must not stay False
+            # while tool_counts carries an mcp__ call).
+            orphan["_merged_subagent_tools"] = True
             orphan["git_commits"] = (orphan.get("git_commits") or 0) + usage["git_commits"]
             orphan["git_pushes"] = (orphan.get("git_pushes") or 0) + usage["git_pushes"]
             orphan["_assistant_output_pairs"] = (
@@ -686,6 +691,11 @@ def main():
                 row["segments"] = segments_and_duration(all_ts)[0] if all_ts else None
             if row.pop("_merged_subagent_tools", False):
                 row.update(_derive_tool_flags(row["tool_counts"]))
+                # Orphan rows ARE subagent output by definition — the name
+                # predicate can't see the (rotated-away) parent's Agent/Task
+                # call, so keep the flag truthful.
+                if row.get("orphan_subagent_only"):
+                    row["uses_subagent"] = True
             if (not row.get("orphan_subagent_only")) and \
                     row["assistant_message_count"] < args.min_assistant_msgs:
                 n_filtered += 1

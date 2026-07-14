@@ -94,6 +94,18 @@ class LeakCatalogTests(unittest.TestCase):
         leaks = compute_leaks(bs, rated, {"start": None, "end": None, "days": 0})
         self.assertEqual(leaks["items"], [])
 
+    def test_same_day_window_is_valid_not_suppressed(self):
+        # days == 0 with equal, parsable bounds is a legitimate first-day
+        # window: the weeks floor (1.0) is the denominator, and the 5+
+        # same-day failures must still produce a failed_session_burn item.
+        day = BASE.date().isoformat()
+        rated = ([_sess(f"f{i}", 0, "not_achieved") for i in range(5)]
+                 + [_sess(f"g{i}", 0, "fully_achieved") for i in range(3)])
+        bs = compute_blind_spots(rated, rated, [], [], BASE + timedelta(hours=8))
+        leaks = compute_leaks(bs, rated, {"start": day, "end": day, "days": 0})
+        types = [i["type"] for i in leaks["items"]]
+        self.assertIn("failed_session_burn", types)
+
     def test_failed_sessions_before_window_start_excluded_from_weekly_cost(self):
         # 5 not_achieved sessions inside the window, 5 not_achieved 200 days
         # earlier (well before window start) — occurrences/weekly_cost must
