@@ -320,7 +320,19 @@ Rest: body prose on the remaining leak-ledger items in `ledger.leaks.items`
 and any blind-spot findings in `blind_spots` whose `gate_passed` is true.
 The audit-discipline rules above apply here too — numbers before adjectives,
 no cheerleading. The praise-word lint (build-time, see Step 4) will warn on
-cheerleading vocabulary in this book same as any other.>
+cheerleading vocabulary in this book same as any other.
+
+Empty-catalog path: `ledger.leaks.items` can legitimately be empty on a
+valid run. When it is, do NOT invent a leak. Instead:
+  - If `blind_spots.ask_vs_ship.gate_passed` or
+    `blind_spots.interrupt_win_rate.gate_passed` is true, write the opener
+    from whichever of those passed (they are the leak ledger's secondary
+    findings, #6 and #7) — same numbers-before-adjectives rule applies.
+  - If neither passed either, omit the `# leak-ledger` book entirely.
+    The renderer (`_build_leak_ledger` in report_render.py) suppresses the
+    section gracefully when there is nothing to show, and falls back to
+    the locale-default title if the book is missing. Never fabricate a
+    leak or a number to fill the opener.>
 ```
 
 Pass the file to the build with `--ledger-narration /tmp/cc-autopsy/ledger-narration.md` (SELF builds only — HR never sees the ledger; see the audience table below).

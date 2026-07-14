@@ -22,8 +22,17 @@ class NormalizePromptTests(unittest.TestCase):
         self.assertEqual(normalize_prompt(None), "")
         self.assertEqual(normalize_prompt(42), "")
 
-    def test_truncated_to_200_chars(self):
-        self.assertEqual(len(normalize_prompt("a b " * 200)), 200)
+    def test_no_200_char_truncation_shared_prefix_stays_distinct(self):
+        # Two long instructions sharing a 200-char normalized prefix but
+        # differing after it must produce DIFFERENT normalized strings —
+        # identity uses the full string, so they would not merge into one
+        # repeated-instruction pattern.
+        shared_prefix = "always run the full pytest suite before claiming done and never skip hooks " * 3
+        a = normalize_prompt(shared_prefix + "then update the changelog")
+        b = normalize_prompt(shared_prefix + "then update the readme instead")
+        self.assertGreater(len(normalize_prompt(shared_prefix)), 200)
+        self.assertNotEqual(a, b)
+        self.assertEqual(a[:200], b[:200])
 
 
 class PromptSimilarityTests(unittest.TestCase):
@@ -91,6 +100,21 @@ class RepeatedInstructionTests(unittest.TestCase):
         out = bs_repeated_instructions(rows, cross)
         self.assertTrue(out["gate_passed"])
         self.assertIn("codex", out["metrics"]["patterns"][0]["sources"])
+
+    def test_claude_wasted_tokens_prices_only_claude_share(self):
+        # 3 claude + 2 codex occurrences of the same pattern.
+        rows = [_prompt_row(f"c{i}", BASE + timedelta(weeks=i % 3, days=i), INSTR)
+                for i in range(3)]
+        cross = [_prompt_row(f"x{i}", BASE + timedelta(weeks=i, hours=2), INSTR,
+                             source="codex", coverage="full") for i in range(2)]
+        out = bs_repeated_instructions(rows, cross)
+        self.assertTrue(out["gate_passed"])
+        p = out["metrics"]["patterns"][0]
+        self.assertEqual(p["occurrences"], 5)
+        # est_wasted_tokens uses (5-1) — all sources
+        self.assertEqual(p["est_wasted_tokens"], 4 * (len(p["exemplar"]) // 4))
+        # claude_wasted_tokens uses (3-1) — claude occurrences only
+        self.assertEqual(p["claude_wasted_tokens"], 2 * (len(p["exemplar"]) // 4))
 
     def test_presence_only_rows_ignored(self):
         cross = [{"session_id": f"a{i}", "start_time": (BASE + timedelta(weeks=i)).isoformat(),
@@ -237,6 +261,22 @@ class SwitchTaxTests(unittest.TestCase):
         rated, act, _ = self._fixture()
         out = bs_switch_tax(rated, act, [])
         self.assertFalse(out["gate_passed"])
+
+    def test_zero_duration_session_inside_multi_window_lands_in_multi_bucket(self):
+        rated, act, cross = self._fixture()
+        # The multi-source window for day 0 is [t+10min, t+60min) (codex
+        # starts 10 minutes after the claude act row and both run 60min).
+        # Replace the day-0 rated session with a 0-minute session starting
+        # AT t+10min, inside that window — its probe interval must not
+        # collapse to empty ([st, st)) and silently fall into the
+        # single-tool bucket.
+        t = BASE + timedelta(days=0, minutes=10)
+        rated[0] = _rated("m0", t, "not_achieved", dur=0,
+                          friction={"buggy_code": 1})
+        out = bs_switch_tax(rated, act, cross)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["multi"]["n"], 20)
+        self.assertEqual(out["metrics"]["single"]["n"], 20)
 
 
 class InterruptWinRateTests(unittest.TestCase):

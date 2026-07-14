@@ -264,13 +264,18 @@ def normalize_prompt(text):
     """Normalize an instruction for exact-match repetition detection.
 
     Deliberately exact-match only (v1): lowercased, punctuation folded to
-    spaces, whitespace collapsed, truncated. No fuzzy matching — zero false
-    positives beats higher recall for a tax the user will be told to fix.
+    spaces, whitespace collapsed. No truncation — identity uses the full
+    normalized string, so two long instructions that only differ after a
+    shared prefix must NOT collapse into one pattern (zero false positives
+    beats higher recall for a tax the user will be told to fix). Sources
+    already cap first_prompt at 500 chars upstream, so this never runs
+    unbounded. No fuzzy matching either. Display truncation (the ≤120-char
+    exemplar shown to the user) happens separately in bs_repeated_instructions.
     """
     if not isinstance(text, str):
         return ""
     t = _NORM_KEEP_RE.sub(" ", text.lower())
-    return _NORM_WS_RE.sub(" ", t).strip()[:200]
+    return _NORM_WS_RE.sub(" ", t).strip()
 
 
 def prompt_similarity(a_norm, b_norm):
@@ -2095,12 +2100,21 @@ def bs_repeated_instructions(claude_rows, cross_rows):
         for h in hits:
             raw_counts[h["raw"]] = raw_counts.get(h["raw"], 0) + 1
         exemplar = max(raw_counts, key=raw_counts.get)[:120]
+        # claude_wasted_tokens prices only the Claude share as a defensible
+        # lower bound: est_wasted_tokens counts occurrences across
+        # Claude+Codex+Grok, but non-Claude tokens have no Claude rate to
+        # honestly price at. This additive field feeds compute_leaks' USD
+        # figure; est_wasted_tokens (all-source) still drives the
+        # tokens/week display.
+        claude_occurrences = sum(1 for h in hits if h["source"] == "claude")
+        claude_wasted_tokens = max(claude_occurrences - 1, 0) * (len(exemplar) // 4)
         patterns.append({
             "exemplar": exemplar,
             "occurrences": len(hits),
             "weeks": len(weeks),
             "sources": sorted({h["source"] for h in hits}),
             "est_wasted_tokens": (len(hits) - 1) * (len(exemplar) // 4),
+            "claude_wasted_tokens": claude_wasted_tokens,
             "evidence": [h["sid"] for h in hits[:3]]})
     patterns.sort(key=lambda p: -p["occurrences"])
     if not patterns:
@@ -2213,7 +2227,11 @@ def bs_switch_tax(rated, activity_rows, cross_rows):
         st = _parse_dt(s.get("start"))
         if st is None:
             continue
-        en = st + timedelta(minutes=s.get("duration_min") or 0)
+        # Mirror _row_windows' 1-minute minimum: a 0-minute session would
+        # otherwise yield an empty [st, st) probe interval that never
+        # overlaps anything, always bucketing it single-tool even when it
+        # started inside a real multi-source window.
+        en = st + timedelta(minutes=max(s.get("duration_min") or 0, 1))
         hit = any(a < en and st < b for a, b in multi_iv)
         (multi if hit else single).append(s)
     if len(multi) < _BS_SWITCH_MIN_PER_BUCKET or len(single) < _BS_SWITCH_MIN_PER_BUCKET:
@@ -2431,17 +2449,48 @@ def compute_leaks(blind_spots, rated, window):
     """Leak catalog v1 (spec §3 book 3). Lower-bound accounting only:
     every dollar traces to tokens the evidence actually shows (audit
     discipline rule 4). Items are independently gated; 'top 3' is all
-    passers ranked by weekly cost."""
+    passers ranked by weekly cost.
+
+    Invariant: every USD/token number in leaks is summed over the same
+    date window its per-week denominator describes. `rated` spans the
+    session-meta pool (longer history than the transcript-derived
+    `window`), so costs must be restricted to sessions whose start date
+    falls inside `window` before dividing by `weeks` — otherwise the
+    numerator sums a longer history than the denominator describes,
+    inflating the weekly figure.
+    """
     weeks = round(max((window.get("days") or 0) / 7.0, 1.0), 1)
     items = []
+
+    win_start = _parse_dt(window.get("start")) if window.get("start") else None
+    win_end = _parse_dt(window.get("end")) if window.get("end") else None
+    if win_start is not None and win_end is not None:
+        # end is inclusive — compare calendar dates so a session starting
+        # anywhere on the end date counts as in-window.
+        win_start_d, win_end_d = win_start.date(), win_end.date()
+        in_window = []
+        for s in rated:
+            dt = _parse_dt(s.get("start"))
+            if dt is None:
+                continue
+            if win_start_d <= dt.date() <= win_end_d:
+                in_window.append(s)
+    else:
+        in_window = list(rated)
 
     bs1 = blind_spots.get("repeated_instructions") or {}
     if bs1.get("gate_passed"):
         pats = bs1["metrics"]["patterns"]
         tokens_week = int(sum(p["est_wasted_tokens"] for p in pats) / weeks)
+        # USD is priced from the Claude share only (claude_wasted_tokens) —
+        # a defensible lower bound. Cross-tool (Codex/Grok) tokens show up
+        # in weekly_tokens (the all-source display figure) but are never
+        # priced at the Claude input rate, since they weren't billed there.
+        claude_tokens_week = sum(
+            p.get("claude_wasted_tokens", 0) for p in pats) / weeks
         items.append({"type": "repeated_instructions",
                       "weekly_cost_usd": round(
-                          tokens_week / 1e6 * _dominant_input_rate(rated), 2),
+                          claude_tokens_week / 1e6 * _dominant_input_rate(rated), 2),
                       "weekly_tokens": tokens_week,
                       "occurrences": sum(p["occurrences"] for p in pats),
                       "evidence": pats[0]["evidence"]})
@@ -2451,16 +2500,18 @@ def compute_leaks(blind_spots, rated, window):
     if bs2.get("gate_passed"):
         pair_sids = [p["failed_sid"] for p in bs2["metrics"]["pairs"]]
         sunk_sids = set(pair_sids)
-        failed = [s for s in rated if s["sid"] in sunk_sids]
+        # Costed list is windowed; occurrences reflects only the costed
+        # (in-window) failed sessions, not the full sunk_cost pair count.
+        failed = [s for s in in_window if s["sid"] in sunk_sids]
         items.append({"type": "sunk_cost",
                       "weekly_cost_usd": round(
                           compute_api_equivalent_cost(failed) / weeks, 2),
                       "weekly_tokens": int(sum(s.get("total_tokens") or 0
                                                for s in failed) / weeks),
                       "occurrences": len(failed),
-                      "evidence": pair_sids[:3]})
+                      "evidence": [s["sid"] for s in failed[:3]]})
 
-    burn = [s for s in rated
+    burn = [s for s in in_window
             if s["outcome"] == "not_achieved" and s["sid"] not in sunk_sids]
     if len(burn) >= _BS_FAILED_BURN_MIN_SESSIONS:
         items.append({"type": "failed_session_burn",

@@ -648,7 +648,9 @@ def _build_leak_ledger(ledger, blind_spots, narration, locale, exhibit_no):
     leaks = (ledger or {}).get("leaks") or {}
     items = leaks.get("items") or []
     bs1, bs2 = bs.get("repeated_instructions") or {}, bs.get("sunk_cost") or {}
-    if not items and not bs1.get("gate_passed") and not bs2.get("gate_passed"):
+    bs6, bs7 = bs.get("ask_vs_ship") or {}, bs.get("interrupt_win_rate") or {}
+    if (not items and not bs1.get("gate_passed") and not bs2.get("gate_passed")
+            and not bs6.get("gate_passed") and not bs7.get("gate_passed")):
         return ""
     title = _first_line(narration.get("leak-ledger", "")) or t(locale, "ledger_leaks_title")
     prose = _rest_lines(narration.get("leak-ledger", ""))
@@ -692,7 +694,6 @@ def _build_leak_ledger(ledger, blind_spots, narration, locale, exhibit_no):
                             t(locale, "ledger_source_blind_spots"), locale))
     # secondary findings (#6, #7)
     sec = []
-    bs6, bs7 = bs.get("ask_vs_ship") or {}, bs.get("interrupt_win_rate") or {}
     if bs6.get("gate_passed"):
         g = bs6["metrics"]["top_gap"]
         sec.append(t(locale, "blindspot_askship_template").format(

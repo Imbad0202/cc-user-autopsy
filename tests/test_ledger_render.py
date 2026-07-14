@@ -405,6 +405,39 @@ class LeakLedgerRenderTests(unittest.TestCase):
         self.assertIn('id="ledger-leaks"', html)
         self.assertIn("c-blindspot", html)
 
+    def test_only_secondary_finding_gate_still_renders_section(self):
+        # Neither leaks items, bs1 (repeated_instructions), nor bs2
+        # (sunk_cost) pass — only ask_vs_ship (#6, a secondary finding)
+        # does. The section must still render (secondary findings live
+        # inside the leak ledger body per spec) with the secondary-findings
+        # block but no leak cards exhibit and no opener callouts.
+        from itertools import count
+        bs = dict(BS_ALL_FAILED, ask_vs_ship=BS_ALL_PASSED["ask_vs_ship"])
+        html = _build_leak_ledger(LEDGER_NO_LEAKS, bs, NARR, "en", count(1))
+        self.assertIn('id="ledger-leaks"', html)
+        from scripts.locales import STRINGS
+        self.assertIn(STRINGS["en"]["ledger_secondary_findings"], html)
+        self.assertIn("refactoring", html)
+        self.assertNotIn("c-blindspot", html)
+        self.assertNotIn("c-leak-cards", html)
+
+    def test_only_interrupt_win_rate_gate_still_renders_section(self):
+        from itertools import count
+        bs = dict(BS_ALL_FAILED, interrupt_win_rate=BS_ALL_PASSED["interrupt_win_rate"])
+        html = _build_leak_ledger(LEDGER_NO_LEAKS, bs, NARR, "en", count(1))
+        self.assertIn('id="ledger-leaks"', html)
+        from scripts.locales import STRINGS
+        self.assertIn(STRINGS["en"]["ledger_secondary_findings"], html)
+        self.assertNotIn("c-blindspot", html)
+        self.assertNotIn("c-leak-cards", html)
+
+    def test_all_gates_failed_still_suppresses_with_ask_ship_and_interrupt_off(self):
+        # Regression guard: BS_ALL_FAILED (nothing passes anything, leaks
+        # empty) must still yield no section — existing suppression case.
+        from itertools import count
+        html = _build_leak_ledger(LEDGER_NO_LEAKS, BS_ALL_FAILED, NARR, "en", count(1))
+        self.assertEqual(html, "")
+
 
 class GraveyardOpenerTests(unittest.TestCase):
     def test_gate_passing_shows_callout_and_exhibit_rows(self):

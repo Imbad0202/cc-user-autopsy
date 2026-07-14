@@ -205,6 +205,14 @@ session IDs.
 If no pattern reaches 5 occurrences across ≥3 distinct weeks, `gate_passed`
 is `False` and `reason` explains which floor wasn't met.
 
+Pricing rule: `compute_leaks` prices the repeated-instruction leak's dollar
+figure from `claude_wasted_tokens` (`max(claude_occurrences - 1, 0) *
+(len(exemplar) // 4)`) only — a defensible lower bound — while
+`weekly_tokens` in the leak-catalog item still reports the all-source
+`est_wasted_tokens` total, so cross-tool (Codex/Grok) repetition is visible
+in the token count without being priced at the Claude input rate it was
+never billed at.
+
 ### #2 — Sunk-cost sessions
 
 Rationale: a failed session that accelerated its output pace late (grinding
