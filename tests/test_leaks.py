@@ -234,6 +234,19 @@ class LeakCostUsdTests(unittest.TestCase):
         haiku_in = PRICING["claude-haiku-4-5"]["input"]
         self.assertEqual(_leak_cost_usd(sessions), round(haiku_in, 2))
 
+    def test_unattributed_session_mixed_with_known_widens_to_overall_floor(self):
+        # A zero-token Opus row plus a 1M-input-token row with NO
+        # model_counts: the unattributed tokens could be any model's, so
+        # the floor is the overall cheapest input rate, not Opus's.
+        sessions = [{"model_counts": {"claude-opus-4-6": 5},
+                     "input_tokens": 0, "output_tokens": 0,
+                     "cache_create_tokens": 0, "cache_read_tokens": 0},
+                    {"model_counts": {},
+                     "input_tokens": 1_000_000, "output_tokens": 0,
+                     "cache_create_tokens": 0, "cache_read_tokens": 0}]
+        cheapest_in = min(p["input"] for p in PRICING.values())
+        self.assertEqual(_leak_cost_usd(sessions), round(cheapest_in, 2))
+
     def test_unknown_model_prices_at_cheapest_rates_not_opus(self):
         sessions = [{"model_counts": {"unknown-model-x": 1},
                      "input_tokens": 100_000, "output_tokens": 10_000,

@@ -2720,11 +2720,16 @@ def _leak_cost_usd(sessions):
               for s in sessions
               for m in (s.get("model_counts") or {})}
     known = [PRICING[m] for m in models if m in PRICING]
+    # A session with no model_counts contributes tokens with NO attribution
+    # at all — its tokens could have come from any model, so the floor must
+    # widen to the overall cheapest even when other sessions name models.
+    any_unattributed = any(not s.get("model_counts") for s in sessions)
 
     def floor_rate(token_type, overall_cheapest):
         # Cheapest rate among the models observed in these sessions;
-        # unknown/absent models widen the floor to the overall cheapest.
-        if not known or len(known) < len(models):
+        # unknown or missing attribution widens the floor to the overall
+        # cheapest.
+        if not known or len(known) < len(models) or any_unattributed:
             return overall_cheapest
         return min(p[token_type] for p in known)
 
