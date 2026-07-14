@@ -423,9 +423,21 @@ class LeakLedgerRenderTests(unittest.TestCase):
         self.assertNotIn('id="ledger-leaks"', html)
 
     def test_leak_items_alone_render_even_without_opener_gates(self):
+        # Uses a leaks fixture with NO sunk_cost item (only
+        # repeated_instructions + failed_session_burn) so the sunk-cost
+        # opener — which since Fix 2 renders off leaks.items rather than
+        # bs2.gate_passed — stays legitimately silent here; this isolates
+        # "leak cards render independent of the repeated_instructions (bs1)
+        # opener gate" from the sunk-cost item-presence behavior covered by
+        # test_sunk_cost_item_present_renders_section_and_opener_with_item_occurrences.
         from itertools import count
+        ledger_no_sunk_item = dict(LEDGER, leaks={
+            "window_weeks": 7.1,
+            "items": [it for it in LEDGER_LEAKS["leaks"]["items"]
+                      if it["type"] != "sunk_cost"],
+        })
         bs = dict(BS_ALL_FAILED)
-        html = _build_leak_ledger(LEDGER_LEAKS, bs, NARR, "en", count(1))
+        html = _build_leak_ledger(ledger_no_sunk_item, bs, NARR, "en", count(1))
         self.assertIn('id="ledger-leaks"', html)
         self.assertNotIn("c-blindspot", html)
 
@@ -468,6 +480,39 @@ class LeakLedgerRenderTests(unittest.TestCase):
         from itertools import count
         html = _build_leak_ledger(LEDGER_NO_LEAKS, BS_ALL_FAILED, NARR, "en", count(1))
         self.assertEqual(html, "")
+
+    def test_sunk_cost_gate_passed_but_no_in_window_item_suppresses_section(self):
+        # Codex round 8 Fix 2: bs2 (sunk_cost) may pass its gate entirely on
+        # pairs OUTSIDE the ledger window — compute_leaks then emits no
+        # sunk_cost item. gate_passed=True must NOT be enough on its own:
+        # with leaks.items empty and bs1/bs6/bs7 all failed too, there is no
+        # in-window support for anything, so the whole section must be
+        # suppressed (no ledger-leaks section at all).
+        from itertools import count
+        bs = dict(BS_ALL_FAILED, sunk_cost=BS_ALL_PASSED["sunk_cost"])
+        html = _build_leak_ledger(LEDGER_NO_LEAKS, bs, NARR, "en", count(1))
+        self.assertEqual(html, "")
+        self.assertNotIn('id="ledger-leaks"', html)
+
+    def test_sunk_cost_item_present_renders_section_and_opener_with_item_occurrences(self):
+        # Codex round 8 Fix 2: when a sunk_cost item DOES exist in
+        # leaks.items (in-window support confirmed), the section renders
+        # and the sunk-cost opener shows the ITEM's occurrence count (the
+        # in-window failed-session count), not bs2["n"] (the all-time
+        # confirmed-pair count) — LEDGER_LEAKS' sunk_cost item has
+        # occurrences=3 while BS_ALL_PASSED's sunk_cost.n is also 3, so use
+        # a deliberately different n to prove the item count wins.
+        from itertools import count
+        bs = dict(BS_ALL_PASSED,
+                  sunk_cost=dict(BS_ALL_PASSED["sunk_cost"], n=99))
+        html = _build_leak_ledger(LEDGER_LEAKS, bs, NARR, "en", count(1))
+        self.assertIn('id="ledger-leaks"', html)
+        from scripts.locales import STRINGS
+        self.assertIn(STRINGS["en"]["blindspot_sunk_title"], html)
+        expected = STRINGS["en"]["blindspot_sunk_template"].format(n=3)
+        self.assertIn(expected, html)
+        not_expected = STRINGS["en"]["blindspot_sunk_template"].format(n=99)
+        self.assertNotIn(not_expected, html)
 
 
 class GraveyardOpenerTests(unittest.TestCase):

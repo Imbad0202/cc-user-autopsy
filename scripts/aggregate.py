@@ -2107,14 +2107,18 @@ def bs_repeated_instructions(claude_rows, cross_rows, window_start=None,
 
     Grouping key is `row["first_prompt_hash"]` when present (sha1 of the
     FULL, pre-truncation prompt text — Fix 3), else
-    normalize_prompt(first_prompt) as a legacy-row fallback. The hash is
-    computed by the scanners over the full prompt before they truncate
-    first_prompt to 500 chars for display, so two prompts sharing a 500-char
-    prefix but differing later no longer false-merge, and an identical long
-    Claude prompt still matches its truncated cross-tool copy. Not
-    outcome-guarded by design: a repeated instruction is a tax whether or
-    not the sessions succeed (see rubric). Wasted-token estimate is a lower
-    bound: only the retyped prompt text.
+    prompt_identity(first_prompt) computed here as a legacy-row fallback
+    (Fix 8: same sha1-of-normalized-text function, so legacy rows land in
+    the SAME hash space as hash-carrying rows instead of a separate
+    plaintext key — mixed-version inputs merge into one pattern instead of
+    splitting across two keys that never individually reach the occurrence
+    gate). The hash is computed by the scanners over the full prompt before
+    they truncate first_prompt to 500 chars for display, so two prompts
+    sharing a 500-char prefix but differing later no longer false-merge,
+    and an identical long Claude prompt still matches its truncated
+    cross-tool copy. Not outcome-guarded by design: a repeated instruction
+    is a tax whether or not the sessions succeed (see rubric). Wasted-token
+    estimate is a lower bound: only the retyped prompt text.
 
     window_start/window_end (aware datetimes, optional): when BOTH are
     given, rows whose parsed start_time falls outside [window_start,
@@ -2157,7 +2161,7 @@ def bs_repeated_instructions(claude_rows, cross_rows, window_start=None,
         if windowed and not (win_start_d <= dt.date() <= win_end_d):
             continue
         week_dt = dt.astimezone(tz) if tz is not None else dt
-        key = row.get("first_prompt_hash") or norm
+        key = row.get("first_prompt_hash") or prompt_identity(row.get("first_prompt"))
         occ.setdefault(key, []).append({
             "week": week_key(week_dt),
             "source": row.get("source") or "claude",

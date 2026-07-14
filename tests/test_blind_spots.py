@@ -267,13 +267,40 @@ class RepeatedInstructionTests(unittest.TestCase):
 
     def test_legacy_rows_without_hash_still_group_by_normalized_text(self):
         # Rows predating Fix 3 carry no first_prompt_hash at all — must fall
-        # back to normalize_prompt(first_prompt) grouping, unchanged.
+        # back to prompt_identity(first_prompt) grouping (Fix 8: same hash
+        # function as hash-carrying rows, just computed here instead of by
+        # the scanner), unchanged in observable behavior for an all-legacy
+        # input.
         rows = [_prompt_row(f"c{i}", BASE + timedelta(weeks=i % 3, days=i), INSTR)
                 for i in range(5)]
         self.assertNotIn("first_prompt_hash", rows[0])
         out = bs_repeated_instructions(rows, [])
         self.assertTrue(out["gate_passed"])
         self.assertEqual(out["metrics"]["patterns"][0]["occurrences"], 5)
+
+    def test_mixed_hash_and_legacy_rows_merge_into_one_pattern(self):
+        # Codex round 8 Fix 1 (P2): new rows carrying first_prompt_hash and
+        # legacy rows without it must land in the SAME hash space. Before
+        # the fix, hash rows grouped by sha1(first_prompt_hash) while
+        # legacy rows grouped by raw normalize_prompt(text) — two different
+        # key spaces — so 3 hash occurrences + 2 legacy occurrences of the
+        # IDENTICAL prompt split into two patterns of 3 and 2, neither
+        # reaching the 5-occurrence gate. After the fix both fall back to
+        # prompt_identity(text), the same sha1 space, and merge into one
+        # pattern of 5 spanning 3 weeks that passes the gate.
+        h = prompt_identity(INSTR)
+        hash_rows = [_prompt_row(f"h{i}", BASE + timedelta(weeks=i), INSTR,
+                                 prompt_hash=h) for i in range(3)]
+        legacy_rows = [_prompt_row(f"l{i}", BASE + timedelta(weeks=i, days=3), INSTR)
+                       for i in range(2)]
+        for r in legacy_rows:
+            self.assertNotIn("first_prompt_hash", r)
+        out = bs_repeated_instructions(hash_rows + legacy_rows, [])
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(len(out["metrics"]["patterns"]), 1)
+        p = out["metrics"]["patterns"][0]
+        self.assertEqual(p["occurrences"], 5)
+        self.assertGreaterEqual(p["weeks"], 3)
 
 
 FAIL_PROMPT = "refactor the payment reconciliation pipeline to stream batches"

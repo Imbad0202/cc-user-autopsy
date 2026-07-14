@@ -657,6 +657,35 @@ def _build_team_ledger(cross_llm, narration, locale="en", exhibit_no=None,
             f'{prose_html}{"".join(parts)}</section>')
 
 
+def _leak_section_available(blind_spots, ledger):
+    """Shared availability predicate for the leak ledger section (spec §10:
+    whole section suppressed when nothing passes a gate — no apologetic
+    placeholders) and the opening-band leak finding, which must not claim a
+    finding the leak section itself won't render.
+
+    bs2 (sunk_cost) is deliberately NOT gate-based here: compute_leaks may
+    pass bs2's gate entirely on pairs OUTSIDE the ledger window, in which
+    case it emits no `sunk_cost` item — gating availability on
+    bs2.gate_passed would then render a section (and an opening-band
+    finding) with zero in-window support. `items` non-empty already covers
+    the case where a sunk_cost item DID get emitted, so checking `items`
+    instead of bs2.gate_passed is both correct and sufficient.
+
+    bs1 (repeated_instructions) stays gate-based: its occurrences are
+    window-scoped inside the heuristic itself (bs_repeated_instructions
+    only counts in-window occurrences when a window is passed), so
+    gate_passed already implies in-window support without needing an items
+    check.
+    """
+    bs = blind_spots or {}
+    items = ((ledger or {}).get("leaks") or {}).get("items") or []
+    bs1 = bs.get("repeated_instructions") or {}
+    bs6 = bs.get("ask_vs_ship") or {}
+    bs7 = bs.get("interrupt_win_rate") or {}
+    return bool(items or bs1.get("gate_passed")
+                or bs6.get("gate_passed") or bs7.get("gate_passed"))
+
+
 def _build_leak_ledger(ledger, blind_spots, narration, locale, exhibit_no):
     """Leak ledger (spec §3 book 3), SELF only. Openers: repeated-instruction
     tax (#1) + sunk-cost (#2). Body: top-3 leak cards. Secondary findings:
@@ -666,11 +695,11 @@ def _build_leak_ledger(ledger, blind_spots, narration, locale, exhibit_no):
     bs = blind_spots or {}
     leaks = (ledger or {}).get("leaks") or {}
     items = leaks.get("items") or []
-    bs1, bs2 = bs.get("repeated_instructions") or {}, bs.get("sunk_cost") or {}
+    bs1 = bs.get("repeated_instructions") or {}
     bs6, bs7 = bs.get("ask_vs_ship") or {}, bs.get("interrupt_win_rate") or {}
-    if (not items and not bs1.get("gate_passed") and not bs2.get("gate_passed")
-            and not bs6.get("gate_passed") and not bs7.get("gate_passed")):
+    if not _leak_section_available(blind_spots, ledger):
         return ""
+    sunk_item = next((it for it in items if it.get("type") == "sunk_cost"), None)
     title = _first_line(narration.get("leak-ledger", "")) or t(locale, "ledger_leaks_title")
     prose = _rest_lines(narration.get("leak-ledger", ""))
     out = ['<section class="section" id="ledger-leaks">',
@@ -687,10 +716,11 @@ def _build_leak_ledger(ledger, blind_spots, narration, locale, exhibit_no):
                 n=p["occurrences"], weeks=p["weeks"],
                 sources=", ".join(p["sources"])),
             detail=esc(p["exemplar"])))
-    if bs2.get("gate_passed"):
+    if sunk_item is not None:
         out.append(_blindspot_callout(
             locale, "blindspot_sunk_title",
-            t(locale, "blindspot_sunk_template").format(n=bs2["n"])))
+            t(locale, "blindspot_sunk_template").format(
+                n=sunk_item["occurrences"])))
     # leak cards exhibit
     if items:
         cards = []
@@ -3574,19 +3604,19 @@ def render(
         cross_block = analysis.get("cross_llm") or {}
         blind_spots = analysis.get("blind_spots") or {}
         exhibit_no = count(1)
-        # include_leak_finding uses the SAME gate predicate _build_leak_ledger
-        # itself checks (spec §10: whole section suppressed when nothing
-        # passes a gate) to decide up front whether that section will render
-        # anything — without calling the builder itself, which would consume
-        # exhibit numbers out of order-of-appearance (leak exhibits must come
-        # after output/team exhibits in the shared counter, but the opening
-        # band renders before all three). Fix: an opening band must not claim
-        # a leak finding the leak section itself doesn't support.
-        leak_items = ((ledger_block or {}).get("leaks") or {}).get("items") or []
-        leak_gates_passed = any(
-            (blind_spots.get(k) or {}).get("gate_passed")
-            for k in ("repeated_instructions", "sunk_cost", "ask_vs_ship", "interrupt_win_rate"))
-        include_leak_finding = bool(leak_items or leak_gates_passed)
+        # include_leak_finding uses the SAME availability predicate
+        # _build_leak_ledger itself checks (spec §10: whole section
+        # suppressed when nothing passes a gate) to decide up front whether
+        # that section will render anything — without calling the builder
+        # itself, which would consume exhibit numbers out of
+        # order-of-appearance (leak exhibits must come after output/team
+        # exhibits in the shared counter, but the opening band renders
+        # before all three). Fix: an opening band must not claim a leak
+        # finding the leak section itself doesn't support. Shared via
+        # _leak_section_available() rather than duplicated inline so the
+        # two call sites can't drift (sunk_cost must be items-gated, not
+        # bs2.gate_passed-gated — see that helper's docstring).
+        include_leak_finding = _leak_section_available(blind_spots, ledger_block)
         if ledger_block:
             ledger_sections += _build_opening_band(
                 ledger_block, ledger_narration, locale,
