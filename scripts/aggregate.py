@@ -2068,15 +2068,24 @@ def _bs_result(id_, gate, metrics=None, n=0, reason=None, guarded=False):
             "metrics": metrics or {}, "reason": reason}
 
 
-def bs_repeated_instructions(claude_rows, cross_rows):
+def bs_repeated_instructions(claude_rows, cross_rows, window_start=None, window_end=None):
     """Spec §5 #1 — repeated-instruction tax.
 
     Exact-match on normalize_prompt(first_prompt) across Claude + full/
     partial cross-LLM rows. Not outcome-guarded by design: a repeated
     instruction is a tax whether or not the sessions succeed (see rubric).
     Wasted-token estimate is a lower bound: only the retyped prompt text.
+
+    window_start/window_end (aware datetimes, optional): when BOTH are
+    given, rows whose parsed start_time falls outside [window_start,
+    window_end] are skipped entirely — codex/grok history extending beyond
+    the transcript-derived ledger window must not contribute occurrences,
+    since compute_leaks divides all-time totals by the window's weeks and
+    the render claims "N occurrences in window". Either bound alone (or
+    both None) disables windowing, matching prior behavior.
     """
     occ = {}
+    windowed = window_start is not None and window_end is not None
     for row in list(claude_rows) + list(cross_rows):
         if row.get("coverage") == "presence_only":
             continue
@@ -2085,6 +2094,8 @@ def bs_repeated_instructions(claude_rows, cross_rows):
             continue
         dt = _parse_dt(row.get("start_time"))
         if dt is None:
+            continue
+        if windowed and not (window_start <= dt <= window_end):
             continue
         occ.setdefault(norm, []).append({
             "week": week_key(dt),
@@ -2219,7 +2230,19 @@ def bs_switch_tax(rated, activity_rows, cross_rows):
     """Spec §5 #3 — switch tax. Outcome labels exist only for Claude, so
     both buckets are Claude sessions; concurrency is measured against all
     full/partial sources. Symmetric comparison — no counterexample guard."""
-    multi_iv = _multi_source_intervals(activity_rows, cross_rows)
+    # Meta-only rated sessions (transcript rotated away) still exist in the
+    # scoring pool but may be missing from activity_rows entirely — without
+    # synthesizing minimal Claude activity for them, their Claude-side
+    # presence never reaches _multi_source_intervals, so real overlaps with
+    # Codex/Grok go undetected and those sessions are mis-bucketed
+    # single-tool. _row_windows' missing-segments fallback (start+duration)
+    # and 1-minute minimum handle these synthesized rows the same as any
+    # other activity row.
+    activity_sids = {r.get("session_id") for r in activity_rows}
+    extra = [{"session_id": s["sid"], "start_time": s["start"],
+              "duration_minutes": s.get("duration_min") or 0}
+             for s in rated if s["sid"] not in activity_sids]
+    multi_iv = _multi_source_intervals(list(activity_rows) + extra, cross_rows)
     if not multi_iv:
         return _bs_result("switch_tax", False, reason="no multi-source windows")
     multi, single = [], []
@@ -2282,6 +2305,7 @@ _WRITE_TOOLS = ("Edit", "Write", "NotebookEdit")
 _BS_ASKSHIP_MIN_RATED = 20
 _BS_ASKSHIP_MIN_SHIPPED = 5
 _BS_NONSHIP_GOALS = {"information_query", "exploration", "quick_question"}
+_BS_ASKSHIP_MIN_GAP_PP = 10  # provisional v1: below this, "gap" is noise
 
 
 def bs_graveyard(activity_rows, window_end):
@@ -2329,36 +2353,54 @@ def bs_graveyard(activity_rows, window_end):
 def bs_ask_vs_ship(rated):
     """Spec §5 #6 — goal-category share of asks vs share of sessions that
     shipped (git_commits > 0). Non-shipping categories are excluded from
-    flagging: asking questions is not a leak (structural guard)."""
+    flagging: asking questions is not a leak (structural guard).
+
+    Shares are SESSION-MEMBERSHIP shares, not goal-tag-count shares: for
+    each category, ask_share_pct = 100 * (# rated sessions whose goal_cats
+    contains the category) / len(rated); ship_share_pct = 100 * (# shipped
+    sessions containing it) / shipped_sessions. A session with multiple
+    categories counts once per category it contains — this matches what the
+    rendered locale text claims ("% of asks / % of shipped sessions"),
+    whereas counting goal-tag occurrences would let a category present in
+    every shipped session display as an arbitrary percentage unrelated to
+    session counts.
+    """
     if len(rated) < _BS_ASKSHIP_MIN_RATED:
         return _bs_result("ask_vs_ship", False, n=len(rated),
                           reason="fewer than 20 scored sessions")
     ask, ship = {}, {}
     shipped_sessions = 0
     for s in rated:
-        cats = s.get("goal_cats") or {}
+        cats = set((s.get("goal_cats") or {}).keys())
         shipped = (s.get("git_commits") or 0) > 0
         if shipped:
             shipped_sessions += 1
-        for c, n in cats.items():
-            ask[c] = ask.get(c, 0) + n
+        for c in cats:
+            ask[c] = ask.get(c, 0) + 1
             if shipped:
-                ship[c] = ship.get(c, 0) + n
-    total_ask, total_ship = sum(ask.values()), sum(ship.values())
-    if not total_ask or shipped_sessions < _BS_ASKSHIP_MIN_SHIPPED:
+                ship[c] = ship.get(c, 0) + 1
+    if not ask or shipped_sessions < _BS_ASKSHIP_MIN_SHIPPED:
         return _bs_result("ask_vs_ship", False, n=len(rated),
                           reason="facets or shipped sessions below floor")
     gaps = []
     for c, n in ask.items():
         if c in _BS_NONSHIP_GOALS:
             continue
-        a = 100 * n / total_ask
-        p = 100 * ship.get(c, 0) / total_ship if total_ship else 0.0
+        a = 100 * n / len(rated)
+        p = 100 * ship.get(c, 0) / shipped_sessions if shipped_sessions else 0.0
         gaps.append((a - p, c, a, p))
     if not gaps:
         return _bs_result("ask_vs_ship", False, n=len(rated),
                           reason="no shippable goal categories present")
     gap_pp, cat, a, p = max(gaps)
+    if gap_pp < _BS_ASKSHIP_MIN_GAP_PP:
+        return _bs_result("ask_vs_ship", False, n=len(rated),
+                          metrics={"top_gap": {"category": cat,
+                                               "ask_share_pct": round(a, 1),
+                                               "ship_share_pct": round(p, 1),
+                                               "gap_pp": round(gap_pp, 1)},
+                                   "shipped_sessions": shipped_sessions},
+                          reason="no category gap >= 10pp")
     return _bs_result("ask_vs_ship", True, n=len(rated),
                       metrics={"top_gap": {"category": cat,
                                            "ask_share_pct": round(a, 1),
@@ -2503,13 +2545,18 @@ def compute_leaks(blind_spots, rated, window):
         # Costed list is windowed; occurrences reflects only the costed
         # (in-window) failed sessions, not the full sunk_cost pair count.
         failed = [s for s in in_window if s["sid"] in sunk_sids]
-        items.append({"type": "sunk_cost",
-                      "weekly_cost_usd": round(
-                          compute_api_equivalent_cost(failed) / weeks, 2),
-                      "weekly_tokens": int(sum(s.get("total_tokens") or 0
-                                               for s in failed) / weeks),
-                      "occurrences": len(failed),
-                      "evidence": [s["sid"] for s in failed[:3]]})
+        # The gate may have passed entirely on out-of-window pairs — only
+        # emit the card when at least one failed session actually falls
+        # inside the window, otherwise a $0.00 / 0 occurrences / no-evidence
+        # card would render for a finding with no in-window support.
+        if failed:
+            items.append({"type": "sunk_cost",
+                          "weekly_cost_usd": round(
+                              compute_api_equivalent_cost(failed) / weeks, 2),
+                          "weekly_tokens": int(sum(s.get("total_tokens") or 0
+                                                   for s in failed) / weeks),
+                          "occurrences": len(failed),
+                          "evidence": [s["sid"] for s in failed[:3]]})
 
     burn = [s for s in in_window
             if s["outcome"] == "not_achieved" and s["sid"] not in sunk_sids]
@@ -2526,13 +2573,16 @@ def compute_leaks(blind_spots, rated, window):
     return {"window_weeks": weeks, "items": items[:3]}
 
 
-def compute_blind_spots(sessions, rated, activity_rows, cross_rows, window_end):
+def compute_blind_spots(sessions, rated, activity_rows, cross_rows, window_end,
+                        window_start=None):
     """Phase 2 blind-spot engine (spec §5). Additive analysis-data block;
     every heuristic self-gates and the whole entry ships regardless so the
     renderer (and later phases) can see WHY something was suppressed."""
     return {
         "schema_version": 1,
-        "repeated_instructions": bs_repeated_instructions(activity_rows, cross_rows),
+        "repeated_instructions": bs_repeated_instructions(
+            activity_rows, cross_rows,
+            window_start=window_start, window_end=window_end),
         "sunk_cost": bs_sunk_cost(rated),
         "switch_tax": bs_switch_tax(rated, activity_rows, cross_rows),
         "graveyard": bs_graveyard(activity_rows, window_end),
@@ -2744,8 +2794,10 @@ def main():
     all_starts = [d for d in (_parse_dt(r.get("start_time"))
                               for r in activity_rows.values()) if d]
     window_end = max(all_starts) if all_starts else datetime.now().astimezone()
+    window_start = min(all_starts) if all_starts else None
     final["blind_spots"] = compute_blind_spots(
-        sessions, rated, list(activity_rows.values()), cross_rows, window_end)
+        sessions, rated, list(activity_rows.values()), cross_rows, window_end,
+        window_start=window_start)
     final["ledger"]["leaks"] = compute_leaks(
         final["blind_spots"], rated, final["ledger"]["window"])
 

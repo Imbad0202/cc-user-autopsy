@@ -171,7 +171,9 @@ time without a real-data tuning pass; expect them to move once the engine
 has run against actual usage.
 
 Shared building blocks: `normalize_prompt()` (lowercase, punctuation folded
-to spaces, whitespace collapsed, truncated to 200 chars), `prompt_similarity()`
+to spaces, whitespace collapsed — the full normalized string is kept for
+identity, no truncation; only the displayed exemplar is truncated, to 120
+chars), `prompt_similarity()`
 (token-set Jaccard), `week_key()` (ISO `YYYY-Www`), and the counterexample
 guard `counterexample_similar(rate_flagged, rate_good)` — trips (returns
 `True`, suppressing the finding) when the flagged behavior occurs in
@@ -356,11 +358,17 @@ gap-flagging by design — asking a question is not a leak. This is the
 |-----------|-------------------------|
 | Minimum rated sessions | `_BS_ASKSHIP_MIN_RATED = 20` |
 | Minimum shipped sessions | `_BS_ASKSHIP_MIN_SHIPPED = 5` |
+| Minimum gap to flag | `_BS_ASKSHIP_MIN_GAP_PP = 10` percentage points |
 
+`ask_share_pct` / `ship_share_pct` are **session-membership shares**: for
+each category, the percent of rated (or shipped) sessions whose
+`goal_cats` contains that category — a session with multiple categories
+counts once per category it contains, not once per goal-tag occurrence.
 `gap_pp = ask_share_pct - ship_share_pct` for each shippable category;
 `metrics.top_gap` reports the largest gap. If there are zero shippable
-categories present after exclusion, or the rated/shipped floors aren't met,
-`gate_passed` is `False`.
+categories present after exclusion, the rated/shipped floors aren't met,
+or the largest gap is below `_BS_ASKSHIP_MIN_GAP_PP`, `gate_passed` is
+`False`.
 
 ### #7 — Interrupt win-rate
 

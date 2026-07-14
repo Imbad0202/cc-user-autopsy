@@ -138,6 +138,44 @@ class RepeatedInstructionTests(unittest.TestCase):
         self.assertTrue(out["gate_passed"])
         self.assertEqual(out["metrics"]["patterns"][0]["occurrences"], 5)
 
+    def test_out_of_window_occurrences_excluded_fails_gate(self):
+        # 3 occurrences inside a narrow window (< 3 distinct weeks) + 4
+        # occurrences outside the window: without windowing this would pass
+        # the gate (7 occurrences, plenty of weeks); with window_start/end
+        # supplied, only the 3 in-window ones count and the window itself
+        # spans < 3 weeks, so the gate must fail.
+        window_start = BASE
+        window_end = BASE + timedelta(days=10)
+        in_window = [_prompt_row(f"c{i}", BASE + timedelta(days=i * 3), INSTR)
+                     for i in range(3)]  # all inside [BASE, BASE+10d]
+        out_of_window = [_prompt_row(f"o{i}", BASE + timedelta(weeks=10 + i),
+                                     INSTR) for i in range(4)]
+        out = bs_repeated_instructions(
+            in_window, out_of_window,
+            window_start=window_start, window_end=window_end)
+        self.assertFalse(out["gate_passed"])
+
+    def test_all_in_window_variant_passes(self):
+        # Same total occurrence count (7) but every row falls inside a wide
+        # enough window spanning >=3 distinct weeks -> gate passes.
+        window_start = BASE
+        window_end = BASE + timedelta(weeks=6)
+        rows = [_prompt_row(f"c{i}", BASE + timedelta(weeks=i), INSTR)
+                for i in range(7)]
+        out = bs_repeated_instructions(
+            rows, [], window_start=window_start, window_end=window_end)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["patterns"][0]["occurrences"], 7)
+
+    def test_none_window_bounds_keep_prior_behavior(self):
+        # Existing tests pass window bounds as None implicitly (positional
+        # calls with only 2 args) — explicit None must behave identically.
+        rows = [_prompt_row(f"c{i}", BASE + timedelta(weeks=i % 3, days=i), INSTR)
+                for i in range(5)]
+        out = bs_repeated_instructions(rows, [], window_start=None, window_end=None)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["patterns"][0]["occurrences"], 5)
+
 
 FAIL_PROMPT = "refactor the payment reconciliation pipeline to stream batches"
 RETRY_PROMPT = "refactor the payment reconciliation pipeline to stream batches cleanly"
@@ -229,13 +267,18 @@ def _codex_act(sid, start, dur=60):
 
 
 class SwitchTaxTests(unittest.TestCase):
-    def _fixture(self):
+    def _fixture(self, drop_activity_for=()):
+        """drop_activity_for: set of multi-bucket indices (0..19) whose
+        activity row should be OMITTED — simulates a rated session whose
+        transcript was rotated away (meta-only), still present in `rated`
+        but missing from `activity_rows`."""
         rated, act, cross = [], [], []
         for i in range(20):  # multi-tool mornings: codex runs alongside
             t = BASE + timedelta(days=i)
             rated.append(_rated(f"m{i}", t, "not_achieved" if i % 2 else
                                 "fully_achieved", friction={"buggy_code": 1}))
-            act.append(_act_row(f"m{i}", t))
+            if i not in drop_activity_for:
+                act.append(_act_row(f"m{i}", t))
             cross.append(_codex_act(f"x{i}", t + timedelta(minutes=10)))
         for i in range(20):  # single-tool evenings
             t = BASE + timedelta(days=i, hours=10)
@@ -273,6 +316,19 @@ class SwitchTaxTests(unittest.TestCase):
         t = BASE + timedelta(days=0, minutes=10)
         rated[0] = _rated("m0", t, "not_achieved", dur=0,
                           friction={"buggy_code": 1})
+        out = bs_switch_tax(rated, act, cross)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["multi"]["n"], 20)
+        self.assertEqual(out["metrics"]["single"]["n"], 20)
+
+    def test_meta_only_rated_session_still_lands_in_multi_bucket(self):
+        # m0's rated session exists in `rated` but its activity row is
+        # missing entirely (transcript rotated away) — bs_switch_tax must
+        # synthesize minimal Claude activity from the rated session so it
+        # still overlaps the codex row and lands in the multi bucket,
+        # rather than silently falling into single-tool.
+        rated, act, cross = self._fixture(drop_activity_for={0})
+        self.assertEqual(len(act), 39)  # 20 multi - 1 dropped + 20 single
         out = bs_switch_tax(rated, act, cross)
         self.assertTrue(out["gate_passed"])
         self.assertEqual(out["metrics"]["multi"]["n"], 20)
@@ -360,6 +416,8 @@ def _goal_sess(sid, cats, commits=0):
 
 class AskVsShipTests(unittest.TestCase):
     def test_gap_detected(self):
+        # 10+10 fixture: feature_implementation is asked in 10/20 sessions
+        # (session-membership share = 50.0%), ships in 0 -> gap 50pp.
         rated = ([_goal_sess(f"a{i}", {"feature_implementation": 1})
                   for i in range(10)]
                  + [_goal_sess(f"b{i}", {"documentation_update": 1},
@@ -368,6 +426,7 @@ class AskVsShipTests(unittest.TestCase):
         self.assertTrue(out["gate_passed"])
         self.assertEqual(out["metrics"]["top_gap"]["category"],
                          "feature_implementation")
+        self.assertEqual(out["metrics"]["top_gap"]["ask_share_pct"], 50.0)
         self.assertEqual(out["metrics"]["top_gap"]["ship_share_pct"], 0.0)
 
     def test_nonshipping_categories_never_flagged(self):
@@ -384,6 +443,38 @@ class AskVsShipTests(unittest.TestCase):
         rated = [_goal_sess(f"a{i}", {"bug_fix": 1}) for i in range(25)]
         out = bs_ask_vs_ship(rated)  # zero commits anywhere
         self.assertFalse(out["gate_passed"])
+
+    def test_multi_category_session_ships_100pct_for_both_categories(self):
+        # A session tagged with two categories, committed, counts once per
+        # category it contains for BOTH ask and ship shares — a session
+        # with multiple categories must not silently inflate one category's
+        # share past 100% or leave the other one uncounted.
+        rated = [_goal_sess(f"s{i}", {"bug_fix": 1, "refactoring": 1},
+                            commits=1) for i in range(20)]
+        out = bs_ask_vs_ship(rated)
+        # Identical ask/ship distributions for both categories -> gap 0,
+        # which now also fails the min-gap gate (Fix 3) — confirms shares
+        # are computed correctly (100/100, not >100%) even though the gate
+        # itself doesn't pass here.
+        self.assertFalse(out["gate_passed"])
+
+    def test_identical_distributions_fail_min_gap_gate(self):
+        # Same category mix asked and shipped -> gap_pp == 0, must not pass
+        # (no "100% vs 100%" nonsense finding).
+        rated = [_goal_sess(f"s{i}", {"bug_fix": 1}, commits=1)
+                 for i in range(20)]
+        out = bs_ask_vs_ship(rated)
+        self.assertFalse(out["gate_passed"])
+        self.assertEqual(out["reason"], "no category gap >= 10pp")
+
+    def test_fifty_point_gap_still_passes(self):
+        rated = ([_goal_sess(f"a{i}", {"feature_implementation": 1})
+                  for i in range(10)]
+                 + [_goal_sess(f"b{i}", {"documentation_update": 1},
+                               commits=1) for i in range(10)])
+        out = bs_ask_vs_ship(rated)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["top_gap"]["gap_pp"], 50.0)
 
 
 import json as _json

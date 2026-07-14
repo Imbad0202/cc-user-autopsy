@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from scripts.aggregate import (
-    bs_repeated_instructions, compute_blind_spots, compute_leaks)
+    bs_repeated_instructions, bs_sunk_cost, compute_blind_spots, compute_leaks)
 
 BASE = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
 WINDOW = {"start": "2026-06-01", "end": "2026-07-11", "days": 40}
@@ -17,6 +17,28 @@ def _sess(sid, days, outcome, tokens=40000, prompt="tune the ingestion retry log
             "cache_create_tokens": 0, "cache_read_tokens": 0,
             "model_counts": {"claude-opus-4-6": 10}, "goal_cats": {},
             "git_commits": 0, "interrupts": 0, "friction_counts": {}}
+
+
+_SUNK_FAIL_PROMPT = "refactor the payment reconciliation pipeline to stream batches"
+_SUNK_RETRY_PROMPT = ("refactor the payment reconciliation pipeline to stream "
+                      "batches cleanly")
+
+
+def _sunk_sess(sid, days, outcome, prompt=_SUNK_FAIL_PROMPT, accel=None,
+               dur=120, tokens=50000):
+    return {"sid": sid, "start": (BASE + timedelta(days=days)).isoformat(),
+            "outcome": outcome, "first_prompt": prompt, "token_accel": accel,
+            "duration_min": dur, "total_tokens": tokens,
+            "input_tokens": tokens - 5000, "output_tokens": 5000,
+            "cache_create_tokens": 0, "cache_read_tokens": 0,
+            "model_counts": {"claude-opus-4-6": 10}}
+
+
+def _sunk_pair(i, base_days):
+    failed = _sunk_sess(f"f{i}", base_days + 2 * i, "not_achieved", accel=2.0)
+    retry = _sunk_sess(f"r{i}", base_days + 2 * i + 1, "fully_achieved",
+                       prompt=_SUNK_RETRY_PROMPT, accel=1.0, dur=30, tokens=8000)
+    return [failed, retry]
 
 
 class LeakCatalogTests(unittest.TestCase):
@@ -107,6 +129,24 @@ class LeakCatalogTests(unittest.TestCase):
         all_source_cost = round(
             (p["est_wasted_tokens"] / weeks) / 1e6 * 15.0, 2)
         self.assertLess(item["weekly_cost_usd"], all_source_cost)
+
+    def test_sunk_cost_pairs_before_window_produce_no_card(self):
+        # 3 confirmed sunk-cost pairs, all 200 days before WINDOW's start —
+        # the gate passes on these out-of-window pairs, but the windowed
+        # failed list compute_leaks builds is then empty. No sunk_cost item
+        # should be emitted (no $0.00 / 0 occurrences / no-evidence card).
+        base_days = -200
+        rated = [s for i in range(3) for s in _sunk_pair(i, base_days)]
+        # guard needs a fully_achieved population without acceleration,
+        # also placed well before the window so it doesn't interfere.
+        rated += [_sunk_sess(f"g{i}", base_days + 40 + i, "fully_achieved",
+                             prompt=f"unrelated task {i} entirely", accel=1.0)
+                  for i in range(6)]
+        bs = compute_blind_spots(rated, rated, [], [], BASE + timedelta(days=40))
+        self.assertTrue(bs["sunk_cost"]["gate_passed"])
+        leaks = compute_leaks(bs, rated, WINDOW)
+        types = [i["type"] for i in leaks["items"]]
+        self.assertNotIn("sunk_cost", types)
 
 
 if __name__ == "__main__":
