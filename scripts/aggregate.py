@@ -134,7 +134,15 @@ def _parse_dt(s):
     different calendar-day/hour buckets and silently miss each other. Every
     value leaving this helper is therefore also normalized to ONE consistent
     zone (system local — matches what the adapters emit) so all
-    calendar-bucketing downstream compares apples to apples."""
+    calendar-bucketing downstream compares apples to apples.
+
+    Note: this is OS-local, not the pipeline's configurable --tz (see
+    detect_tz()/main()) — _parse_dt is a free function called from many
+    sites inside compute_cross_llm without a tz parameter threaded through.
+    In the default ("auto") case both resolve to the same zone; a mismatch
+    is only possible if a user explicitly overrides --tz to a different
+    zone than their OS. Acceptable for this fix's scope; revisit if
+    --tz-aware cross-LLM bucketing is ever needed."""
     if not s:
         return None
     try:
@@ -1770,14 +1778,21 @@ def compute_cross_llm(claude_rows, cross_rows):
             date.fromisoformat(common_window["end"]) + timedelta(days=1), time.min,
             tzinfo=timezone.utc)
 
+    def _clip(s, e):
+        """Clip window (s, e) to [clip_start, clip_end]; None if it falls
+        fully outside. clip_start is None (no common_window) means no clip."""
+        if clip_start is None:
+            return (s, e)
+        cs, ce = max(s, clip_start), min(e, clip_end)
+        return (cs, ce) if ce > cs else None
+
     weekly = {}
     for r in comparable:
         for s, e in windows[id(r)]:
-            if clip_start is not None:
-                cs, ce = max(s, clip_start), min(e, clip_end)
-                if ce <= cs:
-                    continue  # window falls fully outside the common window
-                s, e = cs, ce
+            clipped = _clip(s, e)
+            if clipped is None:
+                continue
+            s, e = clipped
             wk = f"{s.isocalendar()[0]}-W{s.isocalendar()[1]:02d}"
             weekly.setdefault(wk, {}).setdefault(r["source"], 0)
             weekly[wk][r["source"]] += round((e - s).total_seconds() / 60)
@@ -1794,17 +1809,12 @@ def compute_cross_llm(claude_rows, cross_rows):
     # emitted blocks (schema stability) — report_render.py is responsible
     # for suppressing the exhibit in that case, not aggregate.py for hiding
     # the data.
-    window_healthy = common_window is not None and not common_window["degraded"]
-    if window_healthy:
+    if common_window is not None and not common_window["degraded"]:
         scoped_windows = {}
         scoped_comparable = []
         for r in comparable:
             rid = id(r)
-            clipped = []
-            for s, e in windows[rid]:
-                cs, ce = max(s, clip_start), min(e, clip_end)
-                if ce > cs:
-                    clipped.append((cs, ce))
+            clipped = [c for s, e in windows[rid] if (c := _clip(s, e)) is not None]
             if clipped:
                 scoped_windows[rid] = clipped
                 scoped_comparable.append(r)
