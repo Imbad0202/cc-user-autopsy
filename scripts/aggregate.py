@@ -1653,6 +1653,35 @@ def _project_key(path_str):
     return Path(path_str).name if path_str else "(unknown)"
 
 
+def _local_midnight_bounds(start_date, end_date):
+    """[start_date, end_date] (inclusive calendar dates) -> (lo, hi) aware
+    datetimes at local-zone midnights, hi being the EXCLUSIVE midnight
+    starting the day after end_date. Shared by compute_cross_llm (weekly-
+    share / common-window clipping) and bs_switch_tax (multi-source-interval
+    clipping) — both need to clip datetime windows to a common_window
+    expressed as calendar dates.
+
+    Boundaries must be local-zone midnights, matching the tzinfo _parse_dt
+    normalizes every row datetime to (system local, via astimezone() — see
+    _parse_dt's docstring). Building these as UTC midnights instead (the
+    original bug) silently drops activity in positive-UTC-offset zones:
+    local midnight on the window's first day falls BEFORE the wrongly-UTC
+    lo, so real activity between local midnight and that boundary gets
+    clipped away. datetime.min/max().astimezone() has no tz to convert
+    FROM, so we instead combine the naive date/time and attach the local
+    offset directly via .astimezone() on an already-local reference value.
+    """
+    lo = datetime.combine(start_date, time.min).astimezone()
+    hi = datetime.combine(end_date + timedelta(days=1), time.min).astimezone()
+    return lo, hi
+
+
+def _clip_to_bounds(s, e, lo, hi):
+    """Clip window (s, e) to [lo, hi); None if it falls fully outside."""
+    cs, ce = max(s, lo), min(e, hi)
+    return (cs, ce) if ce > cs else None
+
+
 def _merge_intervals(intervals):
     """Merge a list of (start, end) datetime tuples into a sorted list of
     non-overlapping (start, end) tuples (touching/overlapping intervals
@@ -1829,29 +1858,16 @@ def compute_cross_llm(claude_rows, cross_rows):
     # chart anyway), keep the unclipped behavior.
     clip_start = clip_end = None
     if common_window is not None:
-        # Boundaries must be local-zone midnights, matching the tzinfo
-        # _parse_dt normalizes every row datetime to (system local, via
-        # astimezone() — see _parse_dt's docstring). Building these as UTC
-        # midnights instead (the original bug) silently drops activity in
-        # positive-UTC-offset zones: local midnight on the window's first
-        # day falls BEFORE the wrongly-UTC clip_start, so real activity
-        # between local midnight and that boundary gets clipped away.
-        # datetime.min/max().astimezone() has no tz to convert FROM, so we
-        # instead combine the naive date/time and attach the local offset
-        # directly via .astimezone() on an already-local reference value.
-        clip_start = datetime.combine(
-            date.fromisoformat(common_window["start"]), time.min).astimezone()
-        clip_end = datetime.combine(
-            date.fromisoformat(common_window["end"]) + timedelta(days=1),
-            time.min).astimezone()
+        clip_start, clip_end = _local_midnight_bounds(
+            date.fromisoformat(common_window["start"]),
+            date.fromisoformat(common_window["end"]))
 
     def _clip(s, e):
         """Clip window (s, e) to [clip_start, clip_end]; None if it falls
         fully outside. clip_start is None (no common_window) means no clip."""
         if clip_start is None:
             return (s, e)
-        cs, ce = max(s, clip_start), min(e, clip_end)
-        return (cs, ce) if ce > cs else None
+        return _clip_to_bounds(s, e, clip_start, clip_end)
 
     weekly = {}
     for r in comparable:
@@ -2085,7 +2101,8 @@ def _bs_result(id_, gate, metrics=None, n=0, reason=None, guarded=False):
             "metrics": metrics or {}, "reason": reason}
 
 
-def bs_repeated_instructions(claude_rows, cross_rows, window_start=None, window_end=None):
+def bs_repeated_instructions(claude_rows, cross_rows, window_start=None,
+                             window_end=None, tz=None):
     """Spec §5 #1 — repeated-instruction tax.
 
     Grouping key is `row["first_prompt_hash"]` when present (sha1 of the
@@ -2110,6 +2127,15 @@ def bs_repeated_instructions(claude_rows, cross_rows, window_start=None, window_
     earlier in the day than window_start (or later than window_end) on the
     SAME calendar date still counts as in-window, matching the date-range
     the rendered window note claims to cover.
+
+    tz (datetime.timezone, optional): the CLI-selected --tz. These rows have
+    no precomputed week (unlike build_sessions' s["week"]), so week
+    membership is derived here via week_key(dt) — but _parse_dt normalizes
+    dt to OS-local, not necessarily the requested --tz. When tz is given,
+    the parsed dt is converted into it before week_key, mirroring
+    build_sessions' own `start.astimezone(tz)` conversion, so week
+    boundaries near Sunday/Monday match the timezone the report claims to
+    use. When omitted, behavior is unchanged (OS-local week bucketing).
     """
     occ = {}
     windowed = window_start is not None and window_end is not None
@@ -2130,9 +2156,10 @@ def bs_repeated_instructions(claude_rows, cross_rows, window_start=None, window_
             continue
         if windowed and not (win_start_d <= dt.date() <= win_end_d):
             continue
+        week_dt = dt.astimezone(tz) if tz is not None else dt
         key = row.get("first_prompt_hash") or norm
         occ.setdefault(key, []).append({
-            "week": week_key(dt),
+            "week": week_key(week_dt),
             "source": row.get("source") or "claude",
             "sid": row.get("session_id") or "",
             "raw": row.get("first_prompt") or ""})
@@ -2246,15 +2273,26 @@ def bs_sunk_cost(rated):
 _BS_SWITCH_MIN_PER_BUCKET = 20
 
 
-def _multi_source_intervals(activity_rows, cross_rows):
-    """Merged wall-clock intervals where >=2 sources were active.
-    Reuses the cross_llm sweep helpers; presence-only rows excluded."""
+def _tag_claude_and_filter_cross(activity_rows, cross_rows):
+    """Tag activity_rows with source="claude" (default) and append cross_rows
+    with presence_only rows excluded. Shared row-prep step for
+    _multi_source_intervals and bs_switch_tax's common-window computation —
+    both need the same "claude rows + comparable cross rows" pool, just for
+    different downstream purposes (interval sweep vs. per-source date
+    ranges)."""
     rows = []
     for r in activity_rows:
         rr = dict(r)
         rr.setdefault("source", "claude")
         rows.append(rr)
     rows += [r for r in cross_rows if r.get("coverage") != "presence_only"]
+    return rows
+
+
+def _multi_source_intervals(activity_rows, cross_rows):
+    """Merged wall-clock intervals where >=2 sources were active.
+    Reuses the cross_llm sweep helpers; presence-only rows excluded."""
+    rows = _tag_claude_and_filter_cross(activity_rows, cross_rows)
     windows = {id(r): _row_windows(r) for r in rows}
     concurrent = _sweep_concurrent_intervals(rows, windows)
     return _merge_intervals([(s, e) for s, e, n in concurrent if n >= 2])
@@ -2322,19 +2360,41 @@ def bs_switch_tax(rated, activity_rows, cross_rows):
               "duration_minutes": s.get("duration_min") or 0}
              for s in rated if s["sid"] not in activity_sids]
     comparable_pool = list(activity_rows) + extra
-    tagged_pool = []
-    for r in comparable_pool:
-        rr = dict(r)
-        rr.setdefault("source", "claude")
-        tagged_pool.append(rr)
-    tagged_pool += [r for r in cross_rows if r.get("coverage") != "presence_only"]
 
-    window = _common_window_dates(tagged_pool)
+    # The common window must match the one the team ledger displays
+    # (compute_cross_llm's common_window, spec §13) — that block derives its
+    # window from claude_rows + cross_rows only, never from meta-only rated
+    # sessions whose transcript rotated away. Rotated-away sessions can be
+    # months older than the real activity/cross overlap; including them here
+    # would stretch win_start_d/win_end_d far past what the ledger claims,
+    # so the displayed window and this gate's window would silently
+    # diverge. `extra` (the synthesized meta-only rows) is therefore used
+    # ONLY below, in the pool handed to _multi_source_intervals and the
+    # sid->row probe map — never in the window computation.
+    real_tagged_pool = _tag_claude_and_filter_cross(activity_rows, cross_rows)
+
+    window = _common_window_dates(real_tagged_pool)
     if window is None:
         return _bs_result("switch_tax", False, reason="no multi-source windows")
     win_start_d, win_end_d = window
 
     multi_iv = _multi_source_intervals(comparable_pool, cross_rows)
+    # Clip each multi-source interval to the common window: with 3+
+    # unevenly-covered sources, an overlap can occur entirely AFTER (or
+    # before) the window that _common_window_dates just computed — e.g. two
+    # sources overlap only once a third source's coverage has already
+    # ended, which is outside the common window by definition. Probing
+    # in-window rated sessions against an unclipped interval could then
+    # mis-bucket them multi-tool from an overlap that never coincided with
+    # the displayed window. Drop intervals entirely outside; truncate ones
+    # straddling a boundary. Same local-midnight boundary construction and
+    # clip-or-drop logic compute_cross_llm uses for its own common-window
+    # clipping (_local_midnight_bounds / _clip_to_bounds) — shared so a fix
+    # to one doesn't silently drift from the other.
+    win_start_dt, win_end_dt = _local_midnight_bounds(win_start_d, win_end_d)
+    multi_iv = [c for iv_start, iv_end in multi_iv
+                if (c := _clip_to_bounds(iv_start, iv_end, win_start_dt, win_end_dt))
+                is not None]
     if not multi_iv:
         return _bs_result("switch_tax", False, reason="no multi-source windows")
     # sid -> row map over the Claude comparable pool (activity rows plus the
@@ -2553,13 +2613,24 @@ def bs_habit_drift(rated):
     Weeks are split early/late at the midpoint; a week only counts if it
     has >= GROWTH_MIN_RATED_PER_WEEK rated sessions (same floor the growth
     panel uses, so "8 weeks" means 8 *plottable* weeks, not calendar weeks).
+
+    Week bucketing uses the session's own precomputed `s["week"]`
+    (build_sessions already converts each start time into the requested
+    --tz before deriving this) when present, so week membership near
+    Sunday/Monday boundaries matches the CLI-selected timezone rather than
+    OS-local. Falls back to _parse_dt + week_key (OS-local) only when a row
+    lacks "week" — some test fixtures build rated-session dicts directly
+    without going through build_sessions.
     """
     weeks = {}
     for s in rated:
-        dt = _parse_dt(s.get("start"))
-        if dt is None:
-            continue
-        weeks.setdefault(week_key(dt), []).append(s)
+        wk = s.get("week")
+        if wk is None:
+            dt = _parse_dt(s.get("start"))
+            if dt is None:
+                continue
+            wk = week_key(dt)
+        weeks.setdefault(wk, []).append(s)
     eligible = {w: ss for w, ss in weeks.items()
                 if len(ss) >= GROWTH_MIN_RATED_PER_WEEK}
     if len(eligible) < _BS_DRIFT_MIN_WEEKS:
@@ -2780,15 +2851,20 @@ def compute_leaks(blind_spots, rated, window):
 
 
 def compute_blind_spots(sessions, rated, activity_rows, cross_rows, window_end,
-                        window_start=None):
+                        window_start=None, tz=None):
     """Phase 2 blind-spot engine (spec §5). Additive analysis-data block;
     every heuristic self-gates and the whole entry ships regardless so the
-    renderer (and later phases) can see WHY something was suppressed."""
+    renderer (and later phases) can see WHY something was suppressed.
+
+    tz (optional): the CLI-resolved --tz, threaded to bs_repeated_instructions
+    so week-bucketed occurrences honor the requested timezone rather than
+    OS-local (bs_habit_drift gets this for free via rated sessions' own
+    precomputed s["week"], already tz-converted by build_sessions)."""
     return {
         "schema_version": 1,
         "repeated_instructions": bs_repeated_instructions(
             activity_rows, cross_rows,
-            window_start=window_start, window_end=window_end),
+            window_start=window_start, window_end=window_end, tz=tz),
         "sunk_cost": bs_sunk_cost(rated),
         "switch_tax": bs_switch_tax(rated, activity_rows, cross_rows),
         "graveyard": bs_graveyard(activity_rows, window_end),
@@ -3020,10 +3096,13 @@ def main():
 
     final["ledger"] = compute_ledger(activity_rows, cross_llm, window_end=window_end)
 
-    # blind_spots: additive top-level block (Phase 2, spec §5/§7).
+    # blind_spots: additive top-level block (Phase 2, spec §5/§7). Threads
+    # the same resolved `tz` used for build_sessions above, so
+    # repeated-instructions week bucketing honors --tz rather than OS-local
+    # (Fix 3).
     final["blind_spots"] = compute_blind_spots(
         sessions, rated, list(activity_rows.values()), cross_rows, window_end,
-        window_start=window_start)
+        window_start=window_start, tz=tz)
     final["ledger"]["leaks"] = compute_leaks(
         final["blind_spots"], rated, final["ledger"]["window"])
 

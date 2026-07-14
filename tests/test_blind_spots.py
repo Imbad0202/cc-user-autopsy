@@ -574,6 +574,93 @@ class SwitchTaxTests(unittest.TestCase):
         self.assertEqual(out["metrics"]["multi"]["n"], 22)
         self.assertEqual(out["metrics"]["single"]["n"], 20)
 
+    def test_meta_only_rated_sessions_do_not_stretch_common_window(self):
+        # Fix 1: 20 meta-only rated sessions (no activity_rows entry — as if
+        # their transcript rotated away) dated MONTHS before the real
+        # activity/cross overlap. The displayed common_window (compute_cross_
+        # llm, derived from activity+cross rows only) would say the window
+        # starts at the normal fixture's BASE — these ancient meta-only
+        # sessions must not pull win_start_d back to cover them: they stay
+        # outside the common window (excluded from both buckets) and must
+        # not inflate either bucket's n.
+        rated, act, cross = self._fixture()
+        ancient_start = BASE - timedelta(days=400)
+        for i in range(20):
+            t = ancient_start + timedelta(days=i)
+            # Meta-only: appended to `rated` only, no matching activity row —
+            # exactly the "extra" synthesis path in bs_switch_tax.
+            rated.append(_rated(f"ancient{i}", t, "fully_achieved"))
+        out = bs_switch_tax(rated, act, cross)
+        self.assertTrue(out["gate_passed"])
+        # Unchanged from the plain fixture — the 20 ancient meta-only
+        # sessions land in neither bucket.
+        self.assertEqual(out["metrics"]["multi"]["n"], 20)
+        self.assertEqual(out["metrics"]["single"]["n"], 20)
+
+    def _clip_fixture(self, m0_codex_offset):
+        """m0 plus 20 more multi-tool 'm' sessions (m1..m20, one more than
+        the 20-session floor so the multi bucket clears it either way),
+        each with its own codex partner. A third source (antigravity)
+        brackets the m1..m20 cluster with two narrow presence blips that
+        never overlap m0's own window, collapsing the common window
+        (intersection of every source's span) to BASE's calendar day only.
+        m0's own bucket then depends entirely on `m0_codex_offset`: a LARGE
+        offset (e.g. 5 days) puts m0's codex partner's interval far outside
+        that window, so clipping drops it and m0 falls single-tool; a SMALL
+        offset keeps the interval inside the window and m0 lands
+        multi-tool."""
+        rated, act, cross = [], [], []
+        t0 = BASE
+        rated.append(_rated("m0", t0, "fully_achieved"))
+        act.append(_act_row("m0", t0, dur=5))
+        cross.append(_codex_act("cx0", t0 + m0_codex_offset, dur=5))
+        # antigravity: two 1-minute presence blips bracketing the m1..m20
+        # cluster (well AFTER m0's own [t0, t0+5min] window, so antigravity
+        # itself never overlaps m0 and can't independently make m0 land
+        # multi-tool).
+        anti_lo = dict(_act_row("anti-lo", t0 + timedelta(minutes=6), dur=1))
+        anti_lo["source"], anti_lo["coverage"] = "antigravity", "full"
+        cross.append(anti_lo)
+        anti_hi = dict(_act_row(
+            "anti-hi", t0 + timedelta(minutes=10 * 20 + 4), dur=1))
+        anti_hi["source"], anti_hi["coverage"] = "antigravity", "full"
+        cross.append(anti_hi)
+        for i in range(1, 21):
+            t = BASE + timedelta(minutes=10 * i)
+            rated.append(_rated(f"m{i}", t, "fully_achieved"))
+            act.append(_act_row(f"m{i}", t, dur=5))
+            cross.append(_codex_act(f"cx{i}", t + timedelta(minutes=1), dur=3))
+        # 20 single-tool sessions, earlier the same local day (before BASE).
+        for i in range(20):
+            t = BASE - timedelta(minutes=10 * (i + 1))
+            rated.append(_rated(f"s{i}", t, "fully_achieved"))
+            act.append(_act_row(f"s{i}", t, dur=5))
+        return rated, act, cross
+
+    def test_overlap_after_common_window_end_excluded_lands_single(self):
+        # Fix 2: m0's own codex partner lands 5 days after m0's start — the
+        # only interval that codex row can ever form is 5 days out, far
+        # outside the antigravity-limited common window (BASE's calendar
+        # day only). Once clipped, that interval is dropped entirely, so
+        # m0 has NO surviving multi-source interval to overlap and must
+        # fall into the single-tool bucket despite being an in-window rated
+        # session.
+        rated, act, cross = self._clip_fixture(timedelta(days=5))
+        out = bs_switch_tax(rated, act, cross)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["single"]["n"], 21)  # s0..19 + m0
+        self.assertEqual(out["metrics"]["multi"]["n"], 20)   # m1..20 only
+
+    def test_overlap_moved_inside_common_window_lands_multi(self):
+        # Same fixture, but m0's codex partner is moved to overlap m0's own
+        # activity window directly (a few minutes after m0's start, inside
+        # the antigravity-limited common window) — m0 must land multi-tool.
+        rated, act, cross = self._clip_fixture(timedelta(minutes=1))
+        out = bs_switch_tax(rated, act, cross)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["single"]["n"], 20)  # s0..19
+        self.assertEqual(out["metrics"]["multi"]["n"], 21)   # m0..20
+
 
 class InterruptWinRateTests(unittest.TestCase):
     def test_symmetric_rates_and_delta(self):
@@ -830,6 +917,81 @@ class HabitDriftTests(unittest.TestCase):
     def test_stable_prompts_no_drift(self):
         out = bs_habit_drift(self._weeks([150] * 8, [0.75] * 8))
         self.assertFalse(out["gate_passed"])
+
+    def test_respects_precomputed_week_when_present(self):
+        # Fix 3a: when rows carry a precomputed "week" (as build_sessions
+        # produces, already tz-converted), bs_habit_drift must use it
+        # instead of re-deriving from _parse_dt (OS-local). Give every
+        # session a "week" field that groups them into 8 weeks completely
+        # different from what _parse_dt(s["start"]) + week_key would
+        # produce (all sessions share the SAME real start date, so without
+        # honoring s["week"] they'd all collapse into one calendar week and
+        # the gate would fail on "fewer than 8 weeks").
+        rated = []
+        for w in range(8):
+            plen = 200 if w < 4 else 80
+            gr = 0.75
+            for j in range(4):
+                sess = _week_sess(0, j, plen, good=(j / 4 < gr))
+                # Override start to a single fixed date (would bucket into
+                # one real calendar week) but tag with a distinct
+                # precomputed ISO week label per w — this is what
+                # build_sessions supplies as s["week"] after its own
+                # tz-aware conversion.
+                sess["sid"] = f"pw{w}s{j}"
+                sess["week"] = f"2026-W{10 + w:02d}"
+                rated.append(sess)
+        out = bs_habit_drift(rated)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["weeks"], 8)
+        self.assertLess(out["metrics"]["late_median_len"],
+                        0.75 * out["metrics"]["early_median_len"])
+
+    def test_falls_back_to_parsed_start_when_week_absent(self):
+        # No "week" key on any row (legacy fixture shape) -> falls back to
+        # _parse_dt(start) + week_key, matching prior behavior exactly.
+        out = bs_habit_drift(self._weeks([200] * 4 + [80] * 4, [0.75] * 8))
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["weeks"], 8)
+
+
+class RepeatedInstructionsTzTests(unittest.TestCase):
+    def test_week_key_follows_passed_tz_not_os_local(self):
+        # Fix 3b: occ1/occ2 are 20 minutes apart, straddling the UTC
+        # Sunday/Monday ISO-week boundary (23:50 -> 00:10 UTC) — under UTC
+        # they fall in DIFFERENT ISO weeks (23 and 24); at UTC+14 the same
+        # instants both land on Monday afternoon of the SAME ISO week (24),
+        # since a constant +14h shift moves both past the boundary
+        # together. occ3/occ4 are 2 and 4 weeks later, each a distinct week
+        # under both zones. So the deterministic, OS-local-independent
+        # signal is the WEEK COUNT itself: 4 distinct weeks under UTC
+        # {23,24,25,27}, but only 3 under +14 {24,24,26,28} (occ1/occ2
+        # merge) — a bug that ignored the `tz` param (falling back to
+        # _parse_dt's OS-local behavior, which for a UTC test box would
+        # equal the "under UTC" column) would report 4, not 3.
+        long_prompt = "please always run the full test suite before " \
+                      "declaring the task done, no exceptions " * 2
+        tz14 = timezone(timedelta(hours=14))
+        occ1 = datetime(2026, 6, 7, 23, 50, tzinfo=timezone.utc)   # wk23 UTC / wk24 @+14
+        occ2 = occ1 + timedelta(minutes=20)                         # wk24 UTC / wk24 @+14
+        occ3 = occ1 + timedelta(weeks=2)                            # wk25 UTC / wk26 @+14
+        occ4 = occ1 + timedelta(weeks=4)                            # wk27 UTC / wk28 @+14
+        rows = [
+            {"session_id": f"o{i}", "start_time": t.isoformat(),
+             "first_prompt": long_prompt, "source": "claude"}
+            for i, t in enumerate([occ1, occ2, occ3, occ4])
+        ]
+        # Pad occurrence count to clear the >=5-occurrence gate with a row
+        # right next to occ1, landing in the same week as occ1 under BOTH
+        # zones, so it doesn't change either week count.
+        rows.append({"session_id": "pad0",
+                     "start_time": (occ1 + timedelta(minutes=1)).isoformat(),
+                     "first_prompt": long_prompt, "source": "claude"})
+        out_tz = bs_repeated_instructions(rows, [], tz=tz14)
+        self.assertTrue(out_tz["gate_passed"])
+        pattern_tz = out_tz["metrics"]["patterns"][0]
+        self.assertEqual(pattern_tz["occurrences"], 5)
+        self.assertEqual(pattern_tz["weeks"], 3)
 
 
 class ComputeBlindSpotsTests(unittest.TestCase):
