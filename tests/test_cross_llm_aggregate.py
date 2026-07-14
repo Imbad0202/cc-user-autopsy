@@ -81,6 +81,23 @@ class CrossLlmTests(unittest.TestCase):
         self.assertEqual(h2h["claude"]["sessions"], 20)
         self.assertEqual(h2h["codex"]["sessions"], 20)
 
+    def test_mixed_naive_and_aware_timestamps_does_not_raise(self):
+        # One claude row has a timezone-naive start_time (no UTC offset),
+        # mixed with aware codex rows. Regression for TypeError: can't
+        # compare offset-naive and offset-aware datetimes, which used to
+        # abort compute_cross_llm (and therefore the whole aggregate run)
+        # before _parse_dt normalized naive datetimes to aware UTC.
+        naive_claude = _claude_row("c_naive", BASE)
+        naive_claude["start_time"] = "2026-06-05T10:00:00"  # no offset
+        claude = [naive_claude] + [
+            _claude_row(f"c{i}", BASE + timedelta(days=i)) for i in range(1, 20)
+        ]
+        codex = [_codex_row(f"x{i}", BASE + timedelta(days=i, minutes=30))
+                 for i in range(20)]
+        block = compute_cross_llm(claude, codex)
+        self.assertIsInstance(block, dict)
+        self.assertIsNotNone(block["common_window"])
+
     def test_midnight_spanning_session_splits_by_day(self):
         late = datetime(2026, 6, 1, 23, 30, tzinfo=timezone.utc)
         claude = [_claude_row("c0", late, dur=120)]  # crosses midnight

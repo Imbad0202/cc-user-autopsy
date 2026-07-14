@@ -112,13 +112,22 @@ def parse_iso(s: str) -> datetime:
 def _parse_dt(s):
     """Null-safe ISO parse. Reuses parse_iso; returns None on any bad input
     instead of raising, since cross-LLM adapter rows may carry missing or
-    malformed timestamps (unknown is never imputed, per spec)."""
+    malformed timestamps (unknown is never imputed, per spec).
+
+    Always returns an aware datetime (assumes UTC for naive input). Cross-LLM
+    rows come from adapters that may or may not include a UTC offset in
+    start_time; mixing naive and aware datetimes in the same max()/min()/
+    comparison call raises TypeError and would abort the whole aggregate
+    run, so every value coming out of this helper is normalized to aware."""
     if not s:
         return None
     try:
-        return parse_iso(s)
+        dt = parse_iso(s)
     except (ValueError, TypeError, AttributeError):
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def normalize_project_path(path: str) -> str:
@@ -1648,6 +1657,10 @@ def compute_cross_llm(claude_rows, cross_rows):
     }
 
     # --- head-to-head: claude vs codex inside the common window ---
+    # NOTE: head_to_head is computed and emitted even when common_window is
+    # degraded (days < 14); report_render.py gates its display on
+    # `not win.get("degraded")`, so any other consumer of analysis-data.json
+    # must check common_window.degraded itself before trusting this block.
     head_to_head = None
     if common_window and {"claude", "codex"} <= set(per_source_range):
         window_start_date = date.fromisoformat(common_window["start"])
