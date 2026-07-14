@@ -487,6 +487,17 @@ class GraveyardOpenerTests(unittest.TestCase):
         from scripts.locales import STRINGS
         self.assertNotIn(STRINGS["en"]["blindspot_graveyard_title"], html)
 
+    def test_graveyard_opens_before_output_metrics_exhibit(self):
+        # Fix 5: every book opens with its blind spot — the graveyard
+        # callout must render BEFORE the output-metrics exhibit, so its
+        # exhibit takes the earlier position/number.
+        from itertools import count
+        from scripts.locales import STRINGS
+        html = _build_output_ledger(LEDGER, NARR, "en", count(1), BS_ALL_PASSED)
+        callout_pos = html.index(STRINGS["en"]["blindspot_graveyard_title"])
+        metrics_pos = html.index(STRINGS["en"]["ledger_output_commits"])
+        self.assertLess(callout_pos, metrics_pos)
+
 
 class SwitchTaxOpenerTests(unittest.TestCase):
     def test_gate_passing_shows_callout_with_negative_class_on_worse_rate(self):

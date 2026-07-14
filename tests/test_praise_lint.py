@@ -42,6 +42,23 @@ class FindPraiseTests(unittest.TestCase):
         self.assertEqual(hits[0]["word"], "excellent")
         self.assertEqual(hits[0]["count"], 2)
 
+    def test_praise_with_number_in_same_sentence_not_flagged(self):
+        hits = find_praise("an impressive 92% success rate.")
+        self.assertEqual(
+            [h for h in hits if h["word"] == "impressive"], [])
+
+    def test_praise_flagged_when_number_in_different_sentence(self):
+        hits = find_praise("impressive work. throughput rose 40%.")
+        words = {h["word"]: h["count"] for h in hits}
+        self.assertEqual(words.get("impressive"), 1)
+
+    def test_zh_praise_with_number_same_sentence_comma_not_break(self):
+        # comma is not a sentence break, so the number after it still
+        # counts as numeric support for the praise word before it.
+        hits = find_praise("表現出色，成功率 92%")
+        self.assertEqual(
+            [h for h in hits if h["word"] == "表現出色"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

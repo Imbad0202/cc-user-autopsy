@@ -2574,8 +2574,14 @@ _BS_FAILED_BURN_MIN_SESSIONS = 5
 
 
 def _dominant_input_rate(rated):
-    """Input $/1M of the most-used model across the rated pool; the
-    conservative fallback over-reports (same policy as _FALLBACK_PRICING)."""
+    """Input $/1M of the most-used model across the rated pool.
+
+    Leaks are lower-bound accounting only (see compute_leaks docstring): an
+    unknown/legacy model prices at the CHEAPEST known input rate, not the
+    Opus fallback the cost panel uses (_FALLBACK_PRICING) — that fallback's
+    over-report policy belongs to the cost panel, not the leak ledger, whose
+    guarantee is that every dollar traces to tokens the evidence actually
+    shows without inflating the estimate."""
     counts = {}
     for s in rated:
         for m, n in (s.get("model_counts") or {}).items():
@@ -2584,7 +2590,7 @@ def _dominant_input_rate(rated):
         top = max(counts, key=counts.get)
         if top in PRICING:
             return PRICING[top]["input"]
-    return _FALLBACK_PRICING["input"]
+    return min(p["input"] for p in PRICING.values())
 
 
 def compute_leaks(blind_spots, rated, window):
@@ -2604,12 +2610,19 @@ def compute_leaks(blind_spots, rated, window):
     weeks = round(max((window.get("days") or 0) / 7.0, 1.0), 1)
     items = []
 
-    win_start = _parse_dt(window.get("start")) if window.get("start") else None
-    win_end = _parse_dt(window.get("end")) if window.get("end") else None
-    if win_start is not None and win_end is not None:
-        # end is inclusive — compare calendar dates so a session starting
-        # anywhere on the end date counts as in-window.
-        win_start_d, win_end_d = win_start.date(), win_end.date()
+    # ledger window bounds are calendar dates, not instants — parse them
+    # with date.fromisoformat() directly rather than _parse_dt(...).date().
+    # _parse_dt assumes UTC for naive input then converts to local time, so
+    # west of UTC "2026-07-11" would shift to 2026-07-10 local and silently
+    # exclude sessions that started on the inclusive end date.
+    def _safe_date(s):
+        try:
+            return date.fromisoformat(s) if s else None
+        except (TypeError, ValueError):
+            return None
+    win_start_d = _safe_date(window.get("start"))
+    win_end_d = _safe_date(window.get("end"))
+    if win_start_d is not None and win_end_d is not None:
         in_window = []
         for s in rated:
             dt = _parse_dt(s.get("start"))
@@ -2896,10 +2909,23 @@ def main():
     final["ledger"] = compute_ledger(activity_rows, cross_llm)
 
     # blind_spots: additive top-level block (Phase 2, spec §5/§7).
-    # window_end anchors graveyard staleness to the newest activity seen.
-    all_starts = [d for d in (_parse_dt(r.get("start_time"))
-                              for r in activity_rows.values()) if d]
-    window_end = max(all_starts) if all_starts else datetime.now().astimezone()
+    # window_end anchors graveyard staleness to the newest activity seen —
+    # that must be the max END across all activity windows (not max START):
+    # a resumed multi-day session's newest activity can land days after its
+    # start, and anchoring on start alone would understate days_untouched
+    # for every OTHER project. window_start stays min start (unaffected).
+    all_starts, all_ends = [], []
+    for r in activity_rows.values():
+        d = _parse_dt(r.get("start_time"))
+        if d:
+            all_starts.append(d)
+        all_ends.extend(e for _, e in _row_windows(r))
+    if all_ends:
+        window_end = max(all_ends)
+    elif all_starts:
+        window_end = max(all_starts)
+    else:
+        window_end = datetime.now().astimezone()
     window_start = min(all_starts) if all_starts else None
     final["blind_spots"] = compute_blind_spots(
         sessions, rated, list(activity_rows.values()), cross_rows, window_end,

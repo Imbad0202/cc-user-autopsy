@@ -405,6 +405,10 @@ def _build_output_ledger(ledger, narration, locale="en", exhibit_no=None,
     (git_commits, git_pushes, sessions_with_commits). Counts only — no
     session IDs or prompt text ever flow through this builder.
 
+    Every book opens with its blind spot: the graveyard callout + exhibit
+    render BEFORE the output metrics exhibit, so a passed gate claims the
+    earlier exhibit number (numbering is pure order-of-appearance).
+
     exhibit_no is a shared itertools.count() the caller advances across all
     ledger sections so numbering is pure order-of-appearance (Phase 2
     refactor); a fresh count(1) is used when not supplied, preserving the
@@ -417,17 +421,6 @@ def _build_output_ledger(ledger, narration, locale="en", exhibit_no=None,
         locale, "ledger_output_title")
     prose = _rest_lines(narration.get("output-ledger", ""))
     prose_html = f"<div>{inline_md(prose)}</div>" if prose else ""
-    metrics = (
-        '<div class="metrics">'
-        f'<div class="metric"><div class="n">{int(out.get("git_commits") or 0)}</div>'
-        f'<div class="lbl">{t(locale, "ledger_output_commits")}</div></div>'
-        f'<div class="metric"><div class="n">{int(out.get("git_pushes") or 0)}</div>'
-        f'<div class="lbl">{t(locale, "ledger_output_pushes")}</div></div>'
-        f'<div class="metric"><div class="n">{int(out.get("sessions_with_commits") or 0)}</div>'
-        f'<div class="lbl">{t(locale, "ledger_output_sessions_with_commits")}</div></div>'
-        '</div>')
-    ex = _exhibit(next(exhibit_no), t(locale, "ledger_output_title"), metrics,
-                  "aggregate.py ledger.output, transcript pool", locale=locale)
 
     graveyard_html = ""
     bs4 = bs.get("graveyard") or {}
@@ -449,9 +442,21 @@ def _build_output_ledger(ledger, narration, locale="en", exhibit_no=None,
             table, t(locale, "ledger_source_blind_spots"), locale=locale)
         graveyard_html = callout + graveyard_exhibit
 
+    metrics = (
+        '<div class="metrics">'
+        f'<div class="metric"><div class="n">{int(out.get("git_commits") or 0)}</div>'
+        f'<div class="lbl">{t(locale, "ledger_output_commits")}</div></div>'
+        f'<div class="metric"><div class="n">{int(out.get("git_pushes") or 0)}</div>'
+        f'<div class="lbl">{t(locale, "ledger_output_pushes")}</div></div>'
+        f'<div class="metric"><div class="n">{int(out.get("sessions_with_commits") or 0)}</div>'
+        f'<div class="lbl">{t(locale, "ledger_output_sessions_with_commits")}</div></div>'
+        '</div>')
+    ex = _exhibit(next(exhibit_no), t(locale, "ledger_output_title"), metrics,
+                  "aggregate.py ledger.output, transcript pool", locale=locale)
+
     return ('<section class="section" id="ledger-output">'
             f'<h2 class="c-sec-title">{inline_md(title)}</h2>'
-            f'{prose_html}{ex}{graveyard_html}</section>')
+            f'{prose_html}{graveyard_html}{ex}</section>')
 
 
 _SRC_LABEL_KEYS = {"full": "ledger_source_card_full",

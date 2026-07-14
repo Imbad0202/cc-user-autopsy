@@ -2,14 +2,16 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from scripts.aggregate import (
-    bs_repeated_instructions, bs_sunk_cost, compute_blind_spots, compute_leaks)
+    bs_repeated_instructions, bs_sunk_cost, compute_blind_spots, compute_leaks,
+    _dominant_input_rate, PRICING)
 
 BASE = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
 WINDOW = {"start": "2026-06-01", "end": "2026-07-11", "days": 40}
 
 
-def _sess(sid, days, outcome, tokens=40000, prompt="tune the ingestion retry logic"):
-    return {"sid": sid, "start": (BASE + timedelta(days=days)).isoformat(),
+def _sess(sid, days, outcome, tokens=40000, prompt="tune the ingestion retry logic",
+         start=None):
+    return {"sid": sid, "start": (start or BASE + timedelta(days=days)).isoformat(),
             "outcome": outcome, "first_prompt": prompt,
             "first_prompt_len": len(prompt), "token_accel": None,
             "duration_min": 60, "total_tokens": tokens,
@@ -147,6 +149,41 @@ class LeakCatalogTests(unittest.TestCase):
         leaks = compute_leaks(bs, rated, WINDOW)
         types = [i["type"] for i in leaks["items"]]
         self.assertNotIn("sunk_cost", types)
+
+    def test_window_end_date_is_tz_independent(self):
+        # Fix 1: window bounds are calendar dates parsed with
+        # date.fromisoformat(), not _parse_dt(...).date() (which assumes
+        # UTC then converts to local — west of UTC "2026-07-11" would
+        # shift to 2026-07-10 local and wrongly exclude a session whose
+        # local wall-clock start is still on the inclusive end date). The
+        # session's own start is built from the local system tz (via
+        # astimezone(), matching how _parse_dt normalizes real timestamps)
+        # so its calendar date is unambiguously 2026-07-11 local no matter
+        # what timezone runs this test — isolating the assertion to the
+        # window-bound parsing fix, not session-timestamp normalization.
+        window = {"start": "2026-06-01", "end": "2026-07-11", "days": 40}
+        late_on_end_date = datetime(2026, 7, 11, 23, 30).astimezone()
+        rated = [_sess("late", None, "not_achieved", start=late_on_end_date)]
+        rated += [_sess(f"f{i}", i, "not_achieved") for i in range(5)]
+        bs = compute_blind_spots(rated, rated, [], [], BASE + timedelta(days=40))
+        leaks = compute_leaks(bs, rated, window)
+        item = next(i for i in leaks["items"] if i["type"] == "failed_session_burn")
+        self.assertEqual(item["occurrences"], 6)
+
+
+class DominantInputRateTests(unittest.TestCase):
+    def test_unknown_model_uses_cheapest_known_rate(self):
+        # Fix 3: leaks are lower-bound accounting — an unknown/legacy model
+        # must price at the CHEAPEST known input rate, not the Opus
+        # fallback the cost panel uses. That over-report policy belongs to
+        # the cost panel, not the leak ledger.
+        rated = [{"model_counts": {"unknown-model-x": 5}}]
+        expected = min(p["input"] for p in PRICING.values())
+        self.assertEqual(_dominant_input_rate(rated), expected)
+
+    def test_empty_rated_uses_cheapest_known_rate(self):
+        expected = min(p["input"] for p in PRICING.values())
+        self.assertEqual(_dominant_input_rate([]), expected)
 
 
 if __name__ == "__main__":

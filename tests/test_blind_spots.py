@@ -460,11 +460,14 @@ from scripts.aggregate import bs_graveyard, bs_ask_vs_ship
 WINDOW_END = BASE + timedelta(days=60)
 
 
-def _grave_row(sid, start, project, writes=6, commits=0):
-    return {"session_id": sid, "project_path": project,
-            "start_time": start.isoformat(), "duration_minutes": 60,
-            "tool_counts": {"Edit": writes, "Read": 10},
-            "git_commits": commits}
+def _grave_row(sid, start, project, writes=6, commits=0, segments=None):
+    row = {"session_id": sid, "project_path": project,
+          "start_time": start.isoformat(), "duration_minutes": 60,
+          "tool_counts": {"Edit": writes, "Read": 10},
+          "git_commits": commits, "input_tokens": 100, "output_tokens": 50}
+    if segments:
+        row["segments"] = [[s.isoformat(), e.isoformat()] for s, e in segments]
+    return row
 
 
 class GraveyardTests(unittest.TestCase):
@@ -705,6 +708,64 @@ class BlindSpotsWiringTests(unittest.TestCase):
             data = _json.loads(out_path.read_text())
         self.assertIn("blind_spots", data)
         self.assertEqual(data["blind_spots"]["schema_version"], 1)
+
+    def test_graveyard_window_end_anchors_to_max_activity_end_not_start(self):
+        """Fix 2: main()'s window_end for compute_blind_spots must be the
+        max END over every activity row's windows, not the max START.
+
+        Project "resumed" starts a session 30 days before "now" but that
+        session has a segment ENDING only 1 day before "now" (a multi-day
+        resumed session) — this is the single latest activity in the whole
+        dataset, so window_end must anchor there (~1 day ago). Two OTHER
+        projects are idle ~20/25 days as of that anchor and qualify for the
+        graveyard (>=14 day horizon, >=2 items required).
+
+        If window_end were wrongly anchored to max START instead (30 days
+        ago, from the resumed session's start_time), "now" would be pushed
+        back 29 days and the two idle-only projects would show far less (or
+        negative) days_untouched relative to that stale anchor — likely
+        failing the 14-day horizon and the gate. Asserting the gate passes
+        with both idle projects present proves the END-based anchor is in
+        effect.
+        """
+        skill_dir = Path(__file__).resolve().parent.parent
+        script = skill_dir / "scripts" / "aggregate.py"
+        now = BASE + timedelta(days=40)
+        resumed_start = now - timedelta(days=30)
+        resumed_end = now - timedelta(days=1)
+        idle_a_last = now - timedelta(days=20)
+        idle_b_last = now - timedelta(days=25)
+
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            data_dir = td / "usage-data"
+            meta_dir = data_dir / "session-meta"
+            meta_dir.mkdir(parents=True)
+            rows = [
+                _grave_row("r1", resumed_start, "/home/user/projects/resumed",
+                          segments=[(resumed_start, resumed_end)]),
+                _grave_row("r2", idle_a_last, "/home/user/projects/idle-a"),
+                _grave_row("r3", idle_b_last, "/home/user/projects/idle-b"),
+            ]
+            for row in rows:
+                (meta_dir / f"{row['session_id']}.json").write_text(
+                    _json.dumps(row), encoding="utf-8")
+            out_path = td / "analysis-data.json"
+            r = subprocess.run(
+                [sys.executable, str(script),
+                 "--data-dir", str(data_dir),
+                 "--output", str(out_path)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            data = _json.loads(out_path.read_text())
+
+        grave = data["blind_spots"]["graveyard"]
+        self.assertTrue(grave["gate_passed"])
+        keys = {it["project_key"] for it in grave["metrics"]["items"]}
+        self.assertIn("projects/idle-a", keys)
+        self.assertIn("projects/idle-b", keys)
+        self.assertNotIn("projects/resumed", keys)
 
 
 if __name__ == "__main__":
