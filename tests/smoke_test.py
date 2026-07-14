@@ -21,11 +21,46 @@ def main() -> None:
         shutil.rmtree(DEMO_ROOT)
 
     run(sys.executable, str(SCRIPTS_DIR / "generate_demo_data.py"))
+
+    codex_rows = DEMO_ROOT / "codex-rows.jsonl"
+    grok_rows = DEMO_ROOT / "grok-rows.jsonl"
+    anti_rows = DEMO_ROOT / "anti-rows.jsonl"
+    run(
+        sys.executable,
+        str(SCRIPTS_DIR / "scan_codex.py"),
+        "--sessions-dir",
+        str(DEMO_ROOT / "codex-sessions"),
+        "--output",
+        str(codex_rows),
+    )
+    run(
+        sys.executable,
+        str(SCRIPTS_DIR / "scan_grok.py"),
+        "--sessions-dir",
+        str(DEMO_ROOT / "grok-sessions"),
+        "--output",
+        str(grok_rows),
+    )
+    run(
+        sys.executable,
+        str(SCRIPTS_DIR / "scan_antigravity.py"),
+        "--conversations-dir",
+        str(DEMO_ROOT / "antigravity-conversations"),
+        "--output",
+        str(anti_rows),
+    )
+
     run(
         sys.executable,
         str(SCRIPTS_DIR / "aggregate.py"),
         "--data-dir",
         str(DEMO_ROOT / "usage-data"),
+        "--cross-llm-rows",
+        str(codex_rows),
+        "--cross-llm-rows",
+        str(grok_rows),
+        "--cross-llm-rows",
+        str(anti_rows),
         "--output",
         str(DEMO_ROOT / "analysis-data.json"),
     )
@@ -96,6 +131,15 @@ def main() -> None:
         "1. **Unsafe input** — <script>alert(1)</script>\n"
     )
 
+    narration_path = DEMO_ROOT / "ledger-narration.md"
+    narration_path.write_text(
+        "# opening\nDemo opening sentence <script>alert('n')</script>.\n"
+        "# output-ledger\nDemo output claim.\n"
+        "# team-ledger\nDemo team claim.\n",
+        encoding="utf-8",
+    )
+    history_path = DEMO_ROOT / "history.jsonl"
+
     output_path = DEMO_ROOT / "smoke.html"
     def run_build(audience, output, extra=()):
         run(
@@ -121,7 +165,16 @@ def main() -> None:
     # Self audit shows verbatim project labels so XSS escaping is exercised
     # end-to-end on the hostile payloads injected above.
     self_output = DEMO_ROOT / "smoke-self.html"
-    run_build("self", self_output)
+    run_build(
+        "self",
+        self_output,
+        extra=(
+            "--ledger-narration",
+            str(narration_path),
+            "--history-file",
+            str(history_path),
+        ),
+    )
     html = self_output.read_text()
     assert "fonts.googleapis.com" not in html
     assert "cdn.jsdelivr.net" not in html
@@ -134,13 +187,35 @@ def main() -> None:
     # HR build without an allowlist must redact hostile project labels to
     # the generic placeholder — verify the raw payload doesn't reach HTML,
     # while artifact sanitisation (javascript: URLs → #) still runs.
-    run_build("hr", output_path)
+    run_build("hr", output_path, extra=("--history-file", str(history_path)))
     hr_html = output_path.read_text()
     assert "<img src=x onerror=alert(1)>" not in hr_html
     assert "\\u003cimg src=x onerror=alert(1)" not in hr_html
     assert "Private project" in hr_html
     assert "javascript:alert" not in hr_html
     assert 'href="#"' in hr_html
+
+    # --- V5 ledger: SELF renders the exhibit skeleton, HR must not ---
+    self_html = html
+    assert 'id="ledger-opening"' in self_html, "SELF build missing ledger-opening"
+    assert 'id="ledger-output"' in self_html, "SELF build missing ledger-output"
+    assert 'id="ledger-team"' in self_html, "SELF build missing ledger-team"
+    assert 'class="c-exhibit"' in self_html, "SELF build missing ledger exhibits"
+    assert 'id="ledger-' not in hr_html, "HR build must not render ledger sections"
+    assert 'class="c-exhibit"' not in hr_html, "HR build must not render ledger exhibits"
+
+    # cross-LLM prompt text must never reach ANY output (spec §4)
+    for name, html_text in (("self", self_html), ("hr", hr_html)):
+        assert "GROK_PRIVATE_MARKER" not in html_text, (
+            f"{name} build leaked grok prompt text"
+        )
+
+    # narration is escaped, not executed
+    assert "<script>alert('n')</script>" not in self_html
+
+    # snapshot hook: SELF appended exactly one line, HR none
+    history_lines = history_path.read_text().strip().splitlines()
+    assert len(history_lines) == 1, f"expected 1 snapshot line, got {len(history_lines)}"
 
     node = shutil.which("node")
     if node:
