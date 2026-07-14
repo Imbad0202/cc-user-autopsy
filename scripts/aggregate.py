@@ -2043,6 +2043,68 @@ def compute_ledger(activity_metas, cross_llm):
     }
 
 
+# --- Blind-spot engine (Phase 2, spec §5) -----------------------------
+# Gate literals below are heuristic-eligibility thresholds: independent
+# from _PATTERN_MIN_SAMPLE (the pattern-floor constant). Keep separate so
+# future tuning of the pattern floor doesn't silently move these gates.
+_BS_MIN_PATTERN_CHARS = 20
+_BS_REPEAT_MIN_OCC = 5
+_BS_REPEAT_MIN_WEEKS = 3
+
+
+def _bs_result(id_, gate, metrics=None, n=0, reason=None, guarded=False):
+    return {"id": id_, "gate_passed": bool(gate),
+            "suppressed_by_guard": bool(guarded), "n": n,
+            "metrics": metrics or {}, "reason": reason}
+
+
+def bs_repeated_instructions(claude_rows, cross_rows):
+    """Spec §5 #1 — repeated-instruction tax.
+
+    Exact-match on normalize_prompt(first_prompt) across Claude + full/
+    partial cross-LLM rows. Not outcome-guarded by design: a repeated
+    instruction is a tax whether or not the sessions succeed (see rubric).
+    Wasted-token estimate is a lower bound: only the retyped prompt text.
+    """
+    occ = {}
+    for row in list(claude_rows) + list(cross_rows):
+        if row.get("coverage") == "presence_only":
+            continue
+        norm = normalize_prompt(row.get("first_prompt"))
+        if len(norm) < _BS_MIN_PATTERN_CHARS:
+            continue
+        dt = _parse_dt(row.get("start_time"))
+        if dt is None:
+            continue
+        occ.setdefault(norm, []).append({
+            "week": week_key(dt),
+            "source": row.get("source") or "claude",
+            "sid": row.get("session_id") or "",
+            "raw": row.get("first_prompt") or ""})
+    patterns = []
+    for hits in occ.values():
+        weeks = {h["week"] for h in hits}
+        if len(hits) < _BS_REPEAT_MIN_OCC or len(weeks) < _BS_REPEAT_MIN_WEEKS:
+            continue
+        raw_counts = {}
+        for h in hits:
+            raw_counts[h["raw"]] = raw_counts.get(h["raw"], 0) + 1
+        exemplar = max(raw_counts, key=raw_counts.get)[:120]
+        patterns.append({
+            "exemplar": exemplar,
+            "occurrences": len(hits),
+            "weeks": len(weeks),
+            "sources": sorted({h["source"] for h in hits}),
+            "est_wasted_tokens": (len(hits) - 1) * (len(exemplar) // 4),
+            "evidence": [h["sid"] for h in hits[:3]]})
+    patterns.sort(key=lambda p: -p["occurrences"])
+    if not patterns:
+        return _bs_result("repeated_instructions", False,
+                          reason="no pattern with >=5 occurrences over >=3 weeks")
+    return _bs_result("repeated_instructions", True,
+                      metrics={"patterns": patterns[:5]}, n=len(patterns))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR),
