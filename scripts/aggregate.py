@@ -8,7 +8,7 @@ import json
 import statistics
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 DEFAULT_DATA_DIR = Path.home() / ".claude/usage-data"
@@ -107,6 +107,18 @@ def compute_api_equivalent_cost(sessions):
 
 def parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def _parse_dt(s):
+    """Null-safe ISO parse. Reuses parse_iso; returns None on any bad input
+    instead of raising, since cross-LLM adapter rows may carry missing or
+    malformed timestamps (unknown is never imputed, per spec)."""
+    if not s:
+        return None
+    try:
+        return parse_iso(s)
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 def normalize_project_path(path: str) -> str:
@@ -287,6 +299,37 @@ def load_transcript_rows(path: Path):
             continue
         metas[sid] = r
     return metas, facets
+
+
+def load_cross_llm_rows(paths):
+    """Load adapter-emitted rows (scan_codex/grok/antigravity output).
+
+    Returns (rows, parse_errors_by_source). Bad lines are skipped and
+    counted under the source guessed from the row, else "(unknown)".
+    These rows NEVER enter scoring_metas/activity_metas — the 9-dim
+    rubric and the existing panels stay Claude-only by design (spec §6).
+    """
+    rows, errors = [], {}
+    for p in paths:
+        path = Path(p).expanduser()
+        if not path.is_file():
+            continue
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    errors["(unknown)"] = errors.get("(unknown)", 0) + 1
+                    continue
+                if not row.get("source") or not row.get("start_time"):
+                    src = row.get("source") or "(unknown)"
+                    errors[src] = errors.get(src, 0) + 1
+                    continue
+                rows.append(row)
+    return rows, errors
 
 
 def load_redacted(path: Path):
@@ -1442,6 +1485,221 @@ def compute_aggregates(sessions, rated, facets_coverage):
     return result
 
 
+def _row_windows(row):
+    """Activity windows for a row: explicit segments, else start+duration."""
+    segs = row.get("segments")
+    out = []
+    if segs:
+        for pair in segs:
+            try:
+                s, e = _parse_dt(pair[0]), _parse_dt(pair[1])
+            except (TypeError, IndexError):
+                continue
+            if s and e and e >= s:
+                out.append((s, e))
+        if out:
+            return out
+    s = _parse_dt(row.get("start_time") or "")
+    if not s:
+        return []
+    dur = row.get("duration_minutes") or 0
+    return [(s, s + timedelta(minutes=max(dur, 1)))]
+
+
+def _split_at_midnight(start, end):
+    """Yield (day_date, seg_start, seg_end) pieces, split at local midnights."""
+    cur = start
+    while cur.date() < end.date():
+        boundary = datetime.combine(
+            cur.date() + timedelta(days=1), time.min, tzinfo=cur.tzinfo)
+        yield cur.date(), cur, boundary
+        cur = boundary
+    yield cur.date(), cur, end
+
+
+def _hours_touched(day, ss, ee):
+    """Hour-of-day buckets (0-23) touched by the half-open interval
+    [ss, ee) within a single calendar `day`. Uses minutes-since-midnight
+    rather than raw .hour comparisons: a naive `range(ss.hour, ee.hour+1)`
+    approach either double-counts sessions that end exactly on an hour
+    boundary, or (worse) counts a phantom extra hour past the window end
+    for any same-hour or minute-carrying end time. `ee` may legitimately
+    fall on the next calendar day's midnight (the exclusive end produced
+    by `_split_at_midnight`'s last piece of a day) — that is treated as
+    minute 1440 of `day`, giving hour 23 rather than an empty range.
+    """
+    def _minute_of_day(dt):
+        if dt.date() > day:
+            return 24 * 60
+        return dt.hour * 60 + dt.minute + dt.second / 60
+
+    start_m = _minute_of_day(ss)
+    end_m = _minute_of_day(ee)
+    if end_m <= start_m:
+        return []
+    start_h = int(start_m // 60)
+    # The last touched minute is end_m - epsilon (end is exclusive).
+    end_h = int((end_m - 1e-9) // 60)
+    return list(range(start_h, min(end_h, 23) + 1))
+
+
+def _project_key(path_str):
+    return Path(path_str).name if path_str else "(unknown)"
+
+
+def compute_cross_llm(claude_rows, cross_rows):
+    """Build the cross_llm block. claude_rows = activity-pool row dicts.
+
+    Cross-LLM rows never enter scoring_metas/activity_metas; this function
+    only reads the two row lists it's given and returns a new block, so
+    the 9-dim scores and existing panels stay untouched (spec §6).
+    """
+    tagged = [dict(r, source="claude", coverage="full") for r in claude_rows]
+    all_rows = tagged + list(cross_rows)
+    comparable = [r for r in all_rows if r.get("coverage") != "presence_only"]
+
+    # --- source cards ---
+    sources = []
+    for src in sorted({r["source"] for r in all_rows}):
+        rs = [r for r in all_rows if r["source"] == src]
+        dates = sorted(d for d in (_parse_dt(r.get("start_time") or "")
+                                   for r in rs) if d)
+
+        def _tok(key, _rs=rs):
+            vals = [r.get(key) for r in _rs if isinstance(r.get(key), int)]
+            return sum(vals) if vals else None
+
+        sources.append({
+            "source": src,
+            "coverage": rs[0].get("coverage", "full"),
+            "session_count": len(rs),
+            "first_date": dates[0].date().isoformat() if dates else None,
+            "last_date": dates[-1].date().isoformat() if dates else None,
+            "total_input_tokens": _tok("input_tokens"),
+            "total_output_tokens": _tok("output_tokens"),
+            "parse_errors": 0,
+        })
+
+    # --- common window across comparable sources ---
+    per_source_range = {}
+    for src in {r["source"] for r in comparable}:
+        ds = sorted(d for d in (_parse_dt(r.get("start_time") or "")
+                    for r in comparable if r["source"] == src) if d)
+        if ds:
+            per_source_range[src] = (ds[0], ds[-1])
+    common_window = None
+    if len(per_source_range) >= 2:
+        start = max(a for a, _ in per_source_range.values())
+        end = min(b for _, b in per_source_range.values())
+        days = max((end - start).days, 0)
+        common_window = {"start": start.date().isoformat(),
+                         "end": end.date().isoformat(),
+                         "days": days, "degraded": days < 14}
+
+    # --- weekly share (active minutes per ISO week per source) ---
+    weekly = {}
+    for r in comparable:
+        for s, e in _row_windows(r):
+            wk = f"{s.isocalendar()[0]}-W{s.isocalendar()[1]:02d}"
+            weekly.setdefault(wk, {}).setdefault(r["source"], 0)
+            weekly[wk][r["source"]] += round((e - s).total_seconds() / 60)
+    weekly_share = [{"week": wk, "minutes": mins}
+                    for wk, mins in sorted(weekly.items())]
+
+    # --- parallel detection (hour buckets, midnight-split) ---
+    hour_sources = {}   # (date, hour) -> set(sources)
+    for r in comparable:
+        for s, e in _row_windows(r):
+            for day, ss, ee in _split_at_midnight(s, e):
+                for h in _hours_touched(day, ss, ee):
+                    hour_sources.setdefault((day, h), set()).add(r["source"])
+    heatmap = [[0] * 24 for _ in range(7)]
+    daily = {}
+    multi = single = 0
+    for (day, h), srcs in hour_sources.items():
+        n = len(srcs)
+        daily[day] = max(daily.get(day, 0), n)
+        if n >= 2:
+            heatmap[day.weekday()][h] += 1
+            multi += 1
+        else:
+            single += 1
+    parallel = {
+        "heatmap": heatmap,
+        "daily_max": [{"date": d.isoformat(), "max_parallel": m}
+                      for d, m in sorted(daily.items())],
+        "hours_multi_source": multi,
+        "hours_single_source": single,
+    }
+
+    # --- project x tool matrix (top 10 projects by total sessions) ---
+    matrix = {}
+    for r in comparable:
+        proj = _project_key(r.get("project_path") or "")
+        matrix.setdefault(proj, {}).setdefault(r["source"], 0)
+        matrix[proj][r["source"]] += 1
+    top = sorted(matrix.items(), key=lambda kv: -sum(kv[1].values()))[:10]
+    matrix_sources = sorted({r["source"] for r in comparable})
+    project_matrix = {
+        "projects": [p for p, _ in top],
+        "sources": matrix_sources,
+        "counts": [[counts.get(s, 0) for s in matrix_sources]
+                   for _, counts in top],
+    }
+
+    # --- head-to-head: claude vs codex inside the common window ---
+    head_to_head = None
+    if common_window and {"claude", "codex"} <= set(per_source_range):
+        window_start_date = date.fromisoformat(common_window["start"])
+        window_end_date = date.fromisoformat(common_window["end"])
+
+        def _side(src):
+            rs = [r for r in comparable if r["source"] == src]
+            inside = []
+            for r in rs:
+                d = _parse_dt(r.get("start_time") or "")
+                if d and window_start_date <= d.date() <= window_end_date:
+                    inside.append((r, d))
+            if not inside:
+                return None
+            durs = sorted(r.get("duration_minutes") or 0 for r, _ in inside)
+            toks = [(r.get("input_tokens") or 0) + (r.get("output_tokens") or 0)
+                    for r, _ in inside]
+            return {"sessions": len(inside),
+                    "active_days": len({d.date() for _, d in inside}),
+                    "total_tokens": sum(toks),
+                    "median_duration_minutes": durs[len(durs) // 2]}
+
+        claude_side, codex_side = _side("claude"), _side("codex")
+        if claude_side and codex_side:
+            head_to_head = {"window_days": common_window["days"],
+                            "claude": claude_side, "codex": codex_side}
+
+    return {"sources": sources, "common_window": common_window,
+            "weekly_share": weekly_share, "parallel": parallel,
+            "project_matrix": project_matrix, "head_to_head": head_to_head}
+
+
+def compute_ledger(activity_metas, cross_llm):
+    rows = list(activity_metas.values())
+    dates = sorted(d for d in (_parse_dt(r.get("start_time") or "")
+                               for r in rows) if d)
+    commits = sum(r.get("git_commits") or 0 for r in rows)
+    pushes = sum(r.get("git_pushes") or 0 for r in rows)
+    with_commits = sum(1 for r in rows if (r.get("git_commits") or 0) > 0)
+    return {
+        "schema_version": 1,
+        "window": {
+            "start": dates[0].date().isoformat() if dates else None,
+            "end": dates[-1].date().isoformat() if dates else None,
+            "days": (dates[-1] - dates[0]).days if len(dates) > 1 else 0,
+        },
+        "output": {"git_commits": commits, "git_pushes": pushes,
+                   "sessions_with_commits": with_commits},
+        "sources_detected": [s["source"] for s in cross_llm["sources"]],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR),
@@ -1458,6 +1716,10 @@ def main():
                         help="Path to sessions-redacted.jsonl from another machine. "
                              "Can be given multiple times. Each row augments the session pool. "
                              "Local sessions take precedence on session_id collisions.")
+    parser.add_argument("--cross-llm-rows", action="append", default=[],
+                        help="Path to scan_codex/grok/antigravity output jsonl. "
+                             "Repeatable. Rows feed the cross_llm/ledger blocks "
+                             "only — never the 9-dim scoring pool.")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir).expanduser()
@@ -1615,6 +1877,19 @@ def main():
             "source_machine": source_by_sid.get(s["sid"], "local"),
         } for s in sessions],
     }
+
+    # cross_llm / ledger: additive top-level blocks, computed from the same
+    # activity-pool rows compute_activity() uses (activity_metas in
+    # --transcript-rows mode, else metas in session-meta mode) plus any
+    # --cross-llm-rows adapter output. Never touches scoring_metas/
+    # activity_metas themselves — read-only inputs to a new output block.
+    activity_rows = activity_metas if activity_metas is not None else metas
+    cross_rows, cross_errors = load_cross_llm_rows(args.cross_llm_rows)
+    cross_llm = compute_cross_llm(list(activity_rows.values()), cross_rows)
+    for card in cross_llm["sources"]:
+        card["parse_errors"] = cross_errors.get(card["source"], 0)
+    final["cross_llm"] = cross_llm
+    final["ledger"] = compute_ledger(activity_rows, cross_llm)
 
     out.write_text(json.dumps(final, ensure_ascii=False, indent=2))
     print(f"wrote {out} ({out.stat().st_size} bytes)", file=sys.stderr)
