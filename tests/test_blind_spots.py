@@ -259,5 +259,91 @@ class InterruptWinRateTests(unittest.TestCase):
         self.assertFalse(out["gate_passed"])
 
 
+from scripts.aggregate import bs_graveyard, bs_ask_vs_ship
+
+WINDOW_END = BASE + timedelta(days=60)
+
+
+def _grave_row(sid, start, project, writes=6, commits=0):
+    return {"session_id": sid, "project_path": project,
+            "start_time": start.isoformat(), "duration_minutes": 60,
+            "tool_counts": {"Edit": writes, "Read": 10},
+            "git_commits": commits}
+
+
+class GraveyardTests(unittest.TestCase):
+    def test_two_items_pass_gate(self):
+        rows = [_grave_row("g1", BASE, "/home/u/projects/legacy-migration"),
+                _grave_row("g2", BASE + timedelta(days=3),
+                           "/home/u/projects/docs-site")]
+        out = bs_graveyard(rows, WINDOW_END)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(len(out["metrics"]["items"]), 2)
+        self.assertGreaterEqual(out["metrics"]["items"][0]["days_untouched"], 14)
+
+    def test_later_activity_disqualifies(self):
+        rows = [_grave_row("g1", BASE, "/home/u/projects/legacy-migration"),
+                _grave_row("g2", BASE + timedelta(days=50),
+                           "/home/u/projects/legacy-migration", writes=0)]
+        out = bs_graveyard(rows, WINDOW_END)
+        self.assertFalse(out["gate_passed"])
+
+    def test_commit_disqualifies(self):
+        rows = [_grave_row("g1", BASE, "/home/u/projects/a", commits=1),
+                _grave_row("g2", BASE, "/home/u/projects/b", commits=1)]
+        out = bs_graveyard(rows, WINDOW_END)
+        self.assertFalse(out["gate_passed"])
+
+    def test_scratch_and_unknown_excluded(self):
+        rows = [_grave_row("g1", BASE, "/tmp/throwaway"),
+                _grave_row("g2", BASE, "(unknown)")]
+        out = bs_graveyard(rows, WINDOW_END)
+        self.assertFalse(out["gate_passed"])
+
+    def test_recent_session_not_yet_graveyard(self):
+        rows = [_grave_row("g1", WINDOW_END - timedelta(days=3),
+                           "/home/u/projects/a"),
+                _grave_row("g2", WINDOW_END - timedelta(days=2),
+                           "/home/u/projects/b")]
+        out = bs_graveyard(rows, WINDOW_END)
+        self.assertFalse(out["gate_passed"])
+
+
+def _goal_sess(sid, cats, commits=0):
+    return {"sid": sid, "start": BASE.isoformat(), "outcome": "fully_achieved",
+            "goal_cats": cats, "git_commits": commits,
+            "project_key": "webapp", "first_prompt": "x",
+            "duration_min": 30, "interrupts": 0, "friction_counts": {},
+            "token_accel": None, "total_tokens": 100}
+
+
+class AskVsShipTests(unittest.TestCase):
+    def test_gap_detected(self):
+        rated = ([_goal_sess(f"a{i}", {"feature_implementation": 1})
+                  for i in range(10)]
+                 + [_goal_sess(f"b{i}", {"documentation_update": 1},
+                               commits=1) for i in range(10)])
+        out = bs_ask_vs_ship(rated)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["top_gap"]["category"],
+                         "feature_implementation")
+        self.assertEqual(out["metrics"]["top_gap"]["ship_share_pct"], 0.0)
+
+    def test_nonshipping_categories_never_flagged(self):
+        rated = ([_goal_sess(f"a{i}", {"information_query": 1})
+                  for i in range(15)]
+                 + [_goal_sess(f"b{i}", {"bug_fix": 1}, commits=1)
+                    for i in range(10)])
+        out = bs_ask_vs_ship(rated)
+        if out["gate_passed"]:
+            self.assertNotEqual(out["metrics"]["top_gap"]["category"],
+                                "information_query")
+
+    def test_gate_needs_shipped_sessions(self):
+        rated = [_goal_sess(f"a{i}", {"bug_fix": 1}) for i in range(25)]
+        out = bs_ask_vs_ship(rated)  # zero commits anywhere
+        self.assertFalse(out["gate_passed"])
+
+
 if __name__ == "__main__":
     unittest.main()

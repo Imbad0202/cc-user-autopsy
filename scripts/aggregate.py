@@ -2249,6 +2249,99 @@ def bs_interrupt_win_rate(rated):
                                "delta_pp": round(ri - rb, 1)})
 
 
+_BS_GRAVEYARD_MIN_WRITES = 5
+_BS_GRAVEYARD_HORIZON_DAYS = 14   # spec §13
+_BS_GRAVEYARD_MIN_ITEMS = 2
+_SCRATCH_PATH_MARKERS = ("/tmp/", "/scratchpad", "/private/tmp/")
+_WRITE_TOOLS = ("Edit", "Write", "NotebookEdit")
+_BS_ASKSHIP_MIN_RATED = 20
+_BS_ASKSHIP_MIN_SHIPPED = 5
+_BS_NONSHIP_GOALS = {"information_query", "exploration", "quick_question"}
+
+
+def bs_graveyard(activity_rows, window_end):
+    """Spec §5 #4 — the graveyard: substantive writes, no commit, project
+    untouched >= 14 days after. Structural guards (scratch paths, unknown
+    project) replace the outcome guard: achieved-but-never-shipped is
+    precisely the finding, not a counterexample."""
+    by_project = {}
+    for r in activity_rows:
+        key = normalize_project_path(r.get("project_path") or "")
+        if not is_shippable_project_key(key):
+            continue
+        if any(m in key.lower() for m in _SCRATCH_PATH_MARKERS):
+            continue
+        dt = _parse_dt(r.get("start_time"))
+        if dt is None:
+            continue
+        by_project.setdefault(key, []).append((dt, r))
+    items = []
+    for key, entries in by_project.items():
+        entries.sort(key=lambda e: e[0])
+        last_dt, last_row = entries[-1]
+        days_untouched = (window_end - last_dt).days
+        if days_untouched < _BS_GRAVEYARD_HORIZON_DAYS:
+            continue
+        tc = last_row.get("tool_counts") or {}
+        writes = sum(tc.get(t, 0) for t in _WRITE_TOOLS)
+        if writes < _BS_GRAVEYARD_MIN_WRITES:
+            continue
+        if (last_row.get("git_commits") or 0) > 0:
+            continue
+        items.append({"project_key": project_name(key),
+                      "last_active_date": last_dt.date().isoformat(),
+                      "days_untouched": days_untouched,
+                      "writes": writes,
+                      "evidence": [last_row.get("session_id") or ""]})
+    items.sort(key=lambda i: -i["days_untouched"])
+    if len(items) < _BS_GRAVEYARD_MIN_ITEMS:
+        return _bs_result("graveyard", False, n=len(items),
+                          reason="fewer than 2 qualifying items")
+    return _bs_result("graveyard", True, metrics={"items": items[:8]},
+                      n=len(items))
+
+
+def bs_ask_vs_ship(rated):
+    """Spec §5 #6 — goal-category share of asks vs share of sessions that
+    shipped (git_commits > 0). Non-shipping categories are excluded from
+    flagging: asking questions is not a leak (structural guard)."""
+    if len(rated) < _BS_ASKSHIP_MIN_RATED:
+        return _bs_result("ask_vs_ship", False, n=len(rated),
+                          reason="fewer than 20 scored sessions")
+    ask, ship = {}, {}
+    shipped_sessions = 0
+    for s in rated:
+        cats = s.get("goal_cats") or {}
+        shipped = (s.get("git_commits") or 0) > 0
+        if shipped:
+            shipped_sessions += 1
+        for c, n in cats.items():
+            ask[c] = ask.get(c, 0) + n
+            if shipped:
+                ship[c] = ship.get(c, 0) + n
+    total_ask, total_ship = sum(ask.values()), sum(ship.values())
+    if not total_ask or shipped_sessions < _BS_ASKSHIP_MIN_SHIPPED:
+        return _bs_result("ask_vs_ship", False, n=len(rated),
+                          reason="facets or shipped sessions below floor")
+    gaps = []
+    for c, n in ask.items():
+        if c in _BS_NONSHIP_GOALS:
+            continue
+        a = 100 * n / total_ask
+        p = 100 * ship.get(c, 0) / total_ship if total_ship else 0.0
+        gaps.append((a - p, c, a, p))
+    if not gaps:
+        return _bs_result("ask_vs_ship", False, n=len(rated),
+                          reason="no shippable goal categories present")
+    gap_pp, cat, a, p = max(gaps)
+    return _bs_result("ask_vs_ship", True, n=len(rated),
+                      metrics={"top_gap": {"category": cat,
+                                           "ask_share_pct": round(a, 1),
+                                           "ship_share_pct": round(p, 1),
+                                           "gap_pp": round(gap_pp, 1)},
+                               "shipped_sessions": shipped_sessions})
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR),
