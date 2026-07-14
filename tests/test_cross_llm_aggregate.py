@@ -595,5 +595,50 @@ class MainWiringTests(unittest.TestCase):
         self.assertEqual(data["cross_llm"].get("unattributed_parse_errors"), 0)
 
 
+class MidnightBoundaryTests(unittest.TestCase):
+    def test_window_ending_at_midnight_counts_one_day(self):
+        from scripts.aggregate import _split_at_midnight
+        from datetime import datetime, timezone
+        s = datetime(2026, 6, 1, 23, 0, tzinfo=timezone.utc)
+        e = datetime(2026, 6, 2, 0, 0, tzinfo=timezone.utc)
+        pieces = list(_split_at_midnight(s, e))
+        self.assertEqual([d for d, _, _ in pieces], [s.date()])
+
+    def test_single_point_window_still_yielded(self):
+        from scripts.aggregate import _split_at_midnight
+        from datetime import datetime, timezone
+        t = datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc)
+        pieces = list(_split_at_midnight(t, t))
+        self.assertEqual(len(pieces), 1)
+
+
+class HeadToHeadClippedDurationTests(unittest.TestCase):
+    def test_resumed_session_contributes_only_in_window_minutes(self):
+        # 20-day two-source overlap so common_window exists and is healthy.
+        claude = [_claude_row(f"c{i}", BASE + timedelta(days=i))
+                  for i in range(20)]
+        codex = [_codex_row(f"x{i}", BASE + timedelta(days=i, minutes=30))
+                 for i in range(1, 20)]
+        # One codex session STARTS 10 days before the window with 600
+        # pre-window minutes, then resumes for 10 minutes inside it.
+        early = BASE - timedelta(days=10)
+        inside = BASE + timedelta(days=5)
+        resumed = {"session_id": "xr", "project_path": "/home/user/projects/webapp",
+                   "start_time": early.isoformat(), "duration_minutes": 610,
+                   "segments": [[early.isoformat(),
+                                 (early + timedelta(minutes=600)).isoformat()],
+                                [inside.isoformat(),
+                                 (inside + timedelta(minutes=10)).isoformat()]],
+                   "input_tokens": 500, "output_tokens": 100,
+                   "source": "codex", "coverage": "full"}
+        block = compute_cross_llm(claude, codex + [resumed])
+        h2h = block["head_to_head"]
+        self.assertIsNotNone(h2h)
+        # Every plain codex row contributes 60 in-window minutes; the resumed
+        # one only 10. Median must stay 60, and no side may exceed the
+        # window-clipped per-session maximum of 60.
+        self.assertEqual(h2h["codex"]["median_duration_minutes"], 60)
+
+
 if __name__ == "__main__":
     unittest.main()

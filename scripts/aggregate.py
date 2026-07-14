@@ -1563,7 +1563,12 @@ def _split_at_midnight(start, end):
             cur.date() + timedelta(days=1), time.min, tzinfo=cur.tzinfo)
         yield cur.date(), cur, boundary
         cur = boundary
-    yield cur.date(), cur, end
+    if cur < end or cur == start:
+        # Skip the zero-length terminal piece a window ending exactly at
+        # local midnight would otherwise produce (23:00-00:00 must count
+        # one active day, not two) — but still yield instantaneous
+        # single-point windows (cur == start) so they aren't dropped.
+        yield cur.date(), cur, end
 
 
 def _hours_touched(day, ss, ee):
@@ -1918,11 +1923,24 @@ def compute_cross_llm(claude_rows, cross_rows):
                     inside.append((r, clipped))
             if not inside:
                 return None
-            durs = [r.get("duration_minutes") or 0 for r, _ in inside]
+            # Duration: only the minutes that actually fall INSIDE the
+            # common window (clipped segments), so a resumed session with
+            # one minute in-window doesn't smuggle in hours of pre-window
+            # activity under a "common window" heading.
+            durs = [
+                round(sum((e - s).total_seconds() for s, e in clipped) / 60)
+                for _, clipped in inside
+            ]
             # total_tokens: sum only rows that carry at least one token
             # field, so a row missing both input/output doesn't silently
             # count as 0 and drag the total down. If NO row in the window
             # has token data at all, emit None rather than a misleading 0.
+            # Token counts are SESSION-level facts (adapters get one
+            # cumulative figure per session, not per segment), so a session
+            # partially inside the window contributes its full total —
+            # apportioning by time would be imputation, which this pipeline
+            # forbids. Consumers should read this as "tokens of sessions
+            # active in the window".
             tok_rows = [
                 (r.get("input_tokens"), r.get("output_tokens"))
                 for r, _ in inside
