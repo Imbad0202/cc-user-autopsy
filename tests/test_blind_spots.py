@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from scripts.aggregate import (
     bs_repeated_instructions, bs_sunk_cost, counterexample_similar,
@@ -343,6 +344,106 @@ class AskVsShipTests(unittest.TestCase):
         rated = [_goal_sess(f"a{i}", {"bug_fix": 1}) for i in range(25)]
         out = bs_ask_vs_ship(rated)  # zero commits anywhere
         self.assertFalse(out["gate_passed"])
+
+
+import json as _json
+import subprocess
+import sys
+import tempfile
+
+from scripts.aggregate import bs_habit_drift, compute_blind_spots
+
+
+def _week_sess(week_i, j, plen, good):
+    start = BASE + timedelta(weeks=week_i, days=j % 5)
+    return {"sid": f"w{week_i}s{j}", "start": start.isoformat(),
+            "outcome": "fully_achieved" if good else "not_achieved",
+            "first_prompt": "p" * plen, "first_prompt_len": plen,
+            "duration_min": 30, "interrupts": 0, "friction_counts": {},
+            "goal_cats": {}, "git_commits": 0, "token_accel": None,
+            "total_tokens": 100}
+
+
+class HabitDriftTests(unittest.TestCase):
+    def _weeks(self, lens, good_rates):
+        rated = []
+        for w, (plen, gr) in enumerate(zip(lens, good_rates)):
+            for j in range(4):  # 4 rated per week >= GROWTH_MIN_RATED_PER_WEEK
+                rated.append(_week_sess(w, j, plen, good=(j / 4 < gr)))
+        return rated
+
+    def test_drift_detected(self):
+        # prompts shrink 200 -> 80, good rate flat
+        out = bs_habit_drift(self._weeks([200] * 4 + [80] * 4, [0.75] * 8))
+        self.assertTrue(out["gate_passed"])
+        self.assertLess(out["metrics"]["late_median_len"],
+                        0.75 * out["metrics"]["early_median_len"])
+
+    def test_guard_improved_outcomes_suppress(self):
+        out = bs_habit_drift(self._weeks([200] * 4 + [80] * 4,
+                                         [0.5] * 4 + [1.0] * 4))
+        self.assertFalse(out["gate_passed"])
+        self.assertTrue(out["suppressed_by_guard"])
+
+    def test_gate_needs_eight_weeks(self):
+        out = bs_habit_drift(self._weeks([200] * 3 + [80] * 3, [0.75] * 6))
+        self.assertFalse(out["gate_passed"])
+        self.assertFalse(out["suppressed_by_guard"])
+
+    def test_stable_prompts_no_drift(self):
+        out = bs_habit_drift(self._weeks([150] * 8, [0.75] * 8))
+        self.assertFalse(out["gate_passed"])
+
+
+class ComputeBlindSpotsTests(unittest.TestCase):
+    def test_all_seven_keys_present(self):
+        out = compute_blind_spots([], [], [], [], WINDOW_END)
+        self.assertEqual(out["schema_version"], 1)
+        for k in ("repeated_instructions", "sunk_cost", "switch_tax",
+                  "graveyard", "habit_drift", "ask_vs_ship",
+                  "interrupt_win_rate"):
+            self.assertIn(k, out)
+            self.assertFalse(out[k]["gate_passed"])   # empty inputs: all gated
+
+
+class BlindSpotsWiringTests(unittest.TestCase):
+    """Mirrors tests/test_cross_llm_aggregate.py::MainWiringTests: build a
+    minimal session-meta dir, run aggregate.py as a subprocess, assert the
+    output JSON has a well-formed blind_spots block."""
+
+    @staticmethod
+    def _write_minimal_session_meta(data_dir):
+        meta_dir = data_dir / "session-meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        sid = "11111111-1111-1111-1111-111111111111"
+        (meta_dir / f"{sid}.json").write_text(_json.dumps({
+            "session_id": sid,
+            "project_path": "/home/user/projects/demo",
+            "start_time": BASE.isoformat(),
+            "duration_minutes": 10,
+            "input_tokens": 100, "output_tokens": 50,
+            "git_commits": 0, "git_pushes": 0,
+        }), encoding="utf-8")
+
+    def test_main_emits_blind_spots_block(self):
+        skill_dir = Path(__file__).resolve().parent.parent
+        script = skill_dir / "scripts" / "aggregate.py"
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            data_dir = td / "usage-data"
+            data_dir.mkdir()
+            self._write_minimal_session_meta(data_dir)
+            out_path = td / "analysis-data.json"
+            r = subprocess.run(
+                [sys.executable, str(script),
+                 "--data-dir", str(data_dir),
+                 "--output", str(out_path)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            data = _json.loads(out_path.read_text())
+        self.assertIn("blind_spots", data)
+        self.assertEqual(data["blind_spots"]["schema_version"], 1)
 
 
 if __name__ == "__main__":

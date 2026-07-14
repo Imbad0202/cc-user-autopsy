@@ -2342,6 +2342,88 @@ def bs_ask_vs_ship(rated):
                                "shipped_sessions": shipped_sessions})
 
 
+_BS_DRIFT_MIN_WEEKS = 8
+_BS_DRIFT_LEN_DROP = 0.75
+_BS_DRIFT_GOOD_TOL_PP = 5
+
+
+def _median(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    if not n:
+        return 0
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
+
+
+def bs_habit_drift(rated):
+    """Spec §5 #5 — habit drift: prompt length falling while outcomes are
+    not improving. Guard: shorter prompts WITH better outcomes = skill
+    gained, suppress (the counterexample guard for this heuristic).
+
+    Weeks are split early/late at the midpoint; a week only counts if it
+    has >= GROWTH_MIN_RATED_PER_WEEK rated sessions (same floor the growth
+    panel uses, so "8 weeks" means 8 *plottable* weeks, not calendar weeks).
+    """
+    weeks = {}
+    for s in rated:
+        dt = _parse_dt(s.get("start"))
+        if dt is None:
+            continue
+        weeks.setdefault(week_key(dt), []).append(s)
+    eligible = {w: ss for w, ss in weeks.items()
+                if len(ss) >= GROWTH_MIN_RATED_PER_WEEK}
+    if len(eligible) < _BS_DRIFT_MIN_WEEKS:
+        return _bs_result("habit_drift", False, n=len(eligible),
+                          reason="fewer than 8 weeks with enough rated sessions")
+    ordered = [eligible[w] for w in sorted(eligible)]
+    half = len(ordered) // 2
+    early = [s for wk in ordered[:half] for s in wk]
+    late = [s for wk in ordered[-half:] for s in wk]
+
+    def med_len(ss):
+        return _median([s.get("first_prompt_len") or
+                        len(s.get("first_prompt") or "") for s in ss])
+
+    def good_rate(ss):
+        return 100 * sum(is_good(s["outcome"]) for s in ss) / len(ss)
+
+    el, ll = med_len(early), med_len(late)
+    eg, lg = good_rate(early), good_rate(late)
+    metrics = {"weeks": len(eligible),
+               "early_median_len": round(el), "late_median_len": round(ll),
+               "early_good_rate": round(eg, 1), "late_good_rate": round(lg, 1)}
+
+    shortening = el > 0 and ll <= _BS_DRIFT_LEN_DROP * el
+    if not shortening:
+        return _bs_result("habit_drift", False, metrics=metrics,
+                          n=len(eligible), reason="no shortening trend")
+
+    improved = lg > eg + _BS_DRIFT_GOOD_TOL_PP
+    if improved:
+        return _bs_result("habit_drift", False, metrics=metrics,
+                          n=len(eligible), guarded=True,
+                          reason="outcomes improved while prompts shortened")
+
+    # shortening AND good rate flat-or-worse (within tolerance or down) = drift
+    return _bs_result("habit_drift", True, metrics=metrics, n=len(eligible))
+
+
+def compute_blind_spots(sessions, rated, activity_rows, cross_rows, window_end):
+    """Phase 2 blind-spot engine (spec §5). Additive analysis-data block;
+    every heuristic self-gates and the whole entry ships regardless so the
+    renderer (and later phases) can see WHY something was suppressed."""
+    return {
+        "schema_version": 1,
+        "repeated_instructions": bs_repeated_instructions(activity_rows, cross_rows),
+        "sunk_cost": bs_sunk_cost(rated),
+        "switch_tax": bs_switch_tax(rated, activity_rows, cross_rows),
+        "graveyard": bs_graveyard(activity_rows, window_end),
+        "habit_drift": bs_habit_drift(rated),
+        "ask_vs_ship": bs_ask_vs_ship(rated),
+        "interrupt_win_rate": bs_interrupt_win_rate(rated),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR),
@@ -2538,6 +2620,14 @@ def main():
     cross_llm["unattributed_parse_errors"] = cross_errors.get("(unknown)", 0)
     final["cross_llm"] = cross_llm
     final["ledger"] = compute_ledger(activity_rows, cross_llm)
+
+    # blind_spots: additive top-level block (Phase 2, spec §5/§7).
+    # window_end anchors graveyard staleness to the newest activity seen.
+    all_starts = [d for d in (_parse_dt(r.get("start_time"))
+                              for r in activity_rows.values()) if d]
+    window_end = max(all_starts) if all_starts else datetime.now().astimezone()
+    final["blind_spots"] = compute_blind_spots(
+        sessions, rated, list(activity_rows.values()), cross_rows, window_end)
 
     out.write_text(json.dumps(final, ensure_ascii=False, indent=2))
     print(f"wrote {out} ({out.stat().st_size} bytes)", file=sys.stderr)

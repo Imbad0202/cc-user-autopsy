@@ -94,6 +94,29 @@ for dim, metrics in scores.items():
   added or removed — this is a correctness fix to which sources
   `sources_detected` includes.
 
+## 2026-07-14 — additive: `blind_spots` top-level block (V5 Phase 2)
+
+- `blind_spots`: schema_version 1; seven heuristic entries keyed
+  `repeated_instructions`, `sunk_cost`, `switch_tax`, `graveyard`,
+  `habit_drift`, `ask_vs_ship`, `interrupt_win_rate` (spec §5). Each entry
+  has the shape `{id, gate_passed, suppressed_by_guard, n, metrics, reason}`:
+  `gate_passed` is `False` whenever the heuristic's sample floor isn't met
+  *or* its counterexample guard tripped (`suppressed_by_guard: true`
+  distinguishes the two — `reason` explains either case in prose); `metrics`
+  is heuristic-specific and may be `{}` when gated off; `n` is the
+  heuristic's own qualifying-sample count (patterns / pairs / items /
+  eligible weeks / scored sessions, depending on the heuristic).
+- Present on every run, including empty-input runs — the whole block ships
+  even when all seven entries are gated off, so downstream consumers (the
+  Phase 2 leak ledger, Phase 3 trend rendering) can distinguish "engine ran,
+  nothing qualified" from "engine did not run." Consumers reading JSON from
+  before this change should treat a missing `blind_spots` key as "engine not
+  run" (not as "nothing found").
+- `habit_drift` is computed and stored by this change but intentionally not
+  yet rendered anywhere in the HTML report — the trend-ledger UI consuming
+  it is Phase 3 scope (decision #3 in the Phase 2 plan header).
+- No existing fields changed or removed.
+
 ---
 
 *Maintained alongside `scripts/aggregate.py`. When adding, deprecating, or removing fields, update this file in the same commit.*

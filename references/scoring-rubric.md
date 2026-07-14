@@ -156,3 +156,236 @@ If fewer than 3 hours have ≥ 5 sessions, skip.
   report as "preliminary" and dials down confidence language in the HTML.
 - When a dimension is skipped due to insufficient data, it's shown as "n/a"
   in the report and does not factor into the 9-dimension average.
+
+---
+
+## Blind-spot heuristics (v1, provisional)
+
+Seven pattern detectors computed by `compute_blind_spots()` in `aggregate.py`
+(spec §5), stored in the additive `blind_spots` top-level block. Unlike the
+9-dimension scores above, these are not scored 1-10 — each is a binary
+gate (`gate_passed`) with a sample floor and, where applicable, a
+counterexample guard that suppresses the finding even when the sample floor
+is met. All constants on this page are **provisional v1**: chosen at plan
+time without a real-data tuning pass; expect them to move once the engine
+has run against actual usage.
+
+Shared building blocks: `normalize_prompt()` (lowercase, punctuation folded
+to spaces, whitespace collapsed, truncated to 200 chars), `prompt_similarity()`
+(token-set Jaccard), `week_key()` (ISO `YYYY-Www`), and the counterexample
+guard `counterexample_similar(rate_flagged, rate_good)` — trips (returns
+`True`, suppressing the finding) when the flagged behavior occurs in
+`fully_achieved` sessions at a rate within **provisional v1** `_BS_GUARD_FACTOR
+= 1.5`× the flagged rate, i.e. the behavior isn't actually predictive of
+failure for this user.
+
+### #1 — Repeated-instruction tax
+
+Rationale: an instruction the user has to retype every session (a style
+rule, a "run tests before claiming done" reminder) is a tax on every
+session it appears in, win or lose. **Not outcome-guarded by design** — see
+counterexample-guard applicability below.
+
+Let `X = normalize_prompt(first_prompt)` grouped into exact-match patterns
+across Claude rows and full/partial-coverage cross-LLM rows (`coverage ==
+"presence_only"` rows excluded — no prompt text available).
+
+| Threshold | Value (provisional v1) |
+|-----------|-------------------------|
+| Minimum pattern length | `_BS_MIN_PATTERN_CHARS = 20` normalized chars |
+| Minimum occurrences | `_BS_REPEAT_MIN_OCC = 5` |
+| Minimum distinct weeks | `_BS_REPEAT_MIN_WEEKS = 3` |
+
+`metrics.patterns` reports the top 5 patterns by occurrence count; each
+carries the most-common raw exemplar (≤120 chars), a lower-bound
+`est_wasted_tokens = (occurrences - 1) * len(exemplar) // 4` (only the
+retyped text — thinking/re-reading time not counted), and up to 3 evidence
+session IDs.
+
+If no pattern reaches 5 occurrences across ≥3 distinct weeks, `gate_passed`
+is `False` and `reason` explains which floor wasn't met.
+
+### #2 — Sunk-cost sessions
+
+Rationale: a failed session that accelerated its output pace late (grinding
+harder without changing approach), followed by a fast, similar-prompt
+success, is the signature of "should have restarted sooner."
+
+A confirmed pair = a `not_achieved` session with `token_accel >=
+_BS_ACCEL_FLAG` (**provisional v1** `1.5`), followed by a later
+`fully_achieved` (or better) session whose normalized prompt has Jaccard
+similarity `>= _BS_SIMILARITY_MIN` (**provisional v1** `0.5`) to the failed
+session's, finishing in `<= _BS_RETRY_MAX_DURATION_SHARE` (**provisional
+v1** `0.5`, i.e. half) of the failed session's minutes.
+
+| Threshold | Value (provisional v1) |
+|-----------|-------------------------|
+| Minimum confirmed pairs | `_BS_SUNK_MIN_PAIRS = 3` |
+
+**Counterexample guard applies**: if `token_accel >= 1.5` occurs about as
+often in `fully_achieved` sessions as in `not_achieved` ones
+(`counterexample_similar` trips), acceleration isn't actually a failure
+signal for this user — the whole finding is suppressed
+(`suppressed_by_guard: true`) regardless of pair count.
+
+If fewer than 3 confirmed pairs and the guard didn't trip, `gate_passed` is
+`False` with `reason = "fewer than 3 confirmed pairs"`.
+
+### #3 — Switch tax
+
+Rationale: sessions that overlap another tool's active window (multi-tool
+mornings, say) may carry a context-switching cost visible as lower
+good-rate or higher friction/interrupts compared to single-tool sessions.
+Symmetric comparison — **no counterexample guard** (both buckets are
+reported; there's no "guard direction" for a comparison that reports both
+sides).
+
+Buckets: `multi` = rated Claude sessions whose `[start, start+duration]`
+overlaps a merged interval where ≥2 sources were concurrently active
+(computed from Claude activity rows plus full/partial cross-LLM rows);
+`single` = the rest.
+
+| Threshold | Value (provisional v1) |
+|-----------|-------------------------|
+| Minimum sessions per bucket | `_BS_SWITCH_MIN_PER_BUCKET = 20` |
+
+If no multi-source windows exist at all, or either bucket is below 20
+sessions, `gate_passed` is `False`. `metrics.multi` / `metrics.single` each
+report `n`, `good_rate`, `friction_per_session`, `interrupts_per_session`.
+
+### #4 — The graveyard
+
+Rationale: substantive work (real edits) with no commit, on a project that
+then goes untouched for weeks, is effort that never shipped — a different
+failure mode from a session that simply didn't finish. **Not
+outcome-guarded** — achieved-but-never-shipped is precisely the finding, not
+a counterexample to explain away; guarded instead by structural exclusions.
+
+Per project (`normalize_project_path`), take the latest activity row. It
+qualifies as a graveyard item when all of:
+
+| Threshold | Value (provisional v1) |
+|-----------|-------------------------|
+| Minimum substantive writes (Edit+Write+NotebookEdit) | `_BS_GRAVEYARD_MIN_WRITES = 5` |
+| Staleness horizon | `_BS_GRAVEYARD_HORIZON_DAYS = 14` (spec §13) |
+| Zero commits on that latest row | `git_commits == 0` |
+| Not a scratch path | excludes `_SCRATCH_PATH_MARKERS = ("/tmp/", "/scratchpad", "/private/tmp/")` |
+| Project key resolvable | excludes `(unknown)` / non-shippable keys |
+| Minimum qualifying items | `_BS_GRAVEYARD_MIN_ITEMS = 2` |
+
+`window_end` (the newest activity timestamp seen this run, or "now" if the
+activity pool is empty) anchors "days untouched" — a project active within
+the last 14 days of the window is not yet a graveyard candidate, even with
+zero commits. `metrics.items` lists up to 8, sorted by `days_untouched`
+descending.
+
+### #5 — Habit drift
+
+Rationale: shrinking prompt length over time can mean two very different
+things — growing trust/skill (fine) or corner-cutting under fatigue (a
+blind spot worth flagging). The heuristic can't tell those apart from
+length alone, so it leans on the outcome trend to disambiguate.
+
+Rated sessions are grouped into ISO weeks; only weeks with
+`>= GROWTH_MIN_RATED_PER_WEEK` (existing constant, `= 3`) rated sessions
+count as *eligible* — this mirrors the floor the growth panel already uses,
+so "8 weeks" means 8 plottable weeks, not 8 calendar weeks. Eligible weeks
+are split into an early half and a late half (sorted chronologically,
+`ordered[:half]` vs `ordered[-half:]`).
+
+Let `early_median_len` / `late_median_len` = median `first_prompt_len` (or
+`len(first_prompt)` as fallback) over the early/late halves, and
+`early_good_rate` / `late_good_rate` = percentage of `is_good()` outcomes
+over the same halves.
+
+| Threshold | Value (provisional v1) |
+|-----------|-------------------------|
+| Minimum eligible weeks | `_BS_DRIFT_MIN_WEEKS = 8` |
+| Shortening threshold | `_BS_DRIFT_LEN_DROP = 0.75` (late median ≤ 75% of early median) |
+| Good-rate tolerance | `_BS_DRIFT_GOOD_TOL_PP = 5` percentage points |
+
+Decision logic, in order:
+
+1. Fewer than 8 eligible weeks → `gate_passed = False`, not guarded
+   (`reason = "fewer than 8 weeks with enough rated sessions"`).
+2. No shortening trend (`late_median_len > 0.75 * early_median_len`, or
+   `early_median_len` is 0) → `gate_passed = False`, not guarded
+   (`reason = "no shortening trend"`).
+3. Shortening, and `late_good_rate` improved by more than 5pp over
+   `early_good_rate` → **counterexample guard trips**
+   (`suppressed_by_guard = true`, `reason = "outcomes improved while
+   prompts shortened"`): shorter prompts with better outcomes is skill
+   gained, not drift.
+4. Shortening, and `late_good_rate` is flat (within ±5pp) or worse →
+   `gate_passed = True`. This is the drift finding.
+
+**Phase 2 scope note**: `bs_habit_drift` is computed and stored in every
+run starting this change, but is **not rendered** anywhere in the HTML
+report yet. The trend-ledger UI that would visualize it needs multiple
+snapshots to show a trend and is Phase 3 scope.
+
+### #6 — Ask vs. ship
+
+Rationale: if a goal category (e.g. `feature_implementation`) makes up a
+large share of what's *asked* but a much smaller share of what actually
+*ships* (sessions with `git_commits > 0`), that gap is a blind spot —
+effort concentrated somewhere that rarely closes the loop.
+
+Inherently non-shipping goal categories (`_BS_NONSHIP_GOALS =
+{"information_query", "exploration", "quick_question"}`) are excluded from
+gap-flagging by design — asking a question is not a leak. This is the
+**structural** form of the counterexample guard for this heuristic (spec's
+"guarded" reading, not the `counterexample_similar` numeric guard used by
+#2/#5).
+
+| Threshold | Value (provisional v1) |
+|-----------|-------------------------|
+| Minimum rated sessions | `_BS_ASKSHIP_MIN_RATED = 20` |
+| Minimum shipped sessions | `_BS_ASKSHIP_MIN_SHIPPED = 5` |
+
+`gap_pp = ask_share_pct - ship_share_pct` for each shippable category;
+`metrics.top_gap` reports the largest gap. If there are zero shippable
+categories present after exclusion, or the rated/shipped floors aren't met,
+`gate_passed` is `False`.
+
+### #7 — Interrupt win-rate
+
+Rationale: the D5 upgrade — instead of a single threshold score, report
+both buckets symmetrically so the user can see the actual delta, not just
+whether it cleared a bar. Symmetric comparison — **no counterexample
+guard**.
+
+Buckets: `interrupted` = rated sessions with `interrupts > 0`; `baseline` =
+rated sessions with zero interrupts.
+
+| Threshold | Value (provisional v1) |
+|-----------|-------------------------|
+| Minimum sessions per bucket | `5` (same floor as D5 above) |
+
+`metrics.delta_pp = interrupted.good_rate - baseline.good_rate`. Negative
+means interrupting correlates with worse outcomes for this user; positive
+means interruptions tend to be well-timed rescues.
+
+### Counterexample-guard applicability
+
+Per spec §5 ("any pattern that occurs at a similar rate in `fully_achieved`
+sessions drops below gate"), read per-heuristic:
+
+- **#2 sunk-cost** — guarded: if `token_accel >= 1.5` is about as common in
+  `fully_achieved` as in `not_achieved` sessions, acceleration is not a
+  failure signal for this user; suppress.
+- **#5 habit drift** — guarded: if prompts got shorter but the good rate
+  *improved* beyond tolerance, that is skill, not drift; suppress.
+- **#6 ask-vs-ship** — guarded structurally: inherently non-shipping goal
+  categories (`information_query`, `exploration`, `quick_question`) are
+  excluded from mismatch flagging (asking questions is not a leak).
+- **#1 repeated-instruction tax** — **not** outcome-guarded by design: a
+  repeated instruction is a tax regardless of outcome (successful sessions
+  still paid it); an outcome guard would always suppress it. Guarded
+  instead by the 20-char floor.
+- **#3, #7** — not guarded: they *are* symmetric comparisons (both buckets
+  reported), so there is no single "flagged rate" to compare against a
+  "good rate."
+- **#4 graveyard** — not outcome-guarded: an achieved-but-never-shipped
+  artifact is precisely the finding; guarded instead by the structural
+  exclusions (scratch paths, `(unknown)` project, 14-day horizon).
