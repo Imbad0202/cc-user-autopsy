@@ -63,6 +63,18 @@ def append_history_snapshot(history_path, analysis, audience):
             elif isinstance(val, (int, float)):
                 scores[key] = val
         ledger = analysis.get("ledger") or {}
+        leaks_items = (ledger.get("leaks") or {}).get("items") or []
+        leaks = []
+        if isinstance(leaks_items, list):
+            for item in leaks_items:
+                if not isinstance(item, dict):
+                    continue
+                leaks.append({
+                    "type": item.get("type"),
+                    "weekly_cost_usd": item.get("weekly_cost_usd"),
+                    "weekly_tokens": item.get("weekly_tokens"),
+                    "occurrences": item.get("occurrences"),
+                })
         entry = {
             "date": date.today().isoformat(),
             "schema_version": 1,
@@ -72,6 +84,7 @@ def append_history_snapshot(history_path, analysis, audience):
                 "git_commits": (ledger.get("output") or {}).get("git_commits"),
                 "sessions": (analysis.get("meta") or {}).get("total_sessions"),
                 "sources_detected": ledger.get("sources_detected") or [],
+                "leaks": leaks,
             },
         }
         path = Path(history_path).expanduser()

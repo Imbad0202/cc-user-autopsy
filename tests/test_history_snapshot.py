@@ -17,6 +17,30 @@ ANALYSIS = {
                "sources_detected": ["claude", "codex"]},
 }
 
+ANALYSIS_WITH_LEAKS = {
+    "meta": {"total_sessions": 12},
+    "scores": {"D1_delegation": {"score": 7}, "_overall": {"score": 6.1}},
+    "ledger": {"schema_version": 1,
+               "output": {"git_commits": 9, "git_pushes": 4,
+                          "sessions_with_commits": 5},
+               "sources_detected": ["claude", "codex"],
+               "leaks": {
+                   "window_weeks": 4.0,
+                   "items": [
+                       {"type": "repeated_instructions",
+                        "weekly_cost_usd": 1.23,
+                        "weekly_tokens": 45000,
+                        "occurrences": 6,
+                        "evidence": [{"sid": "session-secret-abc"}]},
+                       {"type": "sunk_cost",
+                        "weekly_cost_usd": 0.55,
+                        "weekly_tokens": 12000,
+                        "occurrences": 2,
+                        "evidence": ["session-secret-xyz"]},
+                   ],
+               }},
+}
+
 
 class SnapshotTests(unittest.TestCase):
     def test_appends_one_line_for_self(self):
@@ -44,6 +68,38 @@ class SnapshotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             bad = Path(td)  # is a dir, not a file
             append_history_snapshot(bad, ANALYSIS, "self")  # must not raise
+
+    def test_leaks_carried_as_compact_metrics_without_evidence(self):
+        with tempfile.TemporaryDirectory() as td:
+            hist = Path(td) / "autopsy-history.jsonl"
+            append_history_snapshot(hist, ANALYSIS_WITH_LEAKS, "self")
+            line = hist.read_text().strip()
+        self.assertNotIn("session-secret-abc", line)
+        self.assertNotIn("session-secret-xyz", line)
+        entry = json.loads(line)
+        leaks = entry["ledger"]["leaks"]
+        self.assertEqual(len(leaks), 2)
+        self.assertEqual(leaks[0], {
+            "type": "repeated_instructions",
+            "weekly_cost_usd": 1.23,
+            "weekly_tokens": 45000,
+            "occurrences": 6,
+        })
+        self.assertEqual(leaks[1], {
+            "type": "sunk_cost",
+            "weekly_cost_usd": 0.55,
+            "weekly_tokens": 12000,
+            "occurrences": 2,
+        })
+        for item in leaks:
+            self.assertNotIn("evidence", item)
+
+    def test_leaks_absent_yields_empty_list(self):
+        with tempfile.TemporaryDirectory() as td:
+            hist = Path(td) / "autopsy-history.jsonl"
+            append_history_snapshot(hist, ANALYSIS, "self")
+            entry = json.loads(hist.read_text().strip())
+        self.assertEqual(entry["ledger"]["leaks"], [])
 
     def test_malformed_analysis_shapes_do_not_raise(self):
         # scores/output as non-dict truthy values (e.g. from a malformed or
