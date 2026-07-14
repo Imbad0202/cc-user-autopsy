@@ -116,6 +116,23 @@ for dim, metrics in scores.items():
   yet rendered anywhere in the HTML report — the trend-ledger UI consuming
   it is Phase 3 scope (decision #3 in the Phase 2 plan header).
 - No existing fields changed or removed.
+- `ledger.leaks`: additive field on the existing `ledger` block (schema_version
+  1, unchanged). Shape:
+  `{window_weeks: float, items: [{type, weekly_cost_usd, weekly_tokens,
+  occurrences, evidence: [sid, ...]}]}`. `window_weeks` is
+  `max(ledger.window.days / 7, 1)` rounded to 1 decimal. `items` holds up to
+  3 entries, sorted by `weekly_cost_usd` descending — every leak type that
+  independently clears its own gate, not just the top-scoring one. `type` is
+  one of `repeated_instructions` (from `blind_spots.repeated_instructions`),
+  `sunk_cost` (from `blind_spots.sunk_cost`'s confirmed pairs), or
+  `failed_session_burn` (all other `not_achieved` rated sessions not already
+  counted under `sunk_cost`, gated at >=5 sessions to avoid double-counting
+  and small-sample noise). All costs are lower-bound estimates: every dollar
+  traces to tokens the evidence actually shows. Absent `ledger.leaks` means
+  the leak-catalog engine did not run (older JSON, or a run predating this
+  change) — do not infer "no leaks found" from its absence, only from an
+  empty `items` list on a present block.
+- No existing `ledger` fields changed or removed.
 
 ---
 

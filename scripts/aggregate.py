@@ -2408,6 +2408,71 @@ def bs_habit_drift(rated):
     return _bs_result("habit_drift", True, metrics=metrics, n=len(eligible))
 
 
+_BS_FAILED_BURN_MIN_SESSIONS = 5
+
+
+def _dominant_input_rate(rated):
+    """Input $/1M of the most-used model across the rated pool; the
+    conservative fallback over-reports (same policy as _FALLBACK_PRICING)."""
+    counts = {}
+    for s in rated:
+        for m, n in (s.get("model_counts") or {}).items():
+            counts[_normalize_model_id(m)] = counts.get(_normalize_model_id(m), 0) + n
+    if counts:
+        top = max(counts, key=counts.get)
+        if top in PRICING:
+            return PRICING[top]["input"]
+    return _FALLBACK_PRICING["input"]
+
+
+def compute_leaks(blind_spots, rated, window):
+    """Leak catalog v1 (spec §3 book 3). Lower-bound accounting only:
+    every dollar traces to tokens the evidence actually shows (audit
+    discipline rule 4). Items are independently gated; 'top 3' is all
+    passers ranked by weekly cost."""
+    weeks = round(max((window.get("days") or 0) / 7.0, 1.0), 1)
+    items = []
+
+    bs1 = blind_spots.get("repeated_instructions") or {}
+    if bs1.get("gate_passed"):
+        pats = bs1["metrics"]["patterns"]
+        tokens_week = int(sum(p["est_wasted_tokens"] for p in pats) / weeks)
+        items.append({"type": "repeated_instructions",
+                      "weekly_cost_usd": round(
+                          tokens_week / 1e6 * _dominant_input_rate(rated), 2),
+                      "weekly_tokens": tokens_week,
+                      "occurrences": sum(p["occurrences"] for p in pats),
+                      "evidence": pats[0]["evidence"]})
+
+    sunk_sids = set()
+    bs2 = blind_spots.get("sunk_cost") or {}
+    if bs2.get("gate_passed"):
+        pair_sids = [p["failed_sid"] for p in bs2["metrics"]["pairs"]]
+        sunk_sids = set(pair_sids)
+        failed = [s for s in rated if s["sid"] in sunk_sids]
+        items.append({"type": "sunk_cost",
+                      "weekly_cost_usd": round(
+                          compute_api_equivalent_cost(failed) / weeks, 2),
+                      "weekly_tokens": int(sum(s.get("total_tokens") or 0
+                                               for s in failed) / weeks),
+                      "occurrences": len(failed),
+                      "evidence": pair_sids[:3]})
+
+    burn = [s for s in rated
+            if s["outcome"] == "not_achieved" and s["sid"] not in sunk_sids]
+    if len(burn) >= _BS_FAILED_BURN_MIN_SESSIONS:
+        items.append({"type": "failed_session_burn",
+                      "weekly_cost_usd": round(
+                          compute_api_equivalent_cost(burn) / weeks, 2),
+                      "weekly_tokens": int(sum(s.get("total_tokens") or 0
+                                               for s in burn) / weeks),
+                      "occurrences": len(burn),
+                      "evidence": [s["sid"] for s in burn[:3]]})
+
+    items.sort(key=lambda i: -(i["weekly_cost_usd"] or 0))
+    return {"window_weeks": weeks, "items": items[:3]}
+
+
 def compute_blind_spots(sessions, rated, activity_rows, cross_rows, window_end):
     """Phase 2 blind-spot engine (spec §5). Additive analysis-data block;
     every heuristic self-gates and the whole entry ships regardless so the
@@ -2628,6 +2693,8 @@ def main():
     window_end = max(all_starts) if all_starts else datetime.now().astimezone()
     final["blind_spots"] = compute_blind_spots(
         sessions, rated, list(activity_rows.values()), cross_rows, window_end)
+    final["ledger"]["leaks"] = compute_leaks(
+        final["blind_spots"], rated, final["ledger"]["window"])
 
     out.write_text(json.dumps(final, ensure_ascii=False, indent=2))
     print(f"wrote {out} ({out.stat().st_size} bytes)", file=sys.stderr)
