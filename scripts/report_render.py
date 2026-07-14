@@ -10,6 +10,7 @@ import html
 import json
 import re
 import string
+from itertools import count
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -433,7 +434,7 @@ def _build_team_ledger(cross_llm, narration, locale="en"):
 
     win = cross_llm.get("common_window")
     parts = [cards]
-    exhibit_no = 2
+    exhibit_no = count(2)  # Exhibit 1 lives in the output ledger
 
     if win and not win.get("degraded"):
         note = t(locale, "ledger_common_window_note_template").format(
@@ -452,10 +453,10 @@ def _build_team_ledger(cross_llm, narration, locale="en"):
                 for src, mins in sorted(wk["minutes"].items()))
             rows += (f'<div class="c-share-row"><span>{esc(wk["week"])}</span>'
                      f'<div class="c-share-bar">{segs}</div></div>')
-        parts.append(_exhibit(exhibit_no, t(locale, "ledger_weekly_share_title"),
+        parts.append(_exhibit(next(exhibit_no),
+                              t(locale, "ledger_weekly_share_title"),
                               rows, "aggregate.py cross_llm.weekly_share",
                               locale=locale))
-        exhibit_no += 1
     else:
         # Degraded window OR no window at all — no cross-tool comparison claim.
         parts.append(f'<p class="method">'
@@ -470,10 +471,10 @@ def _build_team_ledger(cross_llm, narration, locale="en"):
             for row in hm for c in row)
         body = (f'<div style="display:grid;grid-template-columns:repeat(24,1fr);'
                 f'gap:2px;height:120px">{grid}</div>')
-        parts.append(_exhibit(exhibit_no, t(locale, "ledger_parallel_title"),
+        parts.append(_exhibit(next(exhibit_no),
+                              t(locale, "ledger_parallel_title"),
                               body, "aggregate.py cross_llm.parallel",
                               locale=locale))
-        exhibit_no += 1
 
     pm = cross_llm.get("project_matrix") or {}
     if pm.get("projects"):
@@ -484,10 +485,10 @@ def _build_team_ledger(cross_llm, narration, locale="en"):
             for i, proj in enumerate(pm["projects"]))
         table = (f'<table><thead><tr><th></th>{head}</tr></thead>'
                  f'<tbody>{body_rows}</tbody></table>')
-        parts.append(_exhibit(exhibit_no, t(locale, "ledger_matrix_title"),
+        parts.append(_exhibit(next(exhibit_no),
+                              t(locale, "ledger_matrix_title"),
                               table, "aggregate.py cross_llm.project_matrix",
                               locale=locale))
-        exhibit_no += 1
 
     h2h = cross_llm.get("head_to_head")
     if h2h and win and not win.get("degraded"):
@@ -506,7 +507,8 @@ def _build_team_ledger(cross_llm, narration, locale="en"):
         card = ('<div class="c-h2h">'
                 + _col("Claude", h2h["claude"]) + _col("Codex", h2h["codex"])
                 + '</div>')
-        parts.append(_exhibit(exhibit_no, t(locale, "ledger_h2h_title"), card,
+        parts.append(_exhibit(next(exhibit_no),
+                              t(locale, "ledger_h2h_title"), card,
                               "aggregate.py cross_llm.head_to_head",
                               locale=locale))
 

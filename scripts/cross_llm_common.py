@@ -43,6 +43,15 @@ def split_segments(timestamps, gap_minutes: int = SEGMENT_GAP_MINUTES):
     return segs
 
 
+def segments_and_duration(timestamps, gap_minutes: int = SEGMENT_GAP_MINUTES):
+    """Sort timestamps, split into idle-gap segments, and return
+    (segments_as_local_iso_pairs, active_duration_minutes)."""
+    ts = sorted(timestamps)
+    segs = split_segments(ts, gap_minutes)
+    duration = round(sum((e - s).total_seconds() for s, e in segs) / 60)
+    return [[to_local_iso(s), to_local_iso(e)] for s, e in segs], duration
+
+
 def write_rows(rows, output) -> None:
     out = Path(output).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)

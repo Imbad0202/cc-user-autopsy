@@ -1567,12 +1567,23 @@ def compute_cross_llm(claude_rows, cross_rows):
     all_rows = tagged + list(cross_rows)
     comparable = [r for r in all_rows if r.get("coverage") != "presence_only"]
 
+    # One pass up front: group rows by source and parse each row's
+    # start_time / activity windows exactly once; every block below reads
+    # these instead of re-filtering and re-parsing the same rows.
+    rows_by_source = {}
+    for r in all_rows:
+        rows_by_source.setdefault(r["source"], []).append(r)
+    comparable_by_source = {}
+    for r in comparable:
+        comparable_by_source.setdefault(r["source"], []).append(r)
+    start_dt = {id(r): _parse_dt(r.get("start_time") or "") for r in all_rows}
+    windows = {id(r): _row_windows(r) for r in comparable}
+
     # --- source cards ---
     sources = []
-    for src in sorted({r["source"] for r in all_rows}):
-        rs = [r for r in all_rows if r["source"] == src]
-        dates = sorted(d for d in (_parse_dt(r.get("start_time") or "")
-                                   for r in rs) if d)
+    for src in sorted(rows_by_source):
+        rs = rows_by_source[src]
+        dates = sorted(d for d in (start_dt[id(r)] for r in rs) if d)
 
         def _tok(key, _rs=rs):
             vals = [r.get(key) for r in _rs if isinstance(r.get(key), int)]
@@ -1591,9 +1602,8 @@ def compute_cross_llm(claude_rows, cross_rows):
 
     # --- common window across comparable sources ---
     per_source_range = {}
-    for src in {r["source"] for r in comparable}:
-        ds = sorted(d for d in (_parse_dt(r.get("start_time") or "")
-                    for r in comparable if r["source"] == src) if d)
+    for src, rs in comparable_by_source.items():
+        ds = sorted(d for d in (start_dt[id(r)] for r in rs) if d)
         if ds:
             per_source_range[src] = (ds[0], ds[-1])
     common_window = None
@@ -1608,7 +1618,7 @@ def compute_cross_llm(claude_rows, cross_rows):
     # --- weekly share (active minutes per ISO week per source) ---
     weekly = {}
     for r in comparable:
-        for s, e in _row_windows(r):
+        for s, e in windows[id(r)]:
             wk = f"{s.isocalendar()[0]}-W{s.isocalendar()[1]:02d}"
             weekly.setdefault(wk, {}).setdefault(r["source"], 0)
             weekly[wk][r["source"]] += round((e - s).total_seconds() / 60)
@@ -1618,7 +1628,7 @@ def compute_cross_llm(claude_rows, cross_rows):
     # --- parallel detection (hour buckets, midnight-split) ---
     hour_sources = {}   # (date, hour) -> set(sources)
     for r in comparable:
-        for s, e in _row_windows(r):
+        for s, e in windows[id(r)]:
             for day, ss, ee in _split_at_midnight(s, e):
                 for h in _hours_touched(day, ss, ee):
                     hour_sources.setdefault((day, h), set()).add(r["source"])
@@ -1648,7 +1658,7 @@ def compute_cross_llm(claude_rows, cross_rows):
         matrix.setdefault(proj, {}).setdefault(r["source"], 0)
         matrix[proj][r["source"]] += 1
     top = sorted(matrix.items(), key=lambda kv: -sum(kv[1].values()))[:10]
-    matrix_sources = sorted({r["source"] for r in comparable})
+    matrix_sources = sorted(comparable_by_source)
     project_matrix = {
         "projects": [p for p, _ in top],
         "sources": matrix_sources,
@@ -1667,10 +1677,9 @@ def compute_cross_llm(claude_rows, cross_rows):
         window_end_date = date.fromisoformat(common_window["end"])
 
         def _side(src):
-            rs = [r for r in comparable if r["source"] == src]
             inside = []
-            for r in rs:
-                d = _parse_dt(r.get("start_time") or "")
+            for r in comparable_by_source.get(src, []):
+                d = start_dt[id(r)]
                 if d and window_start_date <= d.date() <= window_end_date:
                     inside.append((r, d))
             if not inside:

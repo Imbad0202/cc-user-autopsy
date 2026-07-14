@@ -12,9 +12,9 @@ import sys
 from pathlib import Path
 
 try:
-    from cross_llm_common import parse_ts, split_segments, to_local_iso, write_rows
+    from cross_llm_common import parse_ts, segments_and_duration, to_local_iso, write_rows
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_codex
-    from scripts.cross_llm_common import parse_ts, split_segments, to_local_iso, write_rows
+    from scripts.cross_llm_common import parse_ts, segments_and_duration, to_local_iso, write_rows
 
 DEFAULT_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
@@ -72,14 +72,13 @@ def scan_one(path: Path):
     if session_id is None or not timestamps:
         return None, parse_errors
     timestamps.sort()
-    segs = split_segments(timestamps)
-    duration = round(sum((e - s).total_seconds() for s, e in segs) / 60)
+    segments, duration = segments_and_duration(timestamps)
     row = {
         "session_id": session_id,
         "project_path": cwd or "",
         "start_time": to_local_iso(timestamps[0]),
         "duration_minutes": duration,
-        "segments": [[to_local_iso(s), to_local_iso(e)] for s, e in segs],
+        "segments": segments,
         "user_message_count": user_msgs,
         "assistant_message_count": asst_msgs,
         "tool_counts": tool_counts,

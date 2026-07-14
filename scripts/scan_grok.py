@@ -12,9 +12,9 @@ from pathlib import Path
 from urllib.parse import unquote
 
 try:
-    from cross_llm_common import parse_ts, split_segments, to_local_iso, write_rows
+    from cross_llm_common import parse_ts, segments_and_duration, to_local_iso, write_rows
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_grok
-    from scripts.cross_llm_common import parse_ts, split_segments, to_local_iso, write_rows
+    from scripts.cross_llm_common import parse_ts, segments_and_duration, to_local_iso, write_rows
 
 DEFAULT_SESSIONS_DIR = Path.home() / ".grok" / "sessions"
 
@@ -57,14 +57,13 @@ def scan_sessions_dir(root: Path):
                         s["first"] = text.strip()[:500]
         for sid, s in sessions.items():
             ts = sorted(s["ts"])
-            segs = split_segments(ts)
+            segments, duration = segments_and_duration(ts)
             rows.append({
                 "session_id": sid,
                 "project_path": project_path,
                 "start_time": to_local_iso(ts[0]),
-                "duration_minutes": round(
-                    sum((e - b).total_seconds() for b, e in segs) / 60),
-                "segments": [[to_local_iso(b), to_local_iso(e)] for b, e in segs],
+                "duration_minutes": duration,
+                "segments": segments,
                 "user_message_count": s["prompts"],
                 "assistant_message_count": None,
                 "tool_counts": {"Bash": s["bash"]} if s["bash"] else {},
