@@ -1,7 +1,7 @@
 # AI Work Ledger — cc-user-autopsy V5 redesign
 
 **Date:** 2026-07-14
-**Status:** draft, pending user review
+**Status:** approved 2026-07-14 (spec body, §13 defaults, and frontend direction C all confirmed by user)
 **Supersedes:** the V4 "story-first" report structure and the V4 HR-mode disclosure philosophy. Does NOT replace the pipeline architecture (scan → aggregate → sample → render), the privacy default-deny model, the i18n system, or the evidence-traceability discipline — those are retained.
 
 ---
@@ -125,6 +125,25 @@ Local sources as probed on 2026-07-14 (formats owned by their vendors; adapters 
 
 ## 8. Rendering
 
+**Visual direction: C — professional business report** (confirmed 2026-07-14; reference: `mocks/mock-c-business-report.html`). The report reads as a serious business document — no genre costume (audit-dossier and instrument-log directions were rejected for exactly that).
+
+Design tokens (from the mock, to live in the template's `:root`):
+
+- Paper `#FFFFFF`; ink `#26231E` with secondary `#5C5850` / tertiary `#918C82`; hairline rules `#E6E3DC`, strong rules in ink.
+- **Gold `#B08A2E` is the single accent** (deep variant `#7E6119` where small text needs contrast; 12%-alpha tint for fills). Used for finding numbers, exhibit labels, and annotation callouts — the signature element.
+- **Negative red `#9C201A` is reserved exclusively for bad numbers and negative findings.** Gold-red CVD ΔE 25.5, validated.
+- System font stacks only (sans + mono), `font-variant-numeric: tabular-nums` throughout. Self-containment rules unchanged.
+
+Structural grammar:
+
+- **Cover band**: doctype kicker (letterspaced, gold-deep), report title, meta row, 3px ink rule.
+- **Executive summary**: numbered assertive finding sentences — big gold number, the finding as a full sentence (negative phrases in red), one support line with exhibit cross-references.
+- **Section heads are action titles**: the section's conclusion is the heading, not a topic label ("Team ledger" is wrong; "Codex absorbed 2.4× more long-run work than Claude this month" is right).
+- **Exhibits**: every chart/table is a numbered Exhibit with a title and a source line (which pipeline file / data pool it came from) — this carries the claim-indexed evidence discipline into the visual layer.
+- **Gold annotation callouts** drawn on charts (leader line + short label) point at the number the narrative cites.
+
+Carried over from the pre-C draft:
+
 - New sections per §3; the audience-conditional table in SKILL.md is rewritten for audit/badge layers.
 - `locales.py` gains keys for all new chrome in both locales (key-set parity and zh_TW em-dash bans enforced by existing tests).
 - New charts: weekly tool-share (stacked), parallel heatmap, project × tool matrix, head-to-head card, graveyard list, leak cards, trend sparklines.
@@ -181,3 +200,5 @@ Approved sequencing (option B, re-scoped to the ledger design). Each phase gets 
 - `mock-c-business-report.html` — professional business report: executive summary with assertive finding sentences, action-title section heads, numbered Exhibits with source lines, gold annotation callouts as the signature element, warm-white/charcoal/gold `#B08A2E`/negative-red `#9C201A` (gold-red CVD ΔE 25.5, validated). **Delivered, awaiting user confirmation.**
 
 §8 Rendering is to be rewritten around direction C once the user confirms. Next step after confirmation: writing-plans for Phase 1.
+
+**2026-07-14 (later)** — User confirmed all three pending items: spec body approved, §13 defaults approved as-is, frontend direction **C confirmed and final**. §8 rewritten around C (tokens + structural grammar from the mock). Status header flipped to approved. Next: writing-plans for Phase 1.
