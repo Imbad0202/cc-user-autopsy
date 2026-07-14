@@ -54,6 +54,30 @@ for dim, metrics in scores.items():
 - `ledger`: schema_version 1; window / output counters / sources_detected.
 - No existing fields changed or removed.
 
+## 2026-07-14 — additive: `cross_llm.sources[].detected` (bool) + adapter `_meta` line (codex-fix-wave)
+
+- `cross_llm.sources[]` now always contains one card per known source
+  (`claude`, `codex`, `grok`, `antigravity`), even when a source produced
+  no rows for this run. Undetected cards carry `"detected": false` and null
+  out every measured field (`coverage`, `session_count: 0`, `first_date`,
+  `last_date`, `total_input_tokens`, `total_output_tokens`); detected cards
+  gain `"detected": true`. Undetected sources never appear inside
+  `weekly_share`, `parallel`, `project_matrix`, or `head_to_head` — those
+  structures are unchanged.
+- Consumers reading `cross_llm.sources` before this change treated a
+  missing source as "not run" implicitly (source absent from the list).
+  After this change, absence is impossible — check `detected` instead.
+- `scan_codex.py` and `scan_grok.py` now append one trailing
+  `{"_meta": true, "source": "<codex|grok>", "parse_errors": N}` line to
+  their output jsonl, carrying the scanner's own malformed-line skip count
+  (previously only printed to stderr). `aggregate.load_cross_llm_rows()`
+  consumes `_meta` lines into its `parse_errors_by_source` return value
+  instead of treating them as session rows, so
+  `cross_llm.sources[].parse_errors` now reflects adapter-side parse
+  failures, not just aggregate-side ones. `scan_antigravity.py` is
+  unaffected (it lists protobuf files by mtime; no JSON-line parsing to
+  fail).
+
 ---
 
 *Maintained alongside `scripts/aggregate.py`. When adding, deprecating, or removing fields, update this file in the same commit.*

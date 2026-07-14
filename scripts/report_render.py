@@ -406,6 +406,26 @@ _SRC_LABEL_KEYS = {"full": "ledger_source_card_full",
                    "presence_only": "ledger_source_card_presence"}
 
 
+def _source_card_html(s: dict, locale: str) -> str:
+    """One source card: either the normal (label / count / date-span) body,
+    or — for a source that produced no rows this run — the not-detected
+    variant. Both share the same outer markup so the card's base styling
+    only needs to change in one place."""
+    if s.get("detected") is False:
+        modifier = " c-source-card--absent"
+        body = f'{esc(t(locale, "ledger_not_detected"))}'
+    else:
+        modifier = ""
+        label = t(locale, _SRC_LABEL_KEYS.get(s.get("coverage"),
+                                              "ledger_source_card_full"))
+        span = ""
+        if s.get("first_date") and s.get("last_date"):
+            span = f'{esc(s["first_date"])} – {esc(s["last_date"])}'
+        body = f'{esc(label)}<br>{int(s.get("session_count") or 0)} · {span}'
+    return (f'<div class="c-source-card{modifier}">'
+            f'<b>{esc(s["source"])}</b> · {body}</div>')
+
+
 def _build_team_ledger(cross_llm, narration, locale="en"):
     """SELF-only team ledger: per-source cards, then (only when a non-degraded
     common_window exists) weekly-share / parallel-heatmap / project-matrix /
@@ -420,16 +440,7 @@ def _build_team_ledger(cross_llm, narration, locale="en"):
     prose = _rest_lines(narration.get("team-ledger", ""))
     prose_html = f"<div>{inline_md(prose)}</div>" if prose else ""
 
-    cards = ""
-    for s in cross_llm["sources"]:
-        label = t(locale, _SRC_LABEL_KEYS.get(s.get("coverage"),
-                                              "ledger_source_card_full"))
-        span = ""
-        if s.get("first_date") and s.get("last_date"):
-            span = f'{esc(s["first_date"])} – {esc(s["last_date"])}'
-        cards += ('<div class="c-source-card">'
-                  f'<b>{esc(s["source"])}</b> · {esc(label)}<br>'
-                  f'{int(s.get("session_count") or 0)} · {span}</div>')
+    cards = "".join(_source_card_html(s, locale) for s in cross_llm["sources"])
     cards = f'<div class="c-source-cards">{cards}</div>'
 
     win = cross_llm.get("common_window")
@@ -1895,6 +1906,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .c-source-cards { display: flex; gap: 12px; flex-wrap: wrap; margin: 14px 0; }
   .c-source-card { border: 1px solid rgba(128,128,128,0.3); padding: 10px 14px;
                    font-size: 13px; min-width: 150px; }
+  .c-source-card--absent { opacity: 0.55; border-style: dashed; }
   .c-share-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12.5px; }
   .c-share-bar { display: flex; height: 14px; flex: 1; }
   .c-share-seg { height: 100%; }

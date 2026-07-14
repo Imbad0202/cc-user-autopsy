@@ -141,6 +141,20 @@ class TeamLedgerTests(unittest.TestCase):
         html = _build_team_ledger(cross, NARR, "en")
         self.assertNotIn("GROK_PRIVATE_MARKER", html)
 
+    def test_not_detected_source_card_shows_label_not_counts(self):
+        cross = dict(CROSS)
+        undetected = {"source": "grok", "coverage": None, "session_count": 0,
+                     "first_date": None, "last_date": None,
+                     "total_input_tokens": None, "total_output_tokens": None,
+                     "parse_errors": 0, "detected": False}
+        cross["sources"] = [
+            dict(s, detected=True) for s in CROSS["sources"]
+        ] + [undetected]
+        html = _build_team_ledger(cross, NARR, "en")
+        from scripts.locales import STRINGS
+        self.assertIn(STRINGS["en"]["ledger_not_detected"], html)
+        self.assertIn("grok", html.lower())
+
 
 def _minimal_ledger_analysis():
     """Smallest analysis-data shape (same skeleton as
