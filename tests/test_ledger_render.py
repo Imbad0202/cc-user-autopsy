@@ -55,6 +55,23 @@ class LedgerLocaleKeyTests(unittest.TestCase):
         "ledger_common_window_note_template", "ledger_weekly_share_title",
         "ledger_parallel_title", "ledger_matrix_title", "ledger_h2h_title",
         "ledger_parse_errors_template",
+        # --- Phase 2: leak ledger + blind spots ---
+        "ledger_leaks_title", "ledger_leaks_kicker", "ledger_blindspot_label",
+        "blindspot_repeated_title", "blindspot_repeated_template",
+        "blindspot_sunk_title", "blindspot_sunk_template",
+        "blindspot_switch_title", "blindspot_switch_template",
+        "blindspot_graveyard_title", "blindspot_graveyard_template",
+        "blindspot_askship_title", "blindspot_askship_template",
+        "blindspot_interrupt_title", "blindspot_interrupt_template",
+        "ledger_leak_weekly_cost_template", "ledger_leak_tokens_template",
+        "ledger_leak_occurrences_template", "ledger_leak_fix_label",
+        "leak_type_repeated_instructions", "leak_type_sunk_cost",
+        "leak_type_failed_session_burn",
+        "leak_fix_repeated_instructions", "leak_fix_sunk_cost",
+        "leak_fix_failed_session_burn",
+        "ledger_graveyard_exhibit_title", "ledger_graveyard_untouched_template",
+        "ledger_graveyard_writes_template", "ledger_leaks_exhibit_title",
+        "ledger_secondary_findings", "ledger_source_blind_spots",
     ]
 
     def test_keys_in_both_locales(self):
