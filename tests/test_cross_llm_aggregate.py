@@ -46,6 +46,29 @@ class CrossLlmTests(unittest.TestCase):
         self.assertIn("codex", srcs)
         self.assertEqual(srcs["codex"]["session_count"], 20)
 
+    def test_source_card_last_date_uses_resumed_segment_end(self):
+        # A codex rollout file can be resumed days after its first segment
+        # (spec: vendor rollout files get appended to when a session
+        # resumes). The row's start_time is the FIRST segment's start
+        # (Apr 20), but a later resumed segment ends Apr 30. The source
+        # card's last_date must reflect the true last activity (Apr 30),
+        # not just start_time.
+        claude, _ = self._twenty_days_both()
+        resumed = {
+            "session_id": "x_resumed", "project_path": "/home/user/projects/webapp",
+            "start_time": "2026-04-20T09:00:00Z", "duration_minutes": 30,
+            "segments": [
+                ["2026-04-20T09:00:00Z", "2026-04-20T09:30:00Z"],
+                ["2026-04-30T14:00:00Z", "2026-04-30T14:45:00Z"],
+            ],
+            "input_tokens": 500, "output_tokens": 100,
+            "source": "codex", "coverage": "full",
+        }
+        block = compute_cross_llm(claude, [resumed])
+        codex_card = next(s for s in block["sources"] if s["source"] == "codex")
+        self.assertEqual(codex_card["first_date"], "2026-04-20")
+        self.assertEqual(codex_card["last_date"], "2026-04-30")
+
     def test_common_window_not_degraded_at_20_days(self):
         claude, codex = self._twenty_days_both()
         block = compute_cross_llm(claude, codex)
@@ -63,6 +86,80 @@ class CrossLlmTests(unittest.TestCase):
         codex = [_codex_row("x0", BASE + timedelta(minutes=10), dur=60)]
         block = compute_cross_llm(claude, codex)
         self.assertGreaterEqual(block["parallel"]["hours_multi_source"], 1)
+
+    def test_parallel_overlap_across_mixed_timezone_offsets(self):
+        # Claude rows are always UTC ('Z'); adapter (codex/grok/antigravity)
+        # rows may carry a local UTC offset instead. One claude row at
+        # 2026-06-01T02:00:00Z (60min, so 02:00-03:00 UTC) and one codex row
+        # at 2026-06-01T10:10:00+08:00 (== 02:10 UTC, 30min so 02:10-02:40
+        # UTC) REALLY overlap 02:10-02:40 UTC. Before the tz-consistency fix,
+        # comparing/bucketing each row in its own original offset instead of
+        # a common zone could miss this true overlap.
+        claude = [_claude_row(f"c{i}", BASE + timedelta(days=i)) for i in range(14)]
+        overlap_claude = dict(claude[0])
+        overlap_claude["session_id"] = "c_overlap"
+        overlap_claude["start_time"] = "2026-06-01T02:00:00Z"
+        overlap_claude["duration_minutes"] = 60
+        claude.append(overlap_claude)
+
+        codex = [_codex_row(f"x{i}", BASE + timedelta(days=i, minutes=30))
+                 for i in range(14)]
+        overlap_codex = {
+            "session_id": "x_overlap", "project_path": "/home/user/projects/webapp",
+            "start_time": "2026-06-01T10:10:00+08:00", "duration_minutes": 30,
+            "segments": [["2026-06-01T10:10:00+08:00", "2026-06-01T10:40:00+08:00"]],
+            "input_tokens": 500, "output_tokens": 100,
+            "source": "codex", "coverage": "full",
+        }
+        codex.append(overlap_codex)
+
+        block = compute_cross_llm(claude, codex)
+        self.assertGreaterEqual(block["parallel"]["hours_multi_source"], 1)
+
+    def test_parallel_overlap_straddling_utc_midnight_with_local_offset(self):
+        # Sharper regression than the mixed-offset test above: the claude
+        # row's window is stored in UTC and straddles the UTC calendar-day
+        # boundary (23:50 -> 00:50), while the truly-overlapping codex row
+        # is stored in +08:00 and falls entirely within a SINGLE +08:00
+        # calendar day. Before the fix, day-splitting
+        # (_split_at_midnight/_hours_touched) reads each row's own stored
+        # offset, so the two sides' calendar-day/hour buckets for the same
+        # real-world overlap window don't line up and the multi-source hour
+        # can be missed or double-split. After normalizing every _parse_dt
+        # result to one consistent zone, both rows bucket consistently and
+        # the true overlap (07:55-08:15 local == 23:55-00:15 UTC) is counted
+        # under exactly one calendar day.
+        #
+        # Baseline days are widely spaced (non-overlapping claude/codex
+        # windows) so only the injected midnight pair produces any
+        # concurrency>=2 bucket — isolates the assertion from unrelated
+        # daily overlaps that a tighter fixture would introduce.
+        claude = [_claude_row(f"c{i}", BASE + timedelta(days=i), dur=10)
+                  for i in range(20)]
+        overlap_claude = dict(claude[0])
+        overlap_claude["session_id"] = "c_midnight"
+        overlap_claude["start_time"] = "2026-06-05T23:50:00Z"
+        overlap_claude["duration_minutes"] = 60  # 23:50 -> 00:50 UTC (Jun5->Jun6)
+        claude.append(overlap_claude)
+
+        codex = [_codex_row(f"x{i}", BASE + timedelta(days=i, hours=5), dur=10)
+                 for i in range(20)]
+        codex.append({
+            "session_id": "x_midnight", "project_path": "/home/user/projects/webapp",
+            "start_time": "2026-06-06T07:55:00+08:00", "duration_minutes": 20,
+            "segments": [["2026-06-06T07:55:00+08:00", "2026-06-06T08:15:00+08:00"]],
+            "input_tokens": 500, "output_tokens": 100,
+            "source": "codex", "coverage": "full",
+        })
+
+        block = compute_cross_llm(claude, codex)
+        self.assertGreaterEqual(block["parallel"]["hours_multi_source"], 1)
+        daily_by_date = {d["date"]: d["max_parallel"] for d in block["parallel"]["daily_max"]}
+        # The true overlap instant is 2026-06-06 07:55-08:15 in a single
+        # consistent local zone — exactly one calendar day should show
+        # max_parallel >= 2 for it, not a phantom split across two days.
+        multi_days = [d for d, m in daily_by_date.items() if m >= 2]
+        self.assertEqual(len(multi_days), 1)
 
     def test_parallel_same_hour_non_overlapping_not_counted(self):
         # Both sessions touch the 09:00 hour bucket but never run at the same
@@ -175,9 +272,54 @@ class CrossLlmTests(unittest.TestCase):
             self.assertGreaterEqual(sunday, win_start,
                                      f"week {wk['week']} entirely predates common window")
 
+    def test_parallel_and_matrix_clipped_to_common_window_when_healthy(self):
+        # Claude has 30 days of history; codex only shows up in the last 20
+        # days, in a DIFFERENT project ("legacy-tool") than the overlapping
+        # window's project ("webapp"). Spec §13: cross-source comparison
+        # charts (parallel heatmap, project x tool matrix) are scoped to the
+        # common window when one exists and isn't degraded — activity
+        # outside that window (here, claude's early solo days in
+        # "old-project") must not leak into parallel/matrix.
+        claude_early = [_claude_row(f"ce{i}", BASE + timedelta(days=i),
+                                    project="/home/user/projects/old-project")
+                        for i in range(10)]
+        claude_common = [_claude_row(f"cc{i}", BASE + timedelta(days=10 + i))
+                         for i in range(20)]
+        codex = [_codex_row(f"x{i}", BASE + timedelta(days=10 + i, minutes=30))
+                 for i in range(20)]
+        block = compute_cross_llm(claude_early + claude_common, codex)
+        win = block["common_window"]
+        self.assertIsNotNone(win)
+        self.assertFalse(win["degraded"])
+        self.assertNotIn("old-project", block["project_matrix"]["projects"])
+        pre_window_date = BASE.date().isoformat()  # day 0, before the window
+        for d in block["parallel"]["daily_max"]:
+            self.assertNotEqual(d["date"], pre_window_date)
+
+    def test_parallel_and_matrix_full_history_when_degraded(self):
+        # A degraded (< 14 day) or absent common_window must NOT drop rows
+        # from parallel/project_matrix — schema stability: the blocks are
+        # always emitted over full history in that case, and it's
+        # report_render.py's job to suppress the exhibit, not aggregate.py's
+        # job to hide the data.
+        claude = [_claude_row(f"c{i}", BASE + timedelta(days=i),
+                              project="/home/user/projects/old-project")
+                  for i in range(30)]
+        codex = [_codex_row("x0", BASE + timedelta(days=25))]  # 5-day overlap tail
+        block = compute_cross_llm(claude, codex)
+        self.assertTrue(block["common_window"]["degraded"])
+        self.assertIn("old-project", block["project_matrix"]["projects"])
+
     def test_midnight_spanning_session_splits_by_day(self):
-        late = datetime(2026, 6, 1, 23, 30, tzinfo=timezone.utc)
-        claude = [_claude_row("c0", late, dur=120)]  # crosses midnight
+        # aggregate.py now buckets calendar days in the SYSTEM'S local zone
+        # (via _parse_dt's astimezone() normalization — see P1 fix), not
+        # UTC. Construct "23:30 local, crossing midnight" from the actual
+        # system local offset rather than hardcoding UTC, so this test
+        # passes regardless of which machine/CI timezone it runs under.
+        local_offset = datetime.now().astimezone().utcoffset()
+        local_tz = timezone(local_offset)
+        late = datetime(2026, 6, 1, 23, 30, tzinfo=local_tz)
+        claude = [_claude_row("c0", late, dur=120)]  # crosses local midnight
         codex = [_codex_row("x0", late + timedelta(minutes=5), dur=120)]
         block = compute_cross_llm(claude, codex)
         days = {d["date"] for d in block["parallel"]["daily_max"]}
@@ -284,6 +426,24 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(ledger["output"]["git_commits"], 5)
         self.assertEqual(ledger["output"]["sessions_with_commits"], 5)
         self.assertIn("claude", ledger["sources_detected"])
+
+    def test_sources_detected_excludes_undetected_sources(self):
+        # cross_llm.sources now always has one card per known source
+        # (claude/codex/grok/antigravity), including undetected ones with
+        # "detected": false and session_count 0. compute_ledger must filter
+        # sources_detected to only actually-detected sources — copying every
+        # card verbatim would make grok/antigravity falsely appear "detected"
+        # in every report even when the user never ran them.
+        metas = {f"c{i}": _claude_row(f"c{i}", BASE + timedelta(days=i))
+                 for i in range(10)}
+        codex = [_codex_row(f"x{i}", BASE + timedelta(days=i, minutes=30))
+                 for i in range(10)]
+        cross = compute_cross_llm(list(metas.values()), codex)
+        ledger = compute_ledger(metas, cross)
+        self.assertIn("claude", ledger["sources_detected"])
+        self.assertIn("codex", ledger["sources_detected"])
+        self.assertNotIn("grok", ledger["sources_detected"])
+        self.assertNotIn("antigravity", ledger["sources_detected"])
 
 
 if __name__ == "__main__":
