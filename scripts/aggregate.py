@@ -2707,39 +2707,34 @@ def _leak_cost_usd(sessions):
       (c) cache_read tokens price at the model's own cache_read rate, same
           as the cost panel — cache reads are cheap and well-defined
           regardless of tier, no lower-bound ambiguity to resolve.
+      (d) mixed-model sessions price ALL pooled tokens at the CHEAPEST rate
+          among the models actually seen — model_counts holds message
+          counts, not per-model token totals, so any blended weighting can
+          overprice tokens that a cheaper model actually produced. The min
+          over observed models is the only attribution-free floor.
     """
     if not sessions:
         return 0.0
-    cheapest_in = _CHEAPEST_INPUT_RATE
-    cheapest_out = min(p["output"] for p in PRICING.values())
-    cheapest_cr = min(p["cache_read"] for p in PRICING.values())
 
-    model_msgs = Counter()
-    for s in sessions:
-        for m, c in (s.get("model_counts") or {}).items():
-            model_msgs[_normalize_model_id(m)] += c
-    total_msgs = sum(model_msgs.values())
-    # No model info at all -> one synthetic unknown-model bucket, so
-    # blended() below has a single code path for "unknown model" and "no
-    # model info" instead of two (weights={} would otherwise need its own
-    # early-return branch).
-    weights = ({None: 1.0} if total_msgs == 0
-               else {m: c / total_msgs for m, c in model_msgs.items()})
+    models = {_normalize_model_id(m)
+              for s in sessions
+              for m in (s.get("model_counts") or {})}
+    known = [PRICING[m] for m in models if m in PRICING]
 
-    def blended(token_type, cheapest):
-        total = 0.0
-        for m, w in weights.items():
-            p = PRICING.get(m)
-            total += w * (p[token_type] if p else cheapest)
-        return total
+    def floor_rate(token_type, overall_cheapest):
+        # Cheapest rate among the models observed in these sessions;
+        # unknown/absent models widen the floor to the overall cheapest.
+        if not known or len(known) < len(models):
+            return overall_cheapest
+        return min(p[token_type] for p in known)
 
-    in_rate = blended("input", cheapest_in)
-    out_rate = blended("output", cheapest_out)
-    # cache_creation prices at each model's base INPUT rate (lower bound),
-    # falling back to the cheapest known INPUT rate for unknown models —
-    # same blend as in_rate above, reused rather than recomputed.
+    in_rate = floor_rate("input", _CHEAPEST_INPUT_RATE)
+    out_rate = floor_rate("output", min(p["output"] for p in PRICING.values()))
+    # cache_creation prices at the base INPUT floor (a cache write costs at
+    # least the base input rate, regardless of TTL tier).
     cw_rate = in_rate
-    cr_rate = blended("cache_read", cheapest_cr)
+    cr_rate = floor_rate("cache_read",
+                         min(p["cache_read"] for p in PRICING.values()))
 
     total_in = sum(s.get("input_tokens", 0) or 0 for s in sessions)
     total_out = sum(s.get("output_tokens", 0) or 0 for s in sessions)

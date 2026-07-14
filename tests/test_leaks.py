@@ -216,11 +216,24 @@ class RepeatedInstructionsCheapestRateTests(unittest.TestCase):
 
 
 class LeakCostUsdTests(unittest.TestCase):
-    # Fix 2: _leak_cost_usd is the lower-bound pricing helper used by
-    # sunk_cost / failed_session_burn leak items — same blended-by-model
-    # shape as compute_api_equivalent_cost, but unknown models price at the
-    # CHEAPEST known rates (not the Opus fallback) and cache_creation tokens
-    # price at base input rate (not the 2x cache_write upper bound).
+    # _leak_cost_usd is the lower-bound pricing helper used by sunk_cost /
+    # failed_session_burn leak items: unknown models price at the CHEAPEST
+    # known rates (not the Opus fallback), cache_creation tokens price at
+    # base input rate (not the 2x cache_write upper bound), and mixed-model
+    # sessions price ALL pooled tokens at the cheapest observed model's
+    # rate (message counts carry no per-model token attribution, so any
+    # blended weighting could overprice tokens a cheaper model produced).
+    def test_mixed_model_session_prices_at_cheapest_observed_model(self):
+        # 90% Opus messages / 10% Haiku messages, but token attribution is
+        # unknown — the floor must be the Haiku input rate, NOT a
+        # message-weighted blend (which would overprice Haiku-made tokens).
+        sessions = [{"model_counts": {"claude-opus-4-6": 9,
+                                      "claude-haiku-4-5": 1},
+                     "input_tokens": 1_000_000, "output_tokens": 0,
+                     "cache_create_tokens": 0, "cache_read_tokens": 0}]
+        haiku_in = PRICING["claude-haiku-4-5"]["input"]
+        self.assertEqual(_leak_cost_usd(sessions), round(haiku_in, 2))
+
     def test_unknown_model_prices_at_cheapest_rates_not_opus(self):
         sessions = [{"model_counts": {"unknown-model-x": 1},
                      "input_tokens": 100_000, "output_tokens": 10_000,

@@ -31,10 +31,12 @@ for d in (META_DIR, FACETS_DIR, PROJECTS_DIR, CODEX_DIR, GROK_DIR, ANTIGRAVITY_D
 
 DEMO_PROJECTS_CROSS = ["webapp", "data-pipeline", "infra"]
 
-# --- Phase 2 blind-spot fixtures (Task 12) ---------------------------------
+# --- Phase 2 blind-spot fixtures ---------------------------------------------
 # These constants are injected by INDEX, never by random draw, so the three
 # hard gate assertions in tests/test_demo_data.py never flake across
-# regenerations. See .superpowers/sdd/task-12-brief.md for the exact gates.
+# regenerations. The exact gate thresholds live in references/scoring-rubric.md
+# ("Blind-spot heuristics", provisional v1) and are asserted end-to-end by
+# tests/test_demo_data.py.
 
 # BS#1 (repeated-instruction tax): forced verbatim onto 8 Claude sessions
 # spread over >=4 distinct ISO weeks, 3 codex sessions, and 2 grok sessions.
