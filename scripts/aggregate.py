@@ -2690,6 +2690,17 @@ _BS_FAILED_BURN_MIN_SESSIONS = 5
 _CHEAPEST_INPUT_RATE = min(p["input"] for p in PRICING.values())
 
 
+def _charged_tokens(sessions):
+    """All token categories _leak_cost_usd charges for — input, output,
+    cache writes, cache reads. The displayed tokens/week must describe the
+    same quantity the displayed cost was computed from (a cache-heavy
+    session must not show a large cost beside a small token count)."""
+    return sum((s.get("total_tokens") or 0)
+               + (s.get("cache_create_tokens") or 0)
+               + (s.get("cache_read_tokens") or 0)
+               for s in sessions)
+
+
 def _leak_cost_usd(sessions):
     """Lower-bound USD estimate for leak-ledger items (sunk_cost,
     failed_session_burn). Same blended-by-assistant-message-share-across-
@@ -2848,8 +2859,7 @@ def compute_leaks(blind_spots, rated, window):
             items.append({"type": "sunk_cost",
                           "weekly_cost_usd": round(
                               _leak_cost_usd(failed) / weeks, 2),
-                          "weekly_tokens": int(sum(s.get("total_tokens") or 0
-                                                   for s in failed) / weeks),
+                          "weekly_tokens": int(_charged_tokens(failed) / weeks),
                           "occurrences": len(failed),
                           "evidence": [s["sid"] for s in failed[:3]]})
 
@@ -2859,8 +2869,7 @@ def compute_leaks(blind_spots, rated, window):
         items.append({"type": "failed_session_burn",
                       "weekly_cost_usd": round(
                           _leak_cost_usd(burn) / weeks, 2),
-                      "weekly_tokens": int(sum(s.get("total_tokens") or 0
-                                               for s in burn) / weeks),
+                      "weekly_tokens": int(_charged_tokens(burn) / weeks),
                       "occurrences": len(burn),
                       "evidence": [s["sid"] for s in burn[:3]]})
 

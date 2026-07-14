@@ -198,6 +198,18 @@ class BlindSpotDemoGateTests(unittest.TestCase):
         bs1 = self.blind_spots["repeated_instructions"]
         self.assertTrue(bs1["gate_passed"], bs1.get("reason"))
 
+    def test_engineered_cross_tool_pattern_survives_top5_cap(self):
+        # The injected pattern spans Claude + Codex + Grok and must outrank
+        # the incidental Claude-only patterns from the 12-string random
+        # pool, or the demo report never exercises the cross-tool fix-text
+        # path (top-5 cap would discard it).
+        bs1 = self.blind_spots["repeated_instructions"]
+        multi = [p for p in bs1["metrics"]["patterns"]
+                 if len(p.get("sources", [])) > 1]
+        self.assertTrue(multi, "no cross-tool pattern in the top 5")
+        self.assertIn("codex", multi[0]["sources"])
+        self.assertIn("grok", multi[0]["sources"])
+
     def test_sunk_cost_gate_passes(self):
         bs2 = self.blind_spots["sunk_cost"]
         self.assertTrue(bs2["gate_passed"], bs2.get("reason"))

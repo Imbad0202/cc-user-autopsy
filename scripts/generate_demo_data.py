@@ -797,16 +797,21 @@ def gen_antigravity_files(now, n=6):
 
 
 def _force_repeated_instruction(sessions_meta, sessions_facets, now):
-    """BS#1 fixture: overwrite 8 already-generated Claude sessions' prompts
+    """BS#1 fixture: overwrite 28 already-generated Claude sessions' prompts
     to DEMO_REPEATED_INSTRUCTION, picked by their position in dict insertion
     order (not random) — a post-pass over the finished random pool, kept
     separate from gen_session()'s random draw the same way the BS#2/BS#4
     fixture pools are built and merged in rather than interleaved into the
     random loop. Each picked session also gets its start_time moved to a
-    fixed days_ago so the 8 land in >=4 distinct ISO weeks (spaced 14 days
-    apart guarantees this even across month/year boundaries)."""
-    # position-in-pool -> days_ago
-    picks = {0: 5, 35: 19, 70: 33, 105: 47, 140: 61, 175: 75, 210: 89, 245: 96}
+    fixed days_ago so the picks span many distinct ISO weeks.
+
+    Why 28: the random pool draws from only 12 prompt strings across ~280
+    sessions, so incidental Claude-only patterns reach 24-29 occurrences.
+    The engineered CROSS-TOOL pattern (28 Claude + 3 codex + 2 grok = 33)
+    must beat them or bs_repeated_instructions' top-5 cap discards it and
+    the demo report never exercises the cross-tool fix-text path."""
+    # position-in-pool -> days_ago (28 picks, ~3 days apart, all in-window)
+    picks = {i * 9: 2 + i * 3 for i in range(28)}
     sids = list(sessions_meta.keys())
     for pos, days_ago in picks.items():
         sid = sids[pos]

@@ -38,7 +38,9 @@ def normalize_prompt(text):
     """
     if not isinstance(text, str):
         return ""
-    t = _NORM_KEEP_RE.sub(" ", text.lower())
+    # \w keeps underscores, but "run_full_tests" and "run full tests" are
+    # the same instruction under punctuation folding — fold "_" explicitly.
+    t = _NORM_KEEP_RE.sub(" ", text.lower().replace("_", " "))
     return _NORM_WS_RE.sub(" ", t).strip()
 
 
