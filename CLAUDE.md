@@ -39,11 +39,17 @@ Dataflow:
 ```
 scan_transcripts.py → transcript-rows.jsonl   walks ~/.claude/projects/; merges agent-*.jsonl
                                               subagent runs into their parent session rows
+scan_codex.py /       → *-rows.jsonl          optional adapters; feed aggregate.py via
+scan_grok.py / scan_antigravity.py            repeated --cross-llm-rows flags
 aggregate.py        → analysis-data.json      + session-meta + facets; 9-dim rule-based
-                                              scoring; API-cost estimate via PRICING dict
+                                              scoring; API-cost estimate via PRICING dict;
+                                              also emits additive top-level cross_llm + ledger
+                                              blocks when --cross-llm-rows is passed
 sample_sessions.py  → samples.json            ≤24 representative sessions across 7 buckets
 [Claude writes peer-review / try-this-week / case-study markdown]
-build_html.py       → standalone HTML         thin CLI only; all rendering in report_render.py
+build_html.py       → standalone HTML         thin CLI only; all rendering in report_render.py;
+                                              SELF builds also append a snapshot to
+                                              ~/.claude/usage-data/autopsy-history.jsonl
 ```
 
 Cross-file facts to know before editing:

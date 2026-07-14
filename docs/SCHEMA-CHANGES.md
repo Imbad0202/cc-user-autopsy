@@ -40,7 +40,7 @@ for dim, metrics in scores.items():
 **Purpose:** Canonical signal for "should the pattern sentence be rendered for this dimension." Replaces the legacy convention of `pattern == None` meaning "don't emit."
 **Semantics:** `True` iff both subgroups needed for the pattern comparison met `_PATTERN_MIN_SAMPLE` (and any other per-dim preconditions). Older JSON from before this PR lacks the field; consumers should treat missing as `False` and skip rendering.
 
-### `cross_llm[].sources[].parse_errors` (int)
+### `cross_llm.sources[].parse_errors` (int)
 
 **Added:** 2026-07-14
 **Purpose:** Count of malformed/incomplete lines skipped from a given `--cross-llm-rows` input (missing `source` or `start_time`, or invalid JSON — bucketed under `"(unknown)"` when the source can't be guessed). 0 for `claude` (always internally derived, never file-loaded) and for any source with no parse failures.
