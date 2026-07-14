@@ -78,6 +78,17 @@ for dim, metrics in scores.items():
   unaffected (it lists protobuf files by mtime; no JSON-line parsing to
   fail).
 
+## 2026-07-14 — semantics tightened: `ledger.sources_detected` (codex-fix-wave round 2)
+
+- `compute_ledger` now filters `cross_llm.sources` to entries with
+  `detected: true` (or `session_count > 0` for JSON predating the
+  `detected` field) before listing them in `ledger.sources_detected`.
+  Previously every known source (`claude`, `codex`, `grok`, `antigravity`)
+  was copied verbatim, so an undetected source (one that produced zero
+  rows this run) falsely appeared "detected" in the ledger. No field was
+  added or removed — this is a correctness fix to which sources
+  `sources_detected` includes.
+
 ---
 
 *Maintained alongside `scripts/aggregate.py`. When adding, deprecating, or removing fields, update this file in the same commit.*

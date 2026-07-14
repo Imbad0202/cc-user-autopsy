@@ -54,6 +54,7 @@ class LedgerLocaleKeyTests(unittest.TestCase):
         "ledger_not_detected", "ledger_degraded_note",
         "ledger_common_window_note_template", "ledger_weekly_share_title",
         "ledger_parallel_title", "ledger_matrix_title", "ledger_h2h_title",
+        "ledger_parse_errors_template",
     ]
 
     def test_keys_in_both_locales(self):
@@ -74,7 +75,8 @@ CROSS = {
     "common_window": {"start": "2026-05-10", "end": "2026-06-18",
                       "days": 39, "degraded": False},
     "weekly_share": [{"week": "2026-W20", "minutes": {"claude": 300, "codex": 120}}],
-    "parallel": {"heatmap": [[0] * 24 for _ in range(7)],
+    "parallel": {"heatmap": [[3 if (wd, hr) == (2, 14) else 0 for hr in range(24)]
+                             for wd in range(7)],
                  "daily_max": [], "hours_multi_source": 3,
                  "hours_single_source": 50},
     "project_matrix": {"projects": ["webapp"], "sources": ["claude", "codex"],
@@ -122,6 +124,14 @@ class TeamLedgerTests(unittest.TestCase):
         self.assertIn("39", html)          # window days
         self.assertIn("EXHIBIT", html)
 
+    def test_healthy_window_renders_heatmap_and_matrix_exhibits(self):
+        # CROSS has a non-degraded common_window plus non-empty parallel
+        # heatmap and project_matrix data — both exhibits must render.
+        html = _build_team_ledger(CROSS, NARR, "en")
+        from scripts.locales import STRINGS
+        self.assertIn(STRINGS["en"]["ledger_parallel_title"], html)
+        self.assertIn(STRINGS["en"]["ledger_matrix_title"], html)
+
     def test_degraded_window_drops_comparisons(self):
         degraded = dict(CROSS, common_window={"start": "2026-06-10",
                                               "end": "2026-06-18",
@@ -130,6 +140,19 @@ class TeamLedgerTests(unittest.TestCase):
         self.assertNotIn("2026-W20", html)   # no weekly comparison exhibit
         from scripts.locales import STRINGS
         self.assertIn(STRINGS["en"]["ledger_degraded_note"], html)
+        # Per-source fallback only: heatmap and project x tool matrix
+        # exhibits must NOT render when the window is degraded — those are
+        # cross-source comparisons the source cards + degraded note already
+        # cover per-source.
+        self.assertNotIn(STRINGS["en"]["ledger_parallel_title"], html)
+        self.assertNotIn(STRINGS["en"]["ledger_matrix_title"], html)
+
+    def test_absent_window_drops_comparisons(self):
+        no_window = dict(CROSS, common_window=None)
+        html = _build_team_ledger(no_window, NARR, "en")
+        from scripts.locales import STRINGS
+        self.assertNotIn(STRINGS["en"]["ledger_parallel_title"], html)
+        self.assertNotIn(STRINGS["en"]["ledger_matrix_title"], html)
 
     def test_never_prints_prompt_text(self):
         cross = dict(CROSS)
@@ -140,6 +163,29 @@ class TeamLedgerTests(unittest.TestCase):
              "parse_errors": 0}]
         html = _build_team_ledger(cross, NARR, "en")
         self.assertNotIn("GROK_PRIVATE_MARKER", html)
+
+    def test_source_card_shows_parse_errors_when_present(self):
+        cross = dict(CROSS)
+        cross["sources"] = [
+            dict(CROSS["sources"][0], detected=True),
+            dict(CROSS["sources"][1], detected=True, parse_errors=2),
+        ]
+        html = _build_team_ledger(cross, NARR, "en")
+        from scripts.locales import STRINGS
+        expected = STRINGS["en"]["ledger_parse_errors_template"].format(n=2)
+        self.assertIn(expected, html)
+
+    def test_source_card_hides_parse_errors_when_zero(self):
+        cross = dict(CROSS)
+        cross["sources"] = [
+            dict(CROSS["sources"][0], detected=True, parse_errors=0),
+            dict(CROSS["sources"][1], detected=True, parse_errors=0),
+        ]
+        html = _build_team_ledger(cross, NARR, "en")
+        from scripts.locales import STRINGS
+        # Template with n=0 must not appear anywhere in the rendered output.
+        unexpected = STRINGS["en"]["ledger_parse_errors_template"].format(n=0)
+        self.assertNotIn(unexpected, html)
 
     def test_not_detected_source_card_shows_label_not_counts(self):
         cross = dict(CROSS)

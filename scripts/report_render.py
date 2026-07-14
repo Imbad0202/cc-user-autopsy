@@ -422,6 +422,10 @@ def _source_card_html(s: dict, locale: str) -> str:
         if s.get("first_date") and s.get("last_date"):
             span = f'{esc(s["first_date"])} – {esc(s["last_date"])}'
         body = f'{esc(label)}<br>{int(s.get("session_count") or 0)} · {span}'
+        parse_errors = s.get("parse_errors") or 0
+        if parse_errors > 0:
+            err_line = t(locale, "ledger_parse_errors_template").format(n=parse_errors)
+            body += f'<br><span class="c-source-card-errs">{esc(err_line)}</span>'
     return (f'<div class="c-source-card{modifier}">'
             f'<b>{esc(s["source"])}</b> · {body}</div>')
 
@@ -444,10 +448,15 @@ def _build_team_ledger(cross_llm, narration, locale="en"):
     cards = f'<div class="c-source-cards">{cards}</div>'
 
     win = cross_llm.get("common_window")
+    # Single source of truth for "is this a healthy (present, non-degraded)
+    # common_window" — reused below for weekly share, heatmap/matrix, and
+    # head-to-head, all of which are cross-source COMPARISONS gated the
+    # same way (spec §13).
+    window_healthy = bool(win) and not win.get("degraded")
     parts = [cards]
     exhibit_no = count(2)  # Exhibit 1 lives in the output ledger
 
-    if win and not win.get("degraded"):
+    if window_healthy:
         note = t(locale, "ledger_common_window_note_template").format(
             start=win["start"], end=win["end"], days=win["days"])
         parts.append(f'<p class="method">{esc(note)}</p>')
@@ -473,36 +482,41 @@ def _build_team_ledger(cross_llm, narration, locale="en"):
         parts.append(f'<p class="method">'
                      f'{esc(t(locale, "ledger_degraded_note"))}</p>')
 
-    # heatmap + matrix render regardless of degradation (no cross-rate claims)
-    hm = cross_llm.get("parallel", {}).get("heatmap")
-    if hm and any(any(r) for r in hm):
-        mx = max(max(r) for r in hm) or 1
-        grid = "".join(
-            f'<div style="background: rgba(176,138,46,{0.85 * c / mx:.2f})"></div>'
-            for row in hm for c in row)
-        body = (f'<div style="display:grid;grid-template-columns:repeat(24,1fr);'
-                f'gap:2px;height:120px">{grid}</div>')
-        parts.append(_exhibit(next(exhibit_no),
-                              t(locale, "ledger_parallel_title"),
-                              body, "aggregate.py cross_llm.parallel",
-                              locale=locale))
+    # heatmap + matrix are cross-source COMPARISONS (spec §13) — like weekly
+    # share and head-to-head, they only render for a healthy (non-degraded,
+    # present) common_window. aggregate.py still computes them over full
+    # history when degraded/absent for schema stability; the source cards +
+    # degraded note above are the per-source fallback in that case.
+    if window_healthy:
+        hm = cross_llm.get("parallel", {}).get("heatmap")
+        if hm and any(any(r) for r in hm):
+            mx = max(max(r) for r in hm) or 1
+            grid = "".join(
+                f'<div style="background: rgba(176,138,46,{0.85 * c / mx:.2f})"></div>'
+                for row in hm for c in row)
+            body = (f'<div style="display:grid;grid-template-columns:repeat(24,1fr);'
+                    f'gap:2px;height:120px">{grid}</div>')
+            parts.append(_exhibit(next(exhibit_no),
+                                  t(locale, "ledger_parallel_title"),
+                                  body, "aggregate.py cross_llm.parallel",
+                                  locale=locale))
 
-    pm = cross_llm.get("project_matrix") or {}
-    if pm.get("projects"):
-        head = "".join(f"<th>{esc(s)}</th>" for s in pm["sources"])
-        body_rows = "".join(
-            f'<tr><td>{esc(proj)}</td>' +
-            "".join(f"<td>{c}</td>" for c in pm["counts"][i]) + "</tr>"
-            for i, proj in enumerate(pm["projects"]))
-        table = (f'<table><thead><tr><th></th>{head}</tr></thead>'
-                 f'<tbody>{body_rows}</tbody></table>')
-        parts.append(_exhibit(next(exhibit_no),
-                              t(locale, "ledger_matrix_title"),
-                              table, "aggregate.py cross_llm.project_matrix",
-                              locale=locale))
+        pm = cross_llm.get("project_matrix") or {}
+        if pm.get("projects"):
+            head = "".join(f"<th>{esc(s)}</th>" for s in pm["sources"])
+            body_rows = "".join(
+                f'<tr><td>{esc(proj)}</td>' +
+                "".join(f"<td>{c}</td>" for c in pm["counts"][i]) + "</tr>"
+                for i, proj in enumerate(pm["projects"]))
+            table = (f'<table><thead><tr><th></th>{head}</tr></thead>'
+                     f'<tbody>{body_rows}</tbody></table>')
+            parts.append(_exhibit(next(exhibit_no),
+                                  t(locale, "ledger_matrix_title"),
+                                  table, "aggregate.py cross_llm.project_matrix",
+                                  locale=locale))
 
     h2h = cross_llm.get("head_to_head")
-    if h2h and win and not win.get("degraded"):
+    if h2h and window_healthy:
         def _col(name, side):
             return ('<div>'
                     f'<div class="c-kicker">{esc(name)}</div>'

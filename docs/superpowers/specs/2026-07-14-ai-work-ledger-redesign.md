@@ -102,7 +102,7 @@ Counterexample guard: any pattern that occurs at a similar rate in `fully_achiev
 
 ## 6. Cross-LLM data layer
 
-Local sources as probed on 2026-07-14 (formats owned by their vendors; adapters must degrade gracefully when formats change):
+Local sources as of 2026-07 (formats owned by their vendors; adapters must degrade gracefully when formats change):
 
 | Source | Location | Available signals | Tier |
 |---|---|---|---|

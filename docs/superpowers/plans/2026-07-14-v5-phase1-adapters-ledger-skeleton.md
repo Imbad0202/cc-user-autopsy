@@ -24,7 +24,7 @@
 
 ## Known deviations from spec (decided at plan time — carry into implementation-notes)
 
-1. **`segments` field** (beyond spec's "plus two fields"): real Codex rollout files are resumed across days (observed: one file spanning 2026-04-20 → 2026-04-30). Treating `[start, start+duration]` as one activity window would fabricate ~10 days of parallel activity. Adapters therefore also emit `segments`: activity windows split at idle gaps > 30 min. Claude rows don't have it; aggregation falls back to `[start, start+duration]` for them.
+1. **`segments` field** (beyond spec's "plus two fields"): rollout files for these tools are appended to again when a session resumes days later (a file can span 10+ days). Treating `[start, start+duration]` as one activity window would fabricate many days of parallel activity for a resumed session. Adapters therefore also emit `segments`: activity windows split at idle gaps > 30 min. Claude rows don't have it; aggregation falls back to `[start, start+duration]` for them.
 2. **Phase 1 exhibits are HTML/CSS, not canvas**: weekly tool-share (stacked bars), parallel heatmap (CSS grid), project × tool matrix (table), head-to-head (card) are rendered server-side as HTML. No changes to `js/chart_layout.js`. Canvas polish, if wanted, is Phase 3 work.
 3. **Praise-word lint deferred to Phase 2** (spec lists it under Rendering but Phase 1's narrative surface is small; it lands with the leak ledger where most prose lives). SKILL.md Step 3 rewrite in this phase embeds the audit-discipline rules as writing instructions.
 4. **Ledger narration file**: the opening line + per-book opener claims are LLM-written (SKILL.md Step 3) and enter the build via a new `--ledger-narration <md>` flag, structured with `# opening` / `# output-ledger` / `# team-ledger` headings.
@@ -80,7 +80,7 @@ class SplitSegmentsTests(unittest.TestCase):
         self.assertEqual(segs[0], [ts[0], ts[-1]])
 
     def test_resumed_session_splits_at_gap(self):
-        # models the observed real case: rollout file resumed 10 days later
+        # models a resumed rollout file: reopened and appended to 10 days later
         ts = self._ts(0, 10) + self._ts(14400, 14405)  # +10 days
         segs = split_segments(ts)
         self.assertEqual(len(segs), 2)
@@ -108,9 +108,10 @@ Expected: FAIL / ERROR with `ModuleNotFoundError: No module named 'scripts.cross
 
 The adapters (scan_codex.py, scan_grok.py, scan_antigravity.py) emit the
 same row shape as scan_transcripts.py plus `source` and `coverage`, and —
-for sources whose log files span multiple days (observed with resumed
-Codex rollouts) — a `segments` list of activity windows split at idle
-gaps, so parallel detection never counts idle days as active time.
+for sources whose log files can span multiple days (a session resumed
+days later reopens and appends to the same rollout file) — a `segments`
+list of activity windows split at idle gaps, so parallel detection never
+counts idle days as active time.
 """
 import json
 from datetime import datetime
@@ -181,7 +182,7 @@ git commit -m "feat(cross-llm): shared adapter helpers (ts parse, local ISO, seg
 - Consumes: `cross_llm_common.parse_ts / to_local_iso / split_segments / write_rows`.
 - Produces: CLI `python3 scripts/scan_codex.py --sessions-dir <dir> --output <jsonl>` (`--sessions-dir` defaults to `~/.codex/sessions`). Function `scan_one(path: Path) -> tuple[Optional[dict], int]` returning `(row, parse_error_count)`. Row fields: `session_id, project_path, start_time, duration_minutes, segments, user_message_count, assistant_message_count, tool_counts, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens (None), reasoning_output_tokens, model_counts, first_prompt, source="codex", coverage="full"`.
 
-Verified real format (probed 2026-07-14 on live files): each `rollout-*.jsonl` line is `{"timestamp": "...Z", "type": ..., "payload": {...}}`. Relevant types: `session_meta` (payload: `id`, `cwd`), `turn_context` (payload: `model`, `effort`, `cwd`), `event_msg` (payload.type ∈ `user_message` / `agent_message` / `token_count`; token_count payload.info may be `null`, else `info.total_token_usage = {input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens, total_tokens}` — cumulative, take the **last** non-null), `response_item` (payload.type `function_call` has `name`).
+Event format verified against the vendor's current rollout format: each `rollout-*.jsonl` line is `{"timestamp": "...Z", "type": ..., "payload": {...}}`. Relevant types: `session_meta` (payload: `id`, `cwd`), `turn_context` (payload: `model`, `effort`, `cwd`), `event_msg` (payload.type ∈ `user_message` / `agent_message` / `token_count`; token_count payload.info may be `null`, else `info.total_token_usage = {input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens, total_tokens}` — cumulative, take the **last** non-null), `response_item` (payload.type `function_call` has `name`).
 
 - [ ] **Step 1: Write the failing test**
 
