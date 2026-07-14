@@ -212,6 +212,9 @@ def _run_build_with_ledger(audience, tmp_path):
         "--audience", audience,
         "--ledger-narration", str(tmp_path / "narr.md"),
         "--output", str(out),
+        # Always isolate the snapshot hook — without this, every SELF test
+        # build appends junk to the user's REAL autopsy-history.jsonl.
+        "--history-file", str(tmp_path / "history.jsonl"),
     ]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:

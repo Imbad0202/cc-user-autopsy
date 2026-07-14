@@ -37,7 +37,7 @@ TDD seed. The test references narrative modules that do not exist yet, so it mus
 
 - [ ] **Step 1: Write the parity test file**
 
-Create `/Users/imbad/Projects/cc-user-autopsy/tests/test_narrative_parity.py`:
+Create `/path/to/cc-user-autopsy/tests/test_narrative_parity.py`:
 
 ```python
 """AST-based parity test for narrative_en.py and narrative_zh.py.
@@ -165,7 +165,7 @@ def _assert_no_dynamic_metrics(tree: ast.Module, filename: str) -> None:
 - [ ] **Step 2: Run the test — expect failure**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python -m pytest tests/test_narrative_parity.py -v 2>&1 | tail -20
 ```
 
@@ -174,7 +174,7 @@ Expected: fail at fixture setup (`FileNotFoundError` on `narrative_en.py`).
 - [ ] **Step 3: Commit**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 git add tests/test_narrative_parity.py
 git commit -m "test(narrative): add parity test scaffolding (red)
 
@@ -195,7 +195,7 @@ Both modules export all 24 required functions as stubs returning placeholder str
 
 - [ ] **Step 1: Write narrative_en.py stub**
 
-Create `/Users/imbad/Projects/cc-user-autopsy/scripts/narrative_en.py`:
+Create `/path/to/cc-user-autopsy/scripts/narrative_en.py`:
 
 ```python
 """English narrative for cc-user-autopsy reports.
@@ -462,7 +462,7 @@ def methodology_caveats_body() -> str:
 
 - [ ] **Step 2: Write narrative_zh.py stub**
 
-Create `/Users/imbad/Projects/cc-user-autopsy/scripts/narrative_zh.py`:
+Create `/path/to/cc-user-autopsy/scripts/narrative_zh.py`:
 
 ```python
 """中文敘事模組，給 cc-user-autopsy 報告使用。
@@ -731,7 +731,7 @@ def methodology_caveats_body() -> str:
 - [ ] **Step 3: Run the parity test — expect pass**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python -m pytest tests/test_narrative_parity.py -v 2>&1 | tail -25
 ```
 
@@ -740,7 +740,7 @@ Expected: all 21 tests pass (`test_public_function_set_is_identical`, 18 × `tes
 - [ ] **Step 4: Confirm the rest of the suite is still green**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python -m pytest 2>&1 | tail -10
 ```
 
@@ -749,7 +749,7 @@ Expected: 149 passed, 0 skipped (the existing count post PR #16); 21 extra parit
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 git add scripts/narrative_en.py scripts/narrative_zh.py
 git commit -m "feat(narrative): add narrative_en.py + narrative_zh.py
 
@@ -780,7 +780,7 @@ Per-function behavior tests. The parity test only verifies metric-key sets; thes
 
 - [ ] **Step 1: Write the shared fixture module**
 
-Create `/Users/imbad/Projects/cc-user-autopsy/tests/_narrative_fixtures.py`:
+Create `/path/to/cc-user-autopsy/tests/_narrative_fixtures.py`:
 
 ```python
 """Shared fixtures for narrative tests. Each fixture returns a complete
@@ -899,7 +899,7 @@ ALL_DIM_FIXTURES = {
 
 - [ ] **Step 2: Write test_narrative_en.py**
 
-Create `/Users/imbad/Projects/cc-user-autopsy/tests/test_narrative_en.py`:
+Create `/path/to/cc-user-autopsy/tests/test_narrative_en.py`:
 
 ```python
 """Behavioral tests for scripts/narrative_en.py. Each function must
@@ -973,7 +973,7 @@ def test_methodology_functions_return_non_empty():
 
 - [ ] **Step 3: Write test_narrative_zh.py**
 
-Create `/Users/imbad/Projects/cc-user-autopsy/tests/test_narrative_zh.py`:
+Create `/path/to/cc-user-autopsy/tests/test_narrative_zh.py`:
 
 ```python
 """Behavioral tests for scripts/narrative_zh.py. Mirrors test_narrative_en.py
@@ -1056,7 +1056,7 @@ def test_zh_narrative_contains_no_em_dash_in_static_methodology():
 - [ ] **Step 4: Run the new tests — expect green**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python -m pytest tests/test_narrative_en.py tests/test_narrative_zh.py -v 2>&1 | tail -30
 ```
 
@@ -1065,7 +1065,7 @@ Expected: all tests pass.
 - [ ] **Step 5: Run the full suite**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python -m pytest 2>&1 | tail -5
 ```
 
@@ -1074,7 +1074,7 @@ Expected: no regressions; total test count increased appropriately.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 git add tests/_narrative_fixtures.py tests/test_narrative_en.py tests/test_narrative_zh.py
 git commit -m "test(narrative): behavioral tests for en + zh narrative modules
 
@@ -1100,7 +1100,7 @@ The `pattern_emit` value is the same condition the function currently uses to de
 
 Run:
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 grep -n "pattern = None\|pattern = (\|if len(.*) >= _PATTERN_MIN_SAMPLE" scripts/aggregate.py | head -30
 ```
 
@@ -1108,7 +1108,7 @@ Each scoring function has one site where pattern is decided. Note the line numbe
 
 - [ ] **Step 2: Modify score_d1_delegation**
 
-In `/Users/imbad/Projects/cc-user-autopsy/scripts/aggregate.py`, find the `score_d1_delegation` function. The current shape ends with:
+In `/path/to/cc-user-autopsy/scripts/aggregate.py`, find the `score_d1_delegation` function. The current shape ends with:
 
 ```python
     # Pattern string (descriptive contrast). None when TA sample < _PATTERN_MIN_SAMPLE.
@@ -1198,7 +1198,7 @@ The short-circuit D9 returns (insufficient sample, zero-token good sessions) als
 - [ ] **Step 4: Run all scoring tests**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python -m pytest tests/test_d9_token_efficiency.py tests/test_narrative_parity.py tests/test_narrative_en.py tests/test_narrative_zh.py -v 2>&1 | tail -30
 ```
 
@@ -1207,7 +1207,7 @@ Expected: all still green (existing tests only checked `score`, `explanation`, `
 - [ ] **Step 5: Verify aggregate tests**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python -m pytest tests/test_aggregate.py 2>&1 | tail -15
 ```
 
@@ -1216,7 +1216,7 @@ If `tests/test_aggregate.py` doesn't exist, skip this step. If it does and any t
 - [ ] **Step 6: Run full suite**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python -m pytest 2>&1 | tail -5
 ```
 
@@ -1225,7 +1225,7 @@ Expected: zero regressions.
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 git add scripts/aggregate.py
 git commit -m "feat(aggregate): emit pattern_emit bool alongside deprecated prose fields
 
@@ -1250,7 +1250,7 @@ This task threads narrative modules through the render path. It does not yet ext
 
 - [ ] **Step 1: Import the narrative module conditionally**
 
-Near the top of `/Users/imbad/Projects/cc-user-autopsy/scripts/build_html.py`, find the existing import block (around lines 1-30, the `from scripts.locales import ...` is the anchor). Add:
+Near the top of `/path/to/cc-user-autopsy/scripts/build_html.py`, find the existing import block (around lines 1-30, the `from scripts.locales import ...` is the anchor). Add:
 
 ```python
 def _load_narrative(locale: str):
@@ -1366,7 +1366,7 @@ If these are referenced in multiple places, change every site.
 - [ ] **Step 6: Run the full test suite**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python -m pytest 2>&1 | tail -10
 ```
 
@@ -1375,7 +1375,7 @@ Expected: all still green.
 - [ ] **Step 7: Regenerate both locale reports and spot-check visually**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python3 scripts/build_html.py \
   --input /tmp/cc-autopsy-demo/analysis-data.json \
   --samples /tmp/cc-autopsy-demo/samples.json \
@@ -1397,7 +1397,7 @@ Manually compare the English and Chinese reports:
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 git add scripts/build_html.py
 git commit -m "feat(build_html): switch prose source from aggregate/locales to narrative
 
@@ -1448,7 +1448,7 @@ The following `method_*` keys remain in locales because they're chrome (section 
 **Double-check by grepping build_html.py for each removed key — if it still appears, Task 5 missed a site.**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 for k in section_method_subtitle method_sampling_body method_caveats_body \
          ev_high_friction ev_top_token ev_top_interrupt ev_not_achieved \
          ev_partial ev_control_good ev_user_rejected ev_long_duration; do
@@ -1461,7 +1461,7 @@ Every key must show `(unused in build_html.py — safe to remove)`. If any still
 
 - [ ] **Step 2: Remove keys from en block**
 
-Edit `/Users/imbad/Projects/cc-user-autopsy/scripts/locales.py`. Find the en dict (around lines 25-225). Delete the 11 entries listed above from the en block.
+Edit `/path/to/cc-user-autopsy/scripts/locales.py`. Find the en dict (around lines 25-225). Delete the 11 entries listed above from the en block.
 
 - [ ] **Step 3: Remove keys from zh_TW block**
 
@@ -1469,11 +1469,11 @@ Same 11 keys, from the zh_TW block (around lines 240-445).
 
 - [ ] **Step 4: Update REQUIRED_KEYS in test_locales.py**
 
-`/Users/imbad/Projects/cc-user-autopsy/tests/test_locales.py` has a `REQUIRED_KEYS` set that is asserted against both locale blocks. Remove the 11 removed keys from that set.
+`/path/to/cc-user-autopsy/tests/test_locales.py` has a `REQUIRED_KEYS` set that is asserted against both locale blocks. Remove the 11 removed keys from that set.
 
 Run:
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 grep -n "REQUIRED_KEYS" tests/test_locales.py
 ```
 
@@ -1482,7 +1482,7 @@ Locate the set definition and remove the migrated keys. If any of the 11 is not 
 - [ ] **Step 5: Run locale tests**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python -m pytest tests/test_locales.py -v 2>&1 | tail -20
 ```
 
@@ -1491,7 +1491,7 @@ Expected: pass. `test_locale_keysets_match` confirms en and zh still have identi
 - [ ] **Step 6: Run full suite**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python -m pytest 2>&1 | tail -5
 ```
 
@@ -1500,7 +1500,7 @@ Expected: all green.
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 git add scripts/locales.py tests/test_locales.py
 git commit -m "refactor(locales): drop keys migrated to narrative modules
 
@@ -1537,7 +1537,7 @@ If you skip, note it in the PR description.
 
 - [ ] **Step 2: Create report_render.py as a lift**
 
-Create `/Users/imbad/Projects/cc-user-autopsy/scripts/report_render.py` and move everything from the "extract" list. Expose a single `render(ctx: dict) -> str` entry point. `ctx` contains:
+Create `/path/to/cc-user-autopsy/scripts/report_render.py` and move everything from the "extract" list. Expose a single `render(ctx: dict) -> str` entry point. `ctx` contains:
 
 - `analysis_data`: the loaded JSON
 - `samples`: samples dict
@@ -1554,7 +1554,7 @@ If extraction is mechanically invasive (many intermediate variables), defer this
 - [ ] **Step 3: Run the full suite and regenerate reports**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python -m pytest 2>&1 | tail -5
 python3 scripts/build_html.py --input /tmp/cc-autopsy-demo/analysis-data.json --samples /tmp/cc-autopsy-demo/samples.json --peer-review /tmp/cc-autopsy-demo/peer-review.md --output /tmp/cc-autopsy-demo/report.html
 python3 scripts/build_html.py --input /tmp/cc-autopsy-demo/analysis-data.json --samples /tmp/cc-autopsy-demo/samples.json --peer-review /tmp/cc-autopsy-demo/peer-review.md --output /tmp/cc-autopsy-demo/report-zh.html --locale zh_TW
@@ -1566,7 +1566,7 @@ Expected: output bytes for the en report match closely (allowing for whitespace 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 git add scripts/report_render.py scripts/build_html.py
 git commit -m "refactor(render): extract report_render.py from build_html.py
 
@@ -1583,7 +1583,7 @@ delegates."
 - [ ] **Step 1: Full test matrix**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python -m pytest 2>&1 | tail -5
 node --test tests/chart_layout.test.mjs 2>&1 | tail -5
 ```
@@ -1593,7 +1593,7 @@ Both must pass clean.
 - [ ] **Step 2: Regenerate and visually verify both locale reports**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 python3 scripts/generate_demo_data.py
 python3 scripts/aggregate.py --data-dir /tmp/cc-autopsy-demo/usage-data --output /tmp/cc-autopsy-demo/analysis-data.json
 python3 scripts/sample_sessions.py --input /tmp/cc-autopsy-demo/analysis-data.json --output /tmp/cc-autopsy-demo/samples.json --projects-dir /tmp/cc-autopsy-demo/projects
@@ -1610,7 +1610,7 @@ Pause and ask the user to confirm visually:
 - [ ] **Step 3: Diff summary**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 git log --oneline fix/zh-tw-locale..HEAD
 git diff fix/zh-tw-locale..HEAD --stat
 ```
@@ -1620,7 +1620,7 @@ Capture the stat for the PR description.
 - [ ] **Step 4: Push and open PR**
 
 ```bash
-cd /Users/imbad/Projects/cc-user-autopsy
+cd /path/to/cc-user-autopsy
 git push -u origin feat/i18n-explanations
 gh pr create --base fix/zh-tw-locale \
   --title "feat(i18n): split narrative from aggregator, zh report fully Chinese" \
