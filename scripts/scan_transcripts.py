@@ -28,9 +28,11 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from cross_llm_common import prompt_identity, split_segments, to_local_iso
+    from cross_llm_common import (prompt_identity, segments_and_duration,
+                                   split_segments, to_local_iso)
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_transcripts
-    from scripts.cross_llm_common import prompt_identity, split_segments, to_local_iso
+    from scripts.cross_llm_common import (prompt_identity, segments_and_duration,
+                                           split_segments, to_local_iso)
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
@@ -94,6 +96,13 @@ def _scan_usage(records):
     that happened entirely inside a subagent. Returning output_seq and
     tool/git counts here lets Pass 2 merge them into the parent's evidence
     before token_accel and graveyard-relevant fields are derived.
+
+    Fix 1 (round 12): also returns `record_timestamps` — all parseable
+    timestamps across every record in the subagent file (not just assistant
+    messages), so Pass 2 can merge them into the parent's timestamp sequence
+    and rebuild `segments`. A >30-min delegated run with no parent-transcript
+    records during it would otherwise be idle-gap-split into two segments
+    even though the subagent was active throughout.
     """
     asst = [r for r in records if r.get("type") == "assistant"]
     in_tok = out_tok = cache_create = cache_read = 0
@@ -147,6 +156,7 @@ def _scan_usage(records):
         "tool_counts": tool_counts,
         "git_commits": git_commits,
         "git_pushes": git_pushes,
+        "record_timestamps": _record_timestamps(records),
     }
 
 
@@ -192,6 +202,47 @@ def _earliest_timestamp(records):
         if ts:
             return ts
     return ""
+
+
+def _record_timestamps(records):
+    """Return all parseable timestamps across records, as datetime objects.
+    Used by Pass 2 (Fix 1, round 12) to merge a subagent's own record
+    timestamps into the parent's timestamp sequence before rebuilding
+    `segments`, so a long delegated run with no parent-transcript activity
+    during it doesn't get idle-gap-split even though the subagent was
+    active throughout."""
+    out = []
+    for r in records:
+        dt = _parse_ts(r.get("timestamp"))
+        if dt:
+            out.append(dt)
+    return out
+
+
+def _derive_tool_flags(tool_counts):
+    """Derive the uses_* booleans from a tool_counts mapping. Single source
+    of truth for the name-based predicates, reused by scan_one (initial
+    parent-only computation) and by main()'s Pass 2 (Fix 2, round 12:
+    recomputation after subagent tool_counts are merged in) so a
+    subagent-only MCP/WebSearch/WebFetch/Task call is never missed.
+
+    uses_subagent: any(name in ("Agent", "Task") for name in tool_counts)
+    uses_task_agent: broader — session-meta's definition includes the
+      TODO-system tools (TaskCreate/TaskUpdate/TaskList/...), not just
+      Agent dispatch.
+    """
+    names = list(tool_counts)
+    return {
+        "uses_subagent": any(name in ("Agent", "Task") for name in names),
+        "uses_task_agent": any(
+            name in ("Agent", "Task", "TaskCreate", "TaskUpdate", "TaskList",
+                     "TaskGet", "TaskStop", "TaskOutput", "TodoWrite")
+            for name in names
+        ),
+        "uses_mcp": any(name.startswith("mcp__") for name in names),
+        "uses_web_search": "WebSearch" in tool_counts,
+        "uses_web_fetch": "WebFetch" in tool_counts,
+    }
 
 
 def scan_one(path: Path):
@@ -353,15 +404,9 @@ def scan_one(path: Path):
     # tools including TaskCreate/TaskUpdate/TaskList (the TODO system), not
     # just Agent dispatch. Match that definition so scores are comparable.
     # uses_subagent is the stricter "actually delegated a subagent" signal.
-    uses_subagent = any(name in ("Agent", "Task") for name in tool_counts)
-    uses_task_agent = any(
-        name in ("Agent", "Task", "TaskCreate", "TaskUpdate", "TaskList",
-                 "TaskGet", "TaskStop", "TaskOutput", "TodoWrite")
-        for name in tool_counts
-    )
-    uses_mcp = any(name.startswith("mcp__") for name in tool_counts)
-    uses_web_search = "WebSearch" in tool_counts
-    uses_web_fetch = "WebFetch" in tool_counts
+    # Computed here from parent-only tool_counts; main()'s Pass 3 recomputes
+    # these (Fix 2, round 12) once subagent tool_counts are merged in.
+    tool_flags = _derive_tool_flags(tool_counts)
 
     first_prompt = ""
     for r in user_msgs:
@@ -426,11 +471,11 @@ def scan_one(path: Path):
         "tool_errors": tool_errors,
         "hit_output_limit": hit_output_limit,
         "token_accel": token_accel,
-        "uses_task_agent": uses_task_agent,
-        "uses_subagent": uses_subagent,
-        "uses_mcp": uses_mcp,
-        "uses_web_search": uses_web_search,
-        "uses_web_fetch": uses_web_fetch,
+        "uses_task_agent": tool_flags["uses_task_agent"],
+        "uses_subagent": tool_flags["uses_subagent"],
+        "uses_mcp": tool_flags["uses_mcp"],
+        "uses_web_search": tool_flags["uses_web_search"],
+        "uses_web_fetch": tool_flags["uses_web_fetch"],
         "first_prompt": first_prompt,
         # Identity key computed on the FULL prompt text — first_prompt above
         # is not truncated here (scan_transcripts has no 500-char cap), but
@@ -447,6 +492,11 @@ def scan_one(path: Path):
         # token_accel, then stripped in Pass 3 before rows are written to
         # transcript-rows.jsonl. Never part of the emitted row schema.
         "_assistant_output_pairs": assistant_output_pairs,
+        # Pipeline-internal only (Fix 1, round 12): this transcript's own
+        # record timestamps (datetime objects), consumed by main()'s Pass 2
+        # to merge in any subagent record_timestamps before rebuilding
+        # `segments`. Stripped in Pass 3, never part of the emitted schema.
+        "_all_ts": all_ts,
     }
 
 
@@ -503,6 +553,23 @@ def main():
     # entirely inside a Task/Agent subagent. Rows with no subagent_usages
     # entries never enter this loop, so their token_accel/tool_counts/
     # git_commits/git_pushes are byte-identical to today's values.
+    #
+    # Fix 1 (round 12): subagent record_timestamps are merged into the
+    # parent's own timestamp sequence (_all_ts) and `segments` is rebuilt
+    # from the merged, sorted sequence using the same split_segments call
+    # the parent path uses. Without this, a >30-min delegated run with no
+    # parent-transcript records during it would idle-gap-split into two
+    # segments even though the subagent was active throughout, which
+    # confuses _row_windows-based concurrency/switch-tax classification.
+    #
+    # Fix 2 (round 12): uses_mcp/uses_web_search/uses_web_fetch/
+    # uses_task_agent/uses_subagent must be recomputed from the MERGED
+    # tool_counts (via _derive_tool_flags, the same predicate logic
+    # scan_one uses) so a subagent-only MCP/WebSearch/WebFetch/Task call is
+    # no longer invisible to these flags. The recomputation itself happens
+    # once per row in Pass 3 below (not here) — a parent with N subagent
+    # files would otherwise pay for N discarded recomputations when only
+    # the value after the last merge is ever kept.
     n_merged = 0
     n_orphan = 0
     for parent, usage in subagent_usages:
@@ -522,6 +589,8 @@ def main():
             row["git_pushes"] = (row.get("git_pushes") or 0) + usage["git_pushes"]
             row["_assistant_output_pairs"] = (
                 row.get("_assistant_output_pairs") or []) + usage["output_seq"]
+            row["_all_ts"] = (row.get("_all_ts") or []) + usage["record_timestamps"]
+            row["_merged_subagent_tools"] = True
             n_merged += 1
         else:
             # Synthetic orphan row — minimal fields; downstream aggregate.py
@@ -587,6 +656,23 @@ def main():
     # _assistant_output_pairs field, which is never part of the emitted
     # schema. Orphan rows are exempt from the msg-count filter because their
     # purpose is to carry tokens, not to be scored.
+    #
+    # Fix 1 (round 12): also rebuild `segments` from the merged _all_ts
+    # (parent timestamps + any subagent record_timestamps merged in Pass 2)
+    # via the same segments_and_duration() helper cross_llm_common already
+    # provides for "sort, split on idle gaps, format as local-iso pairs" —
+    # only its segments half is used; duration_minutes keeps its own
+    # full-span semantics (computed in scan_one from first/last timestamp,
+    # not summed active-segment time). Rows without subagent_usages entries
+    # have a single-source _all_ts list identical to what scan_one already
+    # used to build `segments`, so re-sorting and re-splitting is a no-op
+    # and their segments stay byte-identical (regression guard). Orphan
+    # rows never had an `_all_ts` key, so they're unaffected.
+    #
+    # Fix 2 (round 12): uses_* flags are recomputed once per row here (not
+    # per subagent merge in Pass 2) for rows that received a subagent
+    # tool_counts merge, using the same _derive_tool_flags predicate logic
+    # scan_one uses.
     n_emitted = 0
     n_filtered = 0
     with out.open("w", encoding="utf-8") as fh:
@@ -595,6 +681,11 @@ def main():
             if pairs is not None:
                 pairs.sort(key=lambda p: p[0] or "")
                 row["token_accel"] = _compute_token_accel(pairs)
+            all_ts = row.pop("_all_ts", None)
+            if all_ts is not None:
+                row["segments"] = segments_and_duration(all_ts)[0] if all_ts else None
+            if row.pop("_merged_subagent_tools", False):
+                row.update(_derive_tool_flags(row["tool_counts"]))
             if (not row.get("orphan_subagent_only")) and \
                     row["assistant_message_count"] < args.min_assistant_msgs:
                 n_filtered += 1

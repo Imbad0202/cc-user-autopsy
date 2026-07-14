@@ -671,5 +671,201 @@ class SegmentsTests(unittest.TestCase):
             "segment-derived windows")
 
 
+class SubagentSegmentsMergeTests(unittest.TestCase):
+    """Fix 1 (round 12): subagent record timestamps must be merged into the
+    parent's timestamp sequence before `segments` is built, so a >30-min
+    delegated run with no parent-transcript activity during it doesn't get
+    idle-gap-split into two segments even though the subagent was active
+    throughout."""
+
+    def _write_parent(self, pdir, sid, t1, t2):
+        lines = [
+            json.dumps({"type": "user", "sessionId": sid,
+                        "message": {"role": "user", "content": "hi"},
+                        "timestamp": t1}),
+            json.dumps({"type": "assistant", "sessionId": sid,
+                        "message": {"role": "assistant", "content": "ok",
+                                    "model": "claude-opus-4-6",
+                                    "usage": {"input_tokens": 10, "output_tokens": 10}},
+                        "timestamp": t1}),
+            json.dumps({"type": "user", "sessionId": sid,
+                        "message": {"role": "user", "content": "done?"},
+                        "timestamp": t2}),
+            json.dumps({"type": "assistant", "sessionId": sid,
+                        "message": {"role": "assistant", "content": "yes",
+                                    "model": "claude-opus-4-6",
+                                    "usage": {"input_tokens": 10, "output_tokens": 10}},
+                        "timestamp": t2}),
+        ]
+        (pdir / f"{sid}.jsonl").write_text("\n".join(lines))
+
+    def test_subagent_activity_bridges_idle_gap_into_one_segment(self):
+        # Parent records at T (10:00) and T+70min (11:10) — a >30min gap
+        # that would split into two segments on parent-only evidence. A
+        # subagent active continuously from T+10 to T+60 (well inside the
+        # gap) must bridge it into ONE segment spanning the whole range.
+        sid = "30303030-0000-0000-0000-000000000003"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pdir = tmp / "projects" / "p"
+            pdir.mkdir(parents=True)
+            self._write_parent(pdir, sid,
+                                "2026-04-01T10:00:00Z", "2026-04-01T11:10:00Z")
+            sub_lines = []
+            for minute in (10, 25, 40, 60):
+                sub_lines.append(json.dumps({
+                    "type": "assistant", "sessionId": sid,
+                    "message": {"role": "assistant", "model": "claude-opus-4-6",
+                                "content": [],
+                                "usage": {"input_tokens": 5, "output_tokens": 5}},
+                    "timestamp": f"2026-04-01T10:{minute:02d}:00Z",
+                }))
+            (pdir / "agent-subagent1.jsonl").write_text("\n".join(sub_lines))
+            out = tmp / "out.jsonl"
+            r = _run_scanner(tmp / "projects", out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            row = next(x for x in rows if x["session_id"] == sid)
+            self.assertEqual(len(row["segments"]), 1,
+                              f"expected one merged segment, got {row['segments']}")
+
+    def test_same_parent_without_subagent_still_splits_into_two(self):
+        # Regression guard: the identical parent transcript, with NO
+        # subagent file at all, must still split into two segments —
+        # proving the merge (not some unrelated change) is what bridges
+        # the gap above, and that non-subagent sessions are unaffected.
+        sid = "30303030-0000-0000-0000-000000000004"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pdir = tmp / "projects" / "p"
+            pdir.mkdir(parents=True)
+            self._write_parent(pdir, sid,
+                                "2026-04-01T10:00:00Z", "2026-04-01T11:10:00Z")
+            out = tmp / "out.jsonl"
+            r = _run_scanner(tmp / "projects", out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            row = next(x for x in rows if x["session_id"] == sid)
+            self.assertEqual(len(row["segments"]), 2)
+
+
+class SubagentToolFlagsMergeTests(unittest.TestCase):
+    """Fix 2 (round 12): uses_mcp/uses_web_search/uses_web_fetch/
+    uses_task_agent/uses_subagent must be recomputed from the MERGED
+    tool_counts (parent + subagent), not just the parent transcript's own
+    tool_counts — otherwise a subagent-only MCP/WebSearch/WebFetch call
+    left the booleans stale."""
+
+    def _write_parent_no_mcp(self, pdir, sid):
+        lines = [
+            json.dumps({"type": "user", "sessionId": sid,
+                        "message": {"role": "user", "content": "hi"},
+                        "timestamp": "2026-04-01T10:00:00Z"}),
+            json.dumps({"type": "assistant", "sessionId": sid,
+                        "message": {"role": "assistant", "model": "claude-opus-4-6",
+                                    "content": [{"type": "tool_use", "name": "Read",
+                                                "input": {"file_path": "a.py"}}],
+                                    "usage": {"input_tokens": 10, "output_tokens": 10}},
+                        "timestamp": "2026-04-01T10:01:00Z"}),
+        ]
+        (pdir / f"{sid}.jsonl").write_text("\n".join(lines))
+
+    def test_subagent_only_mcp_call_sets_uses_mcp_true(self):
+        sid = "40404040-0000-0000-0000-000000000005"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pdir = tmp / "projects" / "p"
+            pdir.mkdir(parents=True)
+            self._write_parent_no_mcp(pdir, sid)
+            sub_lines = [json.dumps({
+                "type": "assistant", "sessionId": sid,
+                "message": {"role": "assistant", "model": "claude-opus-4-6",
+                            "content": [{"type": "tool_use", "name": "mcp__foo__bar",
+                                        "input": {}}],
+                            "usage": {"input_tokens": 5, "output_tokens": 5}},
+                "timestamp": "2026-04-01T10:05:00Z",
+            })]
+            (pdir / "agent-subagent1.jsonl").write_text("\n".join(sub_lines))
+            out = tmp / "out.jsonl"
+            r = _run_scanner(tmp / "projects", out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            row = next(x for x in rows if x["session_id"] == sid)
+            self.assertTrue(row["uses_mcp"])
+
+    def test_parent_only_has_no_mcp_call_without_subagent(self):
+        # Regression guard: identical parent, no subagent file -> uses_mcp
+        # stays False.
+        sid = "40404040-0000-0000-0000-000000000006"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pdir = tmp / "projects" / "p"
+            pdir.mkdir(parents=True)
+            self._write_parent_no_mcp(pdir, sid)
+            out = tmp / "out.jsonl"
+            r = _run_scanner(tmp / "projects", out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            row = next(x for x in rows if x["session_id"] == sid)
+            self.assertFalse(row["uses_mcp"])
+
+    def test_subagent_only_web_search_and_web_fetch_set_flags_true(self):
+        sid = "40404040-0000-0000-0000-000000000007"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pdir = tmp / "projects" / "p"
+            pdir.mkdir(parents=True)
+            self._write_parent_no_mcp(pdir, sid)
+            sub_lines = [
+                json.dumps({
+                    "type": "assistant", "sessionId": sid,
+                    "message": {"role": "assistant", "model": "claude-opus-4-6",
+                                "content": [{"type": "tool_use", "name": "WebSearch",
+                                            "input": {"query": "x"}}],
+                                "usage": {"input_tokens": 5, "output_tokens": 5}},
+                    "timestamp": "2026-04-01T10:05:00Z",
+                }),
+                json.dumps({
+                    "type": "assistant", "sessionId": sid,
+                    "message": {"role": "assistant", "model": "claude-opus-4-6",
+                                "content": [{"type": "tool_use", "name": "WebFetch",
+                                            "input": {"url": "https://example.com"}}],
+                                "usage": {"input_tokens": 5, "output_tokens": 5}},
+                    "timestamp": "2026-04-01T10:06:00Z",
+                }),
+            ]
+            (pdir / "agent-subagent1.jsonl").write_text("\n".join(sub_lines))
+            out = tmp / "out.jsonl"
+            r = _run_scanner(tmp / "projects", out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            row = next(x for x in rows if x["session_id"] == sid)
+            self.assertTrue(row["uses_web_search"])
+            self.assertTrue(row["uses_web_fetch"])
+
+    def test_subagent_task_family_call_sets_uses_task_agent_true(self):
+        sid = "40404040-0000-0000-0000-000000000008"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pdir = tmp / "projects" / "p"
+            pdir.mkdir(parents=True)
+            self._write_parent_no_mcp(pdir, sid)
+            sub_lines = [json.dumps({
+                "type": "assistant", "sessionId": sid,
+                "message": {"role": "assistant", "model": "claude-opus-4-6",
+                            "content": [{"type": "tool_use", "name": "TaskCreate",
+                                        "input": {}}],
+                            "usage": {"input_tokens": 5, "output_tokens": 5}},
+                "timestamp": "2026-04-01T10:05:00Z",
+            })]
+            (pdir / "agent-subagent1.jsonl").write_text("\n".join(sub_lines))
+            out = tmp / "out.jsonl"
+            r = _run_scanner(tmp / "projects", out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            row = next(x for x in rows if x["session_id"] == sid)
+            self.assertTrue(row["uses_task_agent"])
+
+
 if __name__ == "__main__":
     unittest.main()
