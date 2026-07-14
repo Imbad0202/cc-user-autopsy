@@ -3,7 +3,8 @@ from datetime import datetime, timedelta, timezone
 
 from scripts.aggregate import (
     bs_repeated_instructions, bs_sunk_cost, counterexample_similar,
-    normalize_prompt, prompt_similarity, week_key)
+    normalize_prompt, prompt_similarity, week_key,
+    bs_switch_tax, bs_interrupt_win_rate)
 
 
 class NormalizePromptTests(unittest.TestCase):
@@ -182,6 +183,80 @@ class GuardHelperTests(unittest.TestCase):
 
     def test_zero_flagged_rate_trips(self):
         self.assertTrue(counterexample_similar(0.0, 0.0))
+
+
+def _rated(sid, start, outcome, dur=60, interrupts=0, friction=None):
+    return {"sid": sid, "start": start.isoformat(), "outcome": outcome,
+            "duration_min": dur, "interrupts": interrupts,
+            "friction_counts": friction or {}, "first_prompt": "x",
+            "token_accel": None, "total_tokens": 1000}
+
+
+def _act_row(sid, start, dur=60):
+    return {"session_id": sid, "project_path": "/p", "start_time": start.isoformat(),
+            "duration_minutes": dur}
+
+
+def _codex_act(sid, start, dur=60):
+    r = _act_row(sid, start, dur)
+    r["source"], r["coverage"] = "codex", "full"
+    return r
+
+
+class SwitchTaxTests(unittest.TestCase):
+    def _fixture(self):
+        rated, act, cross = [], [], []
+        for i in range(20):  # multi-tool mornings: codex runs alongside
+            t = BASE + timedelta(days=i)
+            rated.append(_rated(f"m{i}", t, "not_achieved" if i % 2 else
+                                "fully_achieved", friction={"buggy_code": 1}))
+            act.append(_act_row(f"m{i}", t))
+            cross.append(_codex_act(f"x{i}", t + timedelta(minutes=10)))
+        for i in range(20):  # single-tool evenings
+            t = BASE + timedelta(days=i, hours=10)
+            rated.append(_rated(f"s{i}", t, "fully_achieved"))
+            act.append(_act_row(f"s{i}", t))
+        return rated, act, cross
+
+    def test_buckets_and_gate(self):
+        rated, act, cross = self._fixture()
+        out = bs_switch_tax(rated, act, cross)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["multi"]["n"], 20)
+        self.assertEqual(out["metrics"]["single"]["n"], 20)
+        self.assertEqual(out["metrics"]["single"]["good_rate"], 100.0)
+        self.assertLess(out["metrics"]["multi"]["good_rate"], 100.0)
+
+    def test_below_bucket_floor_fails_gate(self):
+        rated, act, cross = self._fixture()
+        out = bs_switch_tax(rated[:25], act, cross)  # only 5 single-tool
+        self.assertFalse(out["gate_passed"])
+
+    def test_no_cross_rows_fails_gate(self):
+        rated, act, _ = self._fixture()
+        out = bs_switch_tax(rated, act, [])
+        self.assertFalse(out["gate_passed"])
+
+
+class InterruptWinRateTests(unittest.TestCase):
+    def test_symmetric_rates_and_delta(self):
+        rated = ([_rated(f"i{k}", BASE + timedelta(days=k),
+                         "fully_achieved" if k < 2 else "not_achieved",
+                         interrupts=1) for k in range(5)]
+                 + [_rated(f"b{k}", BASE + timedelta(days=k, hours=5),
+                           "fully_achieved" if k < 4 else "not_achieved")
+                    for k in range(5)])
+        out = bs_interrupt_win_rate(rated)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["interrupted"]["good_rate"], 40.0)
+        self.assertEqual(out["metrics"]["baseline"]["good_rate"], 80.0)
+        self.assertEqual(out["metrics"]["delta_pp"], -40.0)
+
+    def test_gate_needs_five_in_each_bucket(self):
+        rated = [_rated(f"i{k}", BASE + timedelta(days=k), "fully_achieved",
+                        interrupts=1) for k in range(5)]
+        out = bs_interrupt_win_rate(rated)  # zero non-interrupted
+        self.assertFalse(out["gate_passed"])
 
 
 if __name__ == "__main__":

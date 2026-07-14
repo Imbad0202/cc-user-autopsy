@@ -2177,6 +2177,78 @@ def bs_sunk_cost(rated):
     return _bs_result("sunk_cost", True, metrics=metrics, n=len(pairs))
 
 
+_BS_SWITCH_MIN_PER_BUCKET = 20
+
+
+def _multi_source_intervals(activity_rows, cross_rows):
+    """Merged wall-clock intervals where >=2 sources were active.
+    Reuses the cross_llm sweep helpers; presence-only rows excluded."""
+    rows = []
+    for r in activity_rows:
+        rr = dict(r)
+        rr.setdefault("source", "claude")
+        rows.append(rr)
+    rows += [r for r in cross_rows if r.get("coverage") != "presence_only"]
+    windows = {id(r): _row_windows(r) for r in rows}
+    concurrent = _sweep_concurrent_intervals(rows, windows)
+    return _merge_intervals([(s, e) for s, e, n in concurrent if n >= 2])
+
+
+def bs_switch_tax(rated, activity_rows, cross_rows):
+    """Spec §5 #3 — switch tax. Outcome labels exist only for Claude, so
+    both buckets are Claude sessions; concurrency is measured against all
+    full/partial sources. Symmetric comparison — no counterexample guard."""
+    multi_iv = _multi_source_intervals(activity_rows, cross_rows)
+    if not multi_iv:
+        return _bs_result("switch_tax", False, reason="no multi-source windows")
+    multi, single = [], []
+    for s in rated:
+        st = _parse_dt(s.get("start"))
+        if st is None:
+            continue
+        en = st + timedelta(minutes=s.get("duration_min") or 0)
+        hit = any(a < en and st < b for a, b in multi_iv)
+        (multi if hit else single).append(s)
+    if len(multi) < _BS_SWITCH_MIN_PER_BUCKET or len(single) < _BS_SWITCH_MIN_PER_BUCKET:
+        return _bs_result("switch_tax", False,
+                          n=min(len(multi), len(single)),
+                          reason="fewer than 20 scored sessions in a bucket")
+
+    def side(sessions):
+        n = len(sessions)
+        return {"n": n,
+                "good_rate": round(100 * sum(is_good(s["outcome"]) for s in sessions) / n, 1),
+                "friction_per_session": round(
+                    sum(sum((s.get("friction_counts") or {}).values())
+                        for s in sessions) / n, 2),
+                "interrupts_per_session": round(
+                    sum(s.get("interrupts") or 0 for s in sessions) / n, 2)}
+
+    return _bs_result("switch_tax", True, n=len(multi) + len(single),
+                      metrics={"multi": side(multi), "single": side(single)})
+
+
+def bs_interrupt_win_rate(rated):
+    """Spec §5 #7 — interrupt win-rate, the D5 upgrade: same buckets as
+    score_d5_interrupt but symmetric (both rates + delta). Gate mirrors
+    D5's literal 5 plus a baseline floor of the same size."""
+    interrupted = [s for s in rated if (s.get("interrupts") or 0) > 0]
+    baseline = [s for s in rated if not (s.get("interrupts") or 0)]
+    if len(interrupted) < 5 or len(baseline) < 5:
+        return _bs_result("interrupt_win_rate", False,
+                          n=len(interrupted),
+                          reason="fewer than 5 sessions in a bucket")
+
+    def rate(ss):
+        return round(100 * sum(is_good(s["outcome"]) for s in ss) / len(ss), 1)
+
+    ri, rb = rate(interrupted), rate(baseline)
+    return _bs_result("interrupt_win_rate", True, n=len(interrupted),
+                      metrics={"interrupted": {"n": len(interrupted), "good_rate": ri},
+                               "baseline": {"n": len(baseline), "good_rate": rb},
+                               "delta_pp": round(ri - rb, 1)})
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR),
