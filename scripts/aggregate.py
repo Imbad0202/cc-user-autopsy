@@ -2050,6 +2050,11 @@ def compute_ledger(activity_metas, cross_llm):
 _BS_MIN_PATTERN_CHARS = 20
 _BS_REPEAT_MIN_OCC = 5
 _BS_REPEAT_MIN_WEEKS = 3
+_BS_SUNK_MIN_PAIRS = 3
+_BS_ACCEL_FLAG = 1.5
+_BS_SIMILARITY_MIN = 0.5
+_BS_RETRY_MAX_DURATION_SHARE = 0.5
+_BS_GUARD_FACTOR = 1.5
 
 
 def _bs_result(id_, gate, metrics=None, n=0, reason=None, guarded=False):
@@ -2103,6 +2108,73 @@ def bs_repeated_instructions(claude_rows, cross_rows):
                           reason="no pattern with >=5 occurrences over >=3 weeks")
     return _bs_result("repeated_instructions", True,
                       metrics={"patterns": patterns[:5]}, n=len(patterns))
+
+
+def counterexample_similar(rate_flagged, rate_good):
+    """Spec §5 counterexample guard: True when the flagged behavior occurs
+    at a similar rate in fully_achieved sessions (within _BS_GUARD_FACTOR),
+    i.e. the pattern must NOT be reported as waste."""
+    if rate_flagged <= 0:
+        return True
+    return rate_good * _BS_GUARD_FACTOR >= rate_flagged
+
+
+def bs_sunk_cost(rated):
+    """Spec §5 #2 — sunk-cost sessions.
+
+    A confirmed pair = a not_achieved session with late-session output
+    acceleration, followed by a later good-outcome session on a similar
+    prompt finishing in <= half the minutes. Guard: if acceleration is
+    about as common in fully_achieved sessions, suppress entirely.
+    """
+    def accel_flag(s):
+        a = s.get("token_accel")
+        return a is not None and a >= _BS_ACCEL_FLAG
+
+    failed = [s for s in rated
+              if s["outcome"] == "not_achieved" and accel_flag(s)]
+    good = [s for s in rated if is_good(s["outcome"])]
+    pairs = []
+    for f in failed:
+        fn = normalize_prompt(f.get("first_prompt"))
+        if len(fn) < _BS_MIN_PATTERN_CHARS:
+            continue
+        f_dt = _parse_dt(f.get("start"))
+        f_dur = f.get("duration_min") or 0
+        if f_dt is None or f_dur <= 0:
+            continue
+        for g in good:
+            g_dt = _parse_dt(g.get("start"))
+            if g_dt is None or g_dt <= f_dt:
+                continue
+            sim = prompt_similarity(fn, normalize_prompt(g.get("first_prompt")))
+            if sim < _BS_SIMILARITY_MIN:
+                continue
+            if (g.get("duration_min") or 0) > _BS_RETRY_MAX_DURATION_SHARE * f_dur:
+                continue
+            pairs.append({"failed_sid": f["sid"], "retry_sid": g["sid"],
+                          "failed_tokens": f.get("total_tokens") or 0,
+                          "failed_minutes": f_dur,
+                          "retry_minutes": g.get("duration_min") or 0,
+                          "similarity": round(sim, 2)})
+            break
+    fa = [s for s in rated if s["outcome"] == "fully_achieved"
+          and s.get("token_accel") is not None]
+    na = [s for s in rated if s["outcome"] == "not_achieved"
+          and s.get("token_accel") is not None]
+    rate_good = (sum(accel_flag(s) for s in fa) / len(fa)) if fa else 0.0
+    rate_bad = (sum(accel_flag(s) for s in na) / len(na)) if na else 0.0
+    metrics = {"pairs": pairs,
+               "accel_rate_not_achieved": round(rate_bad, 2),
+               "accel_rate_fully_achieved": round(rate_good, 2)}
+    if pairs and counterexample_similar(rate_bad, rate_good):
+        return _bs_result("sunk_cost", False, metrics=metrics, n=len(pairs),
+                          reason="acceleration equally common in successful sessions",
+                          guarded=True)
+    if len(pairs) < _BS_SUNK_MIN_PAIRS:
+        return _bs_result("sunk_cost", False, metrics=metrics, n=len(pairs),
+                          reason="fewer than 3 confirmed pairs")
+    return _bs_result("sunk_cost", True, metrics=metrics, n=len(pairs))
 
 
 def main():

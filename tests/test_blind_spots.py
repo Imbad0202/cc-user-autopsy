@@ -2,7 +2,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from scripts.aggregate import (
-    bs_repeated_instructions, normalize_prompt, prompt_similarity, week_key)
+    bs_repeated_instructions, bs_sunk_cost, counterexample_similar,
+    normalize_prompt, prompt_similarity, week_key)
 
 
 class NormalizePromptTests(unittest.TestCase):
@@ -110,6 +111,77 @@ class RepeatedInstructionTests(unittest.TestCase):
         out = bs_repeated_instructions(rows, [])
         self.assertTrue(out["gate_passed"])
         self.assertEqual(out["metrics"]["patterns"][0]["occurrences"], 5)
+
+
+FAIL_PROMPT = "refactor the payment reconciliation pipeline to stream batches"
+RETRY_PROMPT = "refactor the payment reconciliation pipeline to stream batches cleanly"
+
+
+def _sess(sid, start, outcome, prompt=FAIL_PROMPT, accel=None, dur=120,
+          tokens=50000):
+    return {"sid": sid, "start": start.isoformat(), "outcome": outcome,
+            "first_prompt": prompt, "token_accel": accel,
+            "duration_min": dur, "total_tokens": tokens,
+            "input_tokens": tokens - 5000, "output_tokens": 5000,
+            "cache_create_tokens": 0, "cache_read_tokens": 0,
+            "model_counts": {"claude-opus-4-6": 10}}
+
+
+def _pair(i):
+    failed = _sess(f"f{i}", BASE + timedelta(days=2 * i), "not_achieved",
+                   accel=2.0)
+    retry = _sess(f"r{i}", BASE + timedelta(days=2 * i + 1), "fully_achieved",
+                  prompt=RETRY_PROMPT, accel=1.0, dur=30, tokens=8000)
+    return [failed, retry]
+
+
+class SunkCostTests(unittest.TestCase):
+    def test_three_pairs_pass_gate(self):
+        rated = [s for i in range(3) for s in _pair(i)]
+        # guard needs a fully_achieved population without acceleration
+        rated += [_sess(f"g{i}", BASE + timedelta(days=40 + i),
+                        "fully_achieved", prompt=f"unrelated task {i} entirely",
+                        accel=1.0) for i in range(6)]
+        out = bs_sunk_cost(rated)
+        self.assertTrue(out["gate_passed"])
+        self.assertFalse(out["suppressed_by_guard"])
+        self.assertEqual(out["n"], 3)
+        self.assertEqual(out["metrics"]["pairs"][0]["failed_sid"], "f0")
+
+    def test_two_pairs_fail_gate(self):
+        rated = [s for i in range(2) for s in _pair(i)]
+        out = bs_sunk_cost(rated)
+        self.assertFalse(out["gate_passed"])
+
+    def test_retry_must_be_later_and_fast(self):
+        failed = _sess("f0", BASE + timedelta(days=5), "not_achieved", accel=2.0)
+        early_retry = _sess("r0", BASE, "fully_achieved", prompt=RETRY_PROMPT,
+                            dur=30)
+        slow_retry = _sess("r1", BASE + timedelta(days=6), "fully_achieved",
+                           prompt=RETRY_PROMPT, dur=110)
+        out = bs_sunk_cost([failed, early_retry, slow_retry] * 3)
+        self.assertEqual(out["n"], 0)
+
+    def test_guard_trips_when_accel_common_in_success(self):
+        rated = [s for i in range(3) for s in _pair(i)]
+        # fully_achieved sessions accelerate just as much -> not a failure signal
+        rated += [_sess(f"g{i}", BASE + timedelta(days=40 + i),
+                        "fully_achieved", prompt=f"unrelated task {i} entirely",
+                        accel=2.0) for i in range(6)]
+        out = bs_sunk_cost(rated)
+        self.assertTrue(out["suppressed_by_guard"])
+        self.assertFalse(out["gate_passed"])
+
+
+class GuardHelperTests(unittest.TestCase):
+    def test_similar_rates_trip(self):
+        self.assertTrue(counterexample_similar(0.5, 0.4))
+
+    def test_distinct_rates_pass(self):
+        self.assertFalse(counterexample_similar(0.6, 0.1))
+
+    def test_zero_flagged_rate_trips(self):
+        self.assertTrue(counterexample_similar(0.0, 0.0))
 
 
 if __name__ == "__main__":
