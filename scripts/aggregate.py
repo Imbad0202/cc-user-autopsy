@@ -2134,6 +2134,14 @@ def bs_sunk_cost(rated):
     failed = [s for s in rated
               if s["outcome"] == "not_achieved" and accel_flag(s)]
     good = [s for s in rated if is_good(s["outcome"])]
+    # The pairing loop below is failed x good; dt parsing and prompt
+    # normalization depend only on g, so hoist them out of the inner loop.
+    candidates = []
+    for g in good:
+        g_dt = _parse_dt(g.get("start"))
+        if g_dt is None:
+            continue
+        candidates.append((g, g_dt, normalize_prompt(g.get("first_prompt"))))
     pairs = []
     for f in failed:
         fn = normalize_prompt(f.get("first_prompt"))
@@ -2143,11 +2151,10 @@ def bs_sunk_cost(rated):
         f_dur = f.get("duration_min") or 0
         if f_dt is None or f_dur <= 0:
             continue
-        for g in good:
-            g_dt = _parse_dt(g.get("start"))
-            if g_dt is None or g_dt <= f_dt:
+        for g, g_dt, g_norm in candidates:
+            if g_dt <= f_dt:
                 continue
-            sim = prompt_similarity(fn, normalize_prompt(g.get("first_prompt")))
+            sim = prompt_similarity(fn, g_norm)
             if sim < _BS_SIMILARITY_MIN:
                 continue
             if (g.get("duration_min") or 0) > _BS_RETRY_MAX_DURATION_SHARE * f_dur:
@@ -2347,14 +2354,6 @@ _BS_DRIFT_LEN_DROP = 0.75
 _BS_DRIFT_GOOD_TOL_PP = 5
 
 
-def _median(xs):
-    xs = sorted(xs)
-    n = len(xs)
-    if not n:
-        return 0
-    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
-
-
 def bs_habit_drift(rated):
     """Spec §5 #5 — habit drift: prompt length falling while outcomes are
     not improving. Guard: shorter prompts WITH better outcomes = skill
@@ -2381,8 +2380,11 @@ def bs_habit_drift(rated):
     late = [s for wk in ordered[-half:] for s in wk]
 
     def med_len(ss):
-        return _median([s.get("first_prompt_len") or
-                        len(s.get("first_prompt") or "") for s in ss])
+        # early/late are non-empty by construction (>= 4 eligible weeks each,
+        # every eligible week has >= GROWTH_MIN_RATED_PER_WEEK sessions).
+        return statistics.median([s.get("first_prompt_len") or
+                                  len(s.get("first_prompt") or "")
+                                  for s in ss])
 
     def good_rate(ss):
         return 100 * sum(is_good(s["outcome"]) for s in ss) / len(ss)

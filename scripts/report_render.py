@@ -382,16 +382,20 @@ def _build_opening_band(ledger, narration, locale="en"):
         '</section>')
 
 
-def _blindspot_callout(locale, title_key, sentence, detail=None):
+def _blindspot_callout(locale, title_key, sentence, detail=None,
+                       sentence_html=None):
     """One blind-spot opener callout: gold label chip + title + metric
     sentence + optional escaped detail line (e.g. a repeated-instruction
     exemplar). `sentence` is plain text formatted from a locale template,
-    so it is escaped here rather than passed through inline_md."""
+    so it is escaped here rather than passed through inline_md.
+    `sentence_html` overrides it with pre-escaped markup for the one caller
+    (switch tax) that highlights a number inside the sentence."""
     d = f'<div class="c-blindspot-detail">{detail}</div>' if detail else ""
+    metric = sentence_html if sentence_html is not None else esc(sentence)
     return ('<div class="c-blindspot">'
             f'<span class="c-blindspot-label">{esc(t(locale, "ledger_blindspot_label"))}</span>'
             f'<strong>{esc(t(locale, title_key))}</strong>'
-            f'<div class="c-blindspot-metric">{esc(sentence)}</div>{d}</div>')
+            f'<div class="c-blindspot-metric">{metric}</div>{d}</div>')
 
 
 def _build_output_ledger(ledger, narration, locale="en", exhibit_no=None,
@@ -535,11 +539,8 @@ def _build_team_ledger(cross_llm, narration, locale="en", exhibit_no=None,
             needle = f"{multi_rate}%"
             sentence_html = esc(sentence).replace(
                 esc(needle), f'<span class="c-neg-num">{esc(needle)}</span>', 1)
-            cards += (
-                '<div class="c-blindspot">'
-                f'<span class="c-blindspot-label">{esc(t(locale, "ledger_blindspot_label"))}</span>'
-                f'<strong>{esc(t(locale, "blindspot_switch_title"))}</strong>'
-                f'<div class="c-blindspot-metric">{sentence_html}</div></div>')
+            cards += _blindspot_callout(locale, "blindspot_switch_title",
+                                        sentence, sentence_html=sentence_html)
         else:
             cards += _blindspot_callout(locale, "blindspot_switch_title", sentence)
 
