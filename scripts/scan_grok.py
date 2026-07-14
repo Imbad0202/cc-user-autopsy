@@ -6,15 +6,16 @@ session_id, timestamp, is_bash — no tokens, no model, no tool calls.
 Coverage tier: partial. Unknown fields are null, never imputed.
 """
 import argparse
-import json
 import sys
 from pathlib import Path
 from urllib.parse import unquote
 
 try:
-    from cross_llm_common import parse_ts, segments_and_duration, to_local_iso, write_rows
+    from cross_llm_common import (
+        parse_jsonl_object, parse_ts, segments_and_duration, to_local_iso, write_rows)
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_grok
-    from scripts.cross_llm_common import parse_ts, segments_and_duration, to_local_iso, write_rows
+    from scripts.cross_llm_common import (
+        parse_jsonl_object, parse_ts, segments_and_duration, to_local_iso, write_rows)
 
 DEFAULT_SESSIONS_DIR = Path.home() / ".grok" / "sessions"
 
@@ -35,9 +36,8 @@ def scan_sessions_dir(root: Path):
                 line = line.strip()
                 if not line:
                     continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
+                rec = parse_jsonl_object(line)
+                if rec is None:
                     parse_errors += 1
                     continue
                 ts = parse_ts(rec.get("timestamp"))
@@ -85,8 +85,13 @@ def main():
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
     rows, errors = scan_sessions_dir(Path(args.sessions_dir).expanduser())
+    # Trailing meta line — how the scanner's own skip-count reaches
+    # aggregate.py's cross_llm.sources[].parse_errors (see
+    # docs/SCHEMA-CHANGES.md). load_cross_llm_rows() consumes "_meta" rows
+    # instead of treating them as sessions.
+    rows.append({"_meta": True, "source": "grok", "parse_errors": errors})
     write_rows(rows, args.output)
-    print(f"grok: {len(rows)} sessions, {errors} parse errors", file=sys.stderr)
+    print(f"grok: {len(rows) - 1} sessions, {errors} parse errors", file=sys.stderr)
 
 
 if __name__ == "__main__":

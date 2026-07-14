@@ -91,6 +91,57 @@ class ScanCodexTests(unittest.TestCase):
             row, errors = scan_one(p)
         self.assertIsNone(row)
 
+    def test_malformed_scalar_json_line_counted_not_fatal(self):
+        # A syntactically valid JSON line that isn't an object (e.g. a bare
+        # number or array) must not raise — json.loads succeeds but the
+        # subsequent .get() calls would blow up on a non-dict. It should be
+        # counted as a parse error and skipped, same as broken JSON.
+        with tempfile.TemporaryDirectory() as td:
+            p = make_rollout(Path(td), BASE + ["42", '["not", "a", "dict"]'])
+            row, errors = scan_one(p)
+        self.assertEqual(errors, 2)
+        self.assertIsNotNone(row)
+        self.assertEqual(row["session_id"], "0000-codex-1")
+
+    def test_model_counts_per_model_attribution_across_turn_context_switch(self):
+        # turn_context gpt-A, 2 agent_message events, then turn_context
+        # gpt-B, 1 agent_message event -> {"gpt-A": 2, "gpt-B": 1}.
+        # The old implementation attributed ALL assistant messages to the
+        # LAST turn_context model seen in the whole file ({"gpt-B": 3}).
+        lines = [
+            _line("2026-04-20T02:00:00.000Z", "session_meta",
+                  {"id": "0000-codex-switch", "cwd": "/home/user/projects/webapp"}),
+            _line("2026-04-20T02:00:01.000Z", "turn_context",
+                  {"model": "gpt-A", "cwd": "/home/user/projects/webapp"}),
+            _line("2026-04-20T02:00:02.000Z", "event_msg",
+                  {"type": "user_message", "message": "first"}),
+            _line("2026-04-20T02:00:03.000Z", "event_msg",
+                  {"type": "agent_message", "message": "reply 1"}),
+            _line("2026-04-20T02:00:04.000Z", "event_msg",
+                  {"type": "agent_message", "message": "reply 2"}),
+            _line("2026-04-20T02:00:05.000Z", "turn_context",
+                  {"model": "gpt-B", "cwd": "/home/user/projects/webapp"}),
+            _line("2026-04-20T02:00:06.000Z", "event_msg",
+                  {"type": "user_message", "message": "second"}),
+            _line("2026-04-20T02:00:07.000Z", "event_msg",
+                  {"type": "agent_message", "message": "reply 3"}),
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            row, errors = scan_one(make_rollout(Path(td), lines))
+        self.assertEqual(errors, 0)
+        self.assertEqual(row["model_counts"], {"gpt-A": 2, "gpt-B": 1})
+
+    def test_malformed_non_dict_payload_counted_not_fatal(self):
+        # A record whose "payload" key is present but not a dict (e.g. a
+        # string) must not raise when the scanner does payload.get(...).
+        with tempfile.TemporaryDirectory() as td:
+            bad = json.dumps({"timestamp": "2026-04-20T02:00:05.000Z",
+                              "type": "turn_context", "payload": "oops"})
+            p = make_rollout(Path(td), BASE + [bad])
+            row, errors = scan_one(p)
+        self.assertEqual(errors, 1)
+        self.assertIsNotNone(row)
+
 
 if __name__ == "__main__":
     unittest.main()

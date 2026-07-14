@@ -58,6 +58,20 @@ class ScanGrokTests(unittest.TestCase):
         self.assertEqual(errors, 1)
         self.assertEqual(len(rows), 1)
 
+    def test_malformed_scalar_json_line_counted(self):
+        # A syntactically valid JSON line that isn't an object (bare number)
+        # must not raise when the scanner does rec.get(...); it should be
+        # counted as a parse error and skipped.
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td) / "%2Fx"
+            d.mkdir()
+            (d / "prompt_history.jsonl").write_text(
+                '{"timestamp": "2026-06-24T06:00:00Z", "session_id": "g-1", '
+                '"prompt": "p", "is_bash": false}\n7\n', encoding="utf-8")
+            rows, errors = scan_sessions_dir(Path(td))
+        self.assertEqual(errors, 1)
+        self.assertEqual(len(rows), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
