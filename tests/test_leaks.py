@@ -81,6 +81,19 @@ class LeakCatalogTests(unittest.TestCase):
         self.assertEqual(leaks["window_weeks"], 1.0)
         self.assertEqual(leaks["items"], [])
 
+    def test_no_valid_window_suppresses_weekly_items_even_with_rated_history(self):
+        # Fix 1: session-meta ("rated") can span months of history even when
+        # the transcript-derived window has rotated away (null/zero-day
+        # bounds). Falling back to ALL of rated while weeks floors to 1.0
+        # would misreport months of failures as one week's burn — the fix
+        # must suppress weekly items entirely rather than fabricate a
+        # denominator, even though there are 6 qualifying not_achieved
+        # sessions that would otherwise trip the failed_session_burn gate.
+        rated = [_sess(f"f{i}", i, "not_achieved") for i in range(6)]
+        bs = compute_blind_spots(rated, rated, [], [], BASE + timedelta(days=40))
+        leaks = compute_leaks(bs, rated, {"start": None, "end": None, "days": 0})
+        self.assertEqual(leaks["items"], [])
+
     def test_failed_sessions_before_window_start_excluded_from_weekly_cost(self):
         # 5 not_achieved sessions inside the window, 5 not_achieved 200 days
         # earlier (well before window start) — occurrences/weekly_cost must

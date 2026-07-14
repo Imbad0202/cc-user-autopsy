@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
@@ -415,6 +416,183 @@ class TokenAccelTests(unittest.TestCase):
         # second = seq[3:] = [300,300,300,300] = 1200 (middle index 3 included).
         row = self._scan_with_outputs([100, 100, 100, 300, 300, 300, 300])
         self.assertAlmostEqual(row["token_accel"], 4.0)
+
+
+class SubagentAwareTokenAccelTests(unittest.TestCase):
+    """Fix 2 (round 11): token_accel must see subagent output. Previously
+    the subagent merge pass folded in token TOTALS and models but not
+    per-message output timing, so a session whose flat parent transcript
+    had a subagent burn late was scored as flat — wrongly suppressing (or
+    triggering sunk-cost) for Task/Agent-heavy sessions."""
+
+    def _write_parent_and_subagent(self, tmp, parent_outputs, subagent_outputs,
+                                    subagent_start_minute=10):
+        pdir = tmp / "projects" / "p"
+        pdir.mkdir(parents=True)
+        parent_sid = "aaaaaaaa-1111-2222-3333-444444444444"
+        lines = [json.dumps({"type": "user", "sessionId": parent_sid,
+                             "message": {"role": "user", "content": "hi"},
+                             "timestamp": "2026-04-19T10:00:00Z"})]
+        for i, out_tok in enumerate(parent_outputs):
+            lines.append(json.dumps({
+                "type": "assistant", "sessionId": parent_sid,
+                "message": {"role": "assistant", "content": "ok",
+                            "model": "claude-opus-4-6",
+                            "usage": {"input_tokens": 10, "output_tokens": out_tok}},
+                "timestamp": f"2026-04-19T10:{i:02d}:05Z",
+            }))
+        (pdir / f"{parent_sid}.jsonl").write_text("\n".join(lines))
+
+        if subagent_outputs:
+            sub_lines = []
+            for i, out_tok in enumerate(subagent_outputs):
+                minute = subagent_start_minute + i
+                sub_lines.append(json.dumps({
+                    "type": "assistant", "sessionId": parent_sid,
+                    "message": {"role": "assistant", "content": [],
+                                "model": "claude-opus-4-6",
+                                "usage": {"input_tokens": 10, "output_tokens": out_tok}},
+                    "timestamp": f"2026-04-19T{minute // 60 + 10:02d}:{minute % 60:02d}:05Z",
+                }))
+            (pdir / "agent-subagent1.jsonl").write_text("\n".join(sub_lines))
+        return parent_sid
+
+    def test_subagent_late_burn_raises_token_accel(self):
+        # Parent transcript alone is flat (accel ~1.0); a subagent whose
+        # outputs triple late in the session (timestamped after the parent's
+        # messages) must pull the merged token_accel to >= 1.5.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            parent_sid = self._write_parent_and_subagent(
+                tmp,
+                parent_outputs=[100, 100, 100, 100, 100, 100],
+                subagent_outputs=[300, 300, 300],
+                subagent_start_minute=20,
+            )
+            out = tmp / "out.jsonl"
+            r = _run_scanner(tmp / "projects", out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            row = next(x for x in rows if x["session_id"] == parent_sid)
+            self.assertGreaterEqual(row["token_accel"], 1.5)
+
+    def test_same_parent_without_subagent_has_lower_accel(self):
+        # Same parent transcript, no subagent file at all: token_accel must
+        # be lower than the merged case above (regression check that the
+        # merge is actually responsible for the lift, not some other change).
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            parent_sid = self._write_parent_and_subagent(
+                tmp,
+                parent_outputs=[100, 100, 100, 100, 100, 100],
+                subagent_outputs=[],
+            )
+            out = tmp / "out.jsonl"
+            r = _run_scanner(tmp / "projects", out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            row = next(x for x in rows if x["session_id"] == parent_sid)
+            self.assertAlmostEqual(row["token_accel"], 1.0)
+
+
+class SubagentEvidenceMergeTests(unittest.TestCase):
+    """Fix 3 (round 11): subagent tool/commit evidence must reach the
+    merged parent row's activity fields — delegated Edit/Write or git
+    commits inside a Task/Agent subagent were previously invisible to the
+    graveyard heuristic and compute_ledger, which only saw parent-transcript
+    tool_counts/git_commits/git_pushes."""
+
+    def test_subagent_edits_and_commit_merge_into_parent_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pdir = tmp / "projects" / "p"
+            pdir.mkdir(parents=True)
+            parent_sid = "bbbbbbbb-1111-2222-3333-444444444444"
+            (pdir / f"{parent_sid}.jsonl").write_text(
+                json.dumps({"type": "user", "sessionId": parent_sid,
+                            "message": {"role": "user", "content": "hi"},
+                            "timestamp": "2026-04-19T10:00:00Z"}) + "\n" +
+                json.dumps({"type": "assistant", "sessionId": parent_sid,
+                            "message": {"role": "assistant", "model": "claude-opus-4-6",
+                                        "content": [],
+                                        "usage": {"input_tokens": 10, "output_tokens": 10}}},
+                           ) + "\n"
+            )
+            sub_lines = []
+            for i in range(6):
+                sub_lines.append(json.dumps({
+                    "type": "assistant", "sessionId": parent_sid,
+                    "message": {"role": "assistant", "model": "claude-opus-4-6",
+                                "content": [{"type": "tool_use", "name": "Edit",
+                                            "input": {"file_path": f"f{i}.py"}}],
+                                "usage": {"input_tokens": 5, "output_tokens": 5}},
+                    "timestamp": f"2026-04-19T10:{10+i:02d}:00Z",
+                }))
+            sub_lines.append(json.dumps({
+                "type": "assistant", "sessionId": parent_sid,
+                "message": {"role": "assistant", "model": "claude-opus-4-6",
+                            "content": [{"type": "tool_use", "name": "Bash",
+                                        "input": {"command": "git commit -m 'wip'"}}],
+                            "usage": {"input_tokens": 5, "output_tokens": 5}},
+                "timestamp": "2026-04-19T10:20:00Z",
+            }))
+            (pdir / "agent-subagent1.jsonl").write_text("\n".join(sub_lines))
+            out = tmp / "out.jsonl"
+            r = _run_scanner(tmp / "projects", out)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+            row = next(x for x in rows if x["session_id"] == parent_sid)
+            self.assertGreaterEqual(row["tool_counts"].get("Edit", 0), 6)
+            self.assertGreaterEqual(row["git_commits"], 1)
+
+    def test_bs_graveyard_sees_subagent_only_writes_and_commits(self):
+        # Three stale (>= horizon days untouched) projects. A's only
+        # substantive writes happened inside its subagent (no parent writes
+        # at all) -> qualifies as a graveyard item. B's subagent committed
+        # -> disqualified even though its parent-level writes alone would
+        # have qualified. C is a plain parent-only qualifier, present so the
+        # >=2-qualifying-items gate passes and metrics.items is populated
+        # (the gate would otherwise suppress on A alone).
+        import sys as _sys
+        SKILL_DIR = Path(__file__).resolve().parent.parent
+        _sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        import aggregate as agg
+        from datetime import datetime, timezone
+
+        window_end = datetime(2026, 5, 1, tzinfo=timezone.utc)
+        old_start = "2026-01-01T09:00:00Z"
+
+        row_a = {
+            "session_id": "sa", "project_path": "/Users/demo/Projects/proj-a",
+            "start_time": old_start, "duration_minutes": 5,
+            "tool_counts": {},  # no parent-level writes
+            "git_commits": 0, "git_pushes": 0,
+        }
+        row_b = {
+            "session_id": "sb", "project_path": "/Users/demo/Projects/proj-b",
+            "start_time": old_start, "duration_minutes": 5,
+            "tool_counts": {"Edit": 5, "Write": 1},
+            "git_commits": 0, "git_pushes": 0,
+        }
+        row_c = {
+            "session_id": "sc", "project_path": "/Users/demo/Projects/proj-c",
+            "start_time": old_start, "duration_minutes": 5,
+            "tool_counts": {"Edit": 5, "Write": 1},
+            "git_commits": 0, "git_pushes": 0,
+        }
+        # Simulate what Pass 2 merge now does: subagent Edit-only evidence
+        # merged into A's tool_counts; subagent commit evidence merged into
+        # B's git_commits.
+        row_a["tool_counts"] = dict(Counter(row_a["tool_counts"])
+                                    + Counter({"Edit": 6}))
+        row_b["git_commits"] += 1
+
+        items = agg.bs_graveyard([row_a, row_b, row_c], window_end)
+        self.assertTrue(items["gate_passed"])
+        project_keys = {i["project_key"] for i in items["metrics"].get("items", [])}
+        self.assertIn("Projects/proj-a", project_keys)
+        self.assertIn("Projects/proj-c", project_keys)
+        self.assertNotIn("Projects/proj-b", project_keys)
 
 
 class SegmentsTests(unittest.TestCase):

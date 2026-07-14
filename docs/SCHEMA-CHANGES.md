@@ -150,6 +150,15 @@ for dim, metrics in scores.items():
   in `aggregate.py` and cross_llm parallel-detection stop treating a resumed
   Claude session's multi-day idle gap as active time; orphan/synthetic rows
   omit it, matching how other optional fields are handled.
+- (codex-round11-fixes) Merged parent rows in `transcript-rows.jsonl` now
+  include subagent evidence: `token_accel` is recomputed after merging each
+  subagent's per-message output-timing sequence into the parent's (so late
+  Task/Agent burn is no longer invisible to the accel heuristic), and
+  `tool_counts`/`git_commits`/`git_pushes` now dict-sum/int-add subagent
+  Edit/Write/commit/push activity into the parent row (so `bs_graveyard` and
+  `compute_ledger`, which read the transcript ACTIVITY pool, can see
+  delegated writes and commits that happened entirely inside a subagent);
+  rows with no subagent runs are unchanged.
 
 ## 2026-07-14 — additive: `first_prompt_hash` row field (`transcript-rows.jsonl` / `*-rows.jsonl`)
 

@@ -81,11 +81,24 @@ def _load_jsonl(path: Path):
 
 
 def _scan_usage(records):
-    """Return usage totals across assistant records: input/output/cache tokens
-    plus a model_counts Counter. Shared by uuid-session and subagent scanning."""
+    """Return usage totals across assistant records: input/output/cache tokens,
+    a model_counts Counter, a (timestamp, output_tokens) sequence per assistant
+    message, and tool/git evidence (tool_counts Counter, git_commits,
+    git_pushes). Shared by uuid-session and subagent scanning.
+
+    Fix 2/3 (round 11): subagent (agent-*.jsonl) runs previously contributed
+    only aggregate token TOTALS and models to their parent row — the merge
+    pass (Pass 2 in main()) never saw per-message output timing or tool/git
+    evidence, so token_accel was blind to late subagent burn and the
+    graveyard heuristic couldn't see delegated Edit/Write/commit activity
+    that happened entirely inside a subagent. Returning output_seq and
+    tool/git counts here lets Pass 2 merge them into the parent's evidence
+    before token_accel and graveyard-relevant fields are derived.
+    """
     asst = [r for r in records if r.get("type") == "assistant"]
     in_tok = out_tok = cache_create = cache_read = 0
     model_counts = Counter()
+    output_seq = []  # list of (timestamp_str, output_tokens)
     for r in asst:
         msg = r.get("message", {}) if isinstance(r.get("message"), dict) else {}
         model = msg.get("model")
@@ -96,13 +109,70 @@ def _scan_usage(records):
         out_tok += u.get("output_tokens", 0) or 0
         cache_create += u.get("cache_creation_input_tokens", 0) or 0
         cache_read += u.get("cache_read_input_tokens", 0) or 0
+        output_seq.append((r.get("timestamp") or "", u.get("output_tokens", 0) or 0))
+
+    # Tool/git evidence — same detection logic as scan_one's parent-transcript
+    # path (reused here rather than duplicated ad hoc), so a subagent's Edit/
+    # Write calls and `git commit`/`git push` invocations are visible to
+    # bs_graveyard and compute_ledger once merged into the parent row.
+    tool_counts = Counter()
+    git_commits = git_pushes = 0
+    for r in asst:
+        content = r.get("message", {}).get("content") if isinstance(r.get("message"), dict) else None
+        if not isinstance(content, list):
+            continue
+        for c in content:
+            if not (isinstance(c, dict) and c.get("type") == "tool_use"):
+                continue
+            name = c.get("name", "")
+            if name:
+                tool_counts[name] += 1
+            if name != "Bash":
+                continue
+            cmd = c.get("input", {}).get("command", "") if isinstance(c.get("input"), dict) else ""
+            if not isinstance(cmd, str):
+                continue
+            if re.search(r"\bgit\s+commit\b", cmd):
+                git_commits += 1
+            if re.search(r"\bgit\s+push\b", cmd):
+                git_pushes += 1
+
     return {
         "input_tokens": in_tok,
         "output_tokens": out_tok,
         "cache_creation_input_tokens": cache_create,
         "cache_read_input_tokens": cache_read,
         "model_counts": model_counts,
+        "output_seq": output_seq,
+        "tool_counts": tool_counts,
+        "git_commits": git_commits,
+        "git_pushes": git_pushes,
     }
+
+
+def _compute_token_accel(output_pairs):
+    """token_accel: output burn in the session's second half vs first half.
+    Proxy for "flailing": regenerating ever-larger responses late in a
+    session. Input tokens are excluded on purpose — context growth makes
+    input rise monotonically in every session, which would flag everything.
+    For odd n, the middle element belongs to the second half (index n//2
+    onward) so every message lands in exactly one half.
+
+    `output_pairs` is a (timestamp_str, output_tokens) sequence, already
+    ordered by timestamp (Fix 2: for a merged parent+subagent row, this is
+    the union of both sequences re-sorted — see main()'s Pass 2 — so late
+    subagent burn is visible to the second-half sum, not just the parent
+    transcript's own messages).
+    """
+    seq = [out_tok for _, out_tok in output_pairs]
+    n = len(seq)
+    if n < 6:
+        return None
+    first = sum(seq[: n // 2])
+    second = sum(seq[n // 2:])
+    if first <= 0:
+        return None
+    return round(second / first, 2)
 
 
 def _parent_sid(records):
@@ -212,7 +282,13 @@ def scan_one(path: Path):
     in_tok = out_tok = cache_create = cache_read = 0
     model_counts = Counter()
     hit_output_limit = False
-    assistant_output_seq = []
+    # (timestamp_str, output_tokens) per assistant message, in transcript
+    # order. Fix 2: token_accel is no longer computed here — it must first
+    # be merged with any subagent output_seq (Pass 2 in main()) so late
+    # subagent burn is visible. Rows with no subagents merge against an
+    # empty list, which is a no-op, so single-transcript scans (and every
+    # existing test that calls scan_one directly) are unaffected.
+    assistant_output_pairs = []
     for r in asst_msgs:
         msg = r.get("message", {})
         if not isinstance(msg, dict):
@@ -225,7 +301,7 @@ def scan_one(path: Path):
         out_tok += u.get("output_tokens", 0) or 0
         cache_create += u.get("cache_creation_input_tokens", 0) or 0
         cache_read += u.get("cache_read_input_tokens", 0) or 0
-        assistant_output_seq.append(u.get("output_tokens", 0) or 0)
+        assistant_output_pairs.append((r.get("timestamp") or "", u.get("output_tokens", 0) or 0))
         if msg.get("stop_reason") == "max_tokens":
             hit_output_limit = True
 
@@ -323,19 +399,12 @@ def scan_one(path: Path):
                 response_times.append(round((ts - prev_asst_ts).total_seconds(), 3))
                 prev_asst_ts = None
 
-    # token_accel: output burn in the session's second half vs first half.
-    # Proxy for "flailing": regenerating ever-larger responses late in a
-    # session. Input tokens are excluded on purpose — context growth makes
-    # input rise monotonically in every session, which would flag everything.
-    # For odd n, the middle element belongs to the second half (index n//2
-    # onward) so every message lands in exactly one half.
-    token_accel = None
-    n = len(assistant_output_seq)
-    if n >= 6:
-        first = sum(assistant_output_seq[: n // 2])
-        second = sum(assistant_output_seq[n // 2:])
-        if first > 0:
-            token_accel = round(second / first, 2)
+    # token_accel default: computed from THIS transcript's own messages only.
+    # main()'s Pass 2 recomputes it after merging in any subagent output_seq
+    # (Fix 2), overwriting this value for rows that have subagent runs; rows
+    # without subagents keep exactly this value, so the formula/behavior for
+    # non-subagent sessions is unchanged.
+    token_accel = _compute_token_accel(assistant_output_pairs)
 
     return {
         "session_id": sid,
@@ -373,6 +442,11 @@ def scan_one(path: Path):
         "lines_added": 0,
         "lines_removed": 0,
         "files_modified": 0,
+        # Pipeline-internal only (Fix 2): consumed by main()'s Pass 2 to
+        # merge in any subagent output sequence before recomputing
+        # token_accel, then stripped in Pass 3 before rows are written to
+        # transcript-rows.jsonl. Never part of the emitted row schema.
+        "_assistant_output_pairs": assistant_output_pairs,
     }
 
 
@@ -418,6 +492,17 @@ def main():
     # Pass 2: merge subagent usage into parent rows; orphans (parent
     # transcript absent from disk) get a synthetic row so their tokens are
     # still visible to downstream cost/activity aggregation.
+    #
+    # Fix 2/3 (round 11): subagent runs also carry per-message output timing
+    # (output_seq) and tool/git evidence (tool_counts, git_commits,
+    # git_pushes). Both are merged into the parent row here — output_seq by
+    # timestamp-ordered union so token_accel (recomputed below, AFTER the
+    # merge, not in scan_one) sees late subagent burn; tool_counts by
+    # dict-sum and git_commits/git_pushes by int-add so bs_graveyard and
+    # compute_ledger see delegated Edit/Write/commit activity that happened
+    # entirely inside a Task/Agent subagent. Rows with no subagent_usages
+    # entries never enter this loop, so their token_accel/tool_counts/
+    # git_commits/git_pushes are byte-identical to today's values.
     n_merged = 0
     n_orphan = 0
     for parent, usage in subagent_usages:
@@ -430,6 +515,13 @@ def main():
             mc = Counter(row["model_counts"])
             mc.update(usage["model_counts"])
             row["model_counts"] = dict(mc)
+            tc = Counter(row.get("tool_counts") or {})
+            tc.update(usage["tool_counts"])
+            row["tool_counts"] = dict(tc)
+            row["git_commits"] = (row.get("git_commits") or 0) + usage["git_commits"]
+            row["git_pushes"] = (row.get("git_pushes") or 0) + usage["git_pushes"]
+            row["_assistant_output_pairs"] = (
+                row.get("_assistant_output_pairs") or []) + usage["output_seq"]
             n_merged += 1
         else:
             # Synthetic orphan row — minimal fields; downstream aggregate.py
@@ -472,19 +564,37 @@ def main():
             mc.update(usage["model_counts"])
             orphan["model_counts"] = dict(mc)
             orphan["assistant_message_count"] = sum(mc.values())
+            tc = Counter(orphan.get("tool_counts") or {})
+            tc.update(usage["tool_counts"])
+            orphan["tool_counts"] = dict(tc)
+            orphan["git_commits"] = (orphan.get("git_commits") or 0) + usage["git_commits"]
+            orphan["git_pushes"] = (orphan.get("git_pushes") or 0) + usage["git_pushes"]
+            orphan["_assistant_output_pairs"] = (
+                orphan.get("_assistant_output_pairs") or []) + usage["output_seq"]
             # Keep the earliest ts seen across fragments as the canonical start.
             ts = usage.get("_earliest_ts", "")
             if ts and (not orphan.get("start_time") or ts < orphan["start_time"]):
                 orphan["start_time"] = ts
             n_orphan += 1
 
-    # Pass 3: write out, honoring --min-assistant-msgs. Orphan rows are
-    # exempt from that filter because their purpose is to carry tokens, not
-    # to be scored.
+    # Pass 3: recompute token_accel from the (now fully merged) output-pair
+    # sequence, sorted by timestamp so a subagent's later-timestamped bursts
+    # land in the correct half regardless of Pass 1/2 iteration order (Fix
+    # 2); rows without subagent_usages entries have a single-source pairs
+    # list already in transcript order, so re-sorting is a no-op and their
+    # token_accel is unchanged. Then write out, honoring
+    # --min-assistant-msgs and stripping the pipeline-internal
+    # _assistant_output_pairs field, which is never part of the emitted
+    # schema. Orphan rows are exempt from the msg-count filter because their
+    # purpose is to carry tokens, not to be scored.
     n_emitted = 0
     n_filtered = 0
     with out.open("w", encoding="utf-8") as fh:
         for row in rows_by_sid.values():
+            pairs = row.pop("_assistant_output_pairs", None)
+            if pairs is not None:
+                pairs.sort(key=lambda p: p[0] or "")
+                row["token_accel"] = _compute_token_accel(pairs)
             if (not row.get("orphan_subagent_only")) and \
                     row["assistant_message_count"] < args.min_assistant_msgs:
                 n_filtered += 1

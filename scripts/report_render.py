@@ -448,7 +448,7 @@ def _build_output_ledger(ledger, narration, locale="en", exhibit_no=None,
         table = f'<table><tbody>{rows}</tbody></table>'
         graveyard_exhibit = _exhibit(
             next(exhibit_no), t(locale, "ledger_graveyard_exhibit_title"),
-            table, t(locale, "ledger_source_blind_spots"), locale=locale)
+            table, t(locale, "ledger_source_graveyard"), locale=locale)
         graveyard_html = callout + graveyard_exhibit
 
     metrics = (
@@ -750,7 +750,7 @@ def _build_leak_ledger(ledger, blind_spots, narration, locale, exhibit_no):
         out.append(_exhibit(next(exhibit_no),
                             t(locale, "ledger_leaks_exhibit_title"),
                             '<div class="c-leak-cards">' + "".join(cards) + "</div>",
-                            t(locale, "ledger_source_blind_spots"), locale))
+                            t(locale, "ledger_source_leaks"), locale))
     # secondary findings (#6, #7)
     sec = []
     if bs6.get("gate_passed"):

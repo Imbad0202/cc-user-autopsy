@@ -502,7 +502,8 @@ STRINGS = {
         ),
         "ledger_leaks_exhibit_title": "Top leaks by estimated weekly cost",
         "ledger_secondary_findings": "Secondary findings",
-        "ledger_source_blind_spots": "blind-spot engine, scoring pool",
+        "ledger_source_graveyard": "blind-spot engine, transcript activity pool",
+        "ledger_source_leaks": "blind-spot engine, scoring pool + cross-LLM prompt history",
     },
     "zh_TW": {
         # --- Document chrome ---
@@ -946,7 +947,8 @@ STRINGS = {
         "ledger_graveyard_writes_template": "最後一個 session 改了 {writes} 次檔案",
         "ledger_leaks_exhibit_title": "每週估計成本最高的漏水",
         "ledger_secondary_findings": "次要發現",
-        "ledger_source_blind_spots": "盲點引擎，計分池",
+        "ledger_source_graveyard": "盲點引擎，transcript 活動池",
+        "ledger_source_leaks": "盲點引擎，計分池加跨工具 prompt 紀錄",
     },
 }
 

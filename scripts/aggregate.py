@@ -2784,16 +2784,24 @@ def compute_leaks(blind_spots, rated, window):
             return None
     win_start_d = _safe_date(window.get("start"))
     win_end_d = _safe_date(window.get("end"))
-    if win_start_d is not None and win_end_d is not None:
-        in_window = []
-        for s in rated:
-            dt = _parse_dt(s.get("start"))
-            if dt is None:
-                continue
-            if win_start_d <= dt.date() <= win_end_d:
-                in_window.append(s)
-    else:
-        in_window = list(rated)
+    win_days = window.get("days") or 0
+    # No valid transcript-derived window (missing/unparsable bounds, or a
+    # non-positive day count) means there is no trustworthy denominator to
+    # divide by. Falling back to ALL of `rated` (session-meta pool, which
+    # spans much longer history than the transcript pool `window` describes)
+    # while `weeks` still floors to 1.0 would report months of failures as
+    # one week's burn. Suppression beats a fabricated denominator (spec
+    # §10) — return no weekly items rather than a misleading figure.
+    if win_start_d is None or win_end_d is None or win_days <= 0:
+        return {"window_weeks": weeks, "items": []}
+
+    in_window = []
+    for s in rated:
+        dt = _parse_dt(s.get("start"))
+        if dt is None:
+            continue
+        if win_start_d <= dt.date() <= win_end_d:
+            in_window.append(s)
 
     bs1 = blind_spots.get("repeated_instructions") or {}
     if bs1.get("gate_passed"):

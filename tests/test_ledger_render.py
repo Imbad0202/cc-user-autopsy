@@ -80,7 +80,8 @@ class LedgerLocaleKeyTests(unittest.TestCase):
         "leak_fix_sunk_cost", "leak_fix_failed_session_burn",
         "ledger_graveyard_exhibit_title", "ledger_graveyard_untouched_template",
         "ledger_graveyard_writes_template", "ledger_leaks_exhibit_title",
-        "ledger_secondary_findings", "ledger_source_blind_spots",
+        "ledger_secondary_findings", "ledger_source_graveyard",
+        "ledger_source_leaks",
     ]
 
     def test_keys_in_both_locales(self):
