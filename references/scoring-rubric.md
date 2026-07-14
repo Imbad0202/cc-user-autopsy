@@ -174,12 +174,24 @@ Shared building blocks: `normalize_prompt()` (lowercase, punctuation folded
 to spaces, whitespace collapsed — the full normalized string is kept for
 identity, no truncation; only the displayed exemplar is truncated, to 120
 chars), `prompt_similarity()`
-(token-set Jaccard), `week_key()` (ISO `YYYY-Www`), and the counterexample
+(token-set Jaccard — with a CJK-aware fallback, see below), `week_key()`
+(ISO `YYYY-Www`), and the counterexample
 guard `counterexample_similar(rate_flagged, rate_good)` — trips (returns
 `True`, suppressing the finding) when the flagged behavior occurs in
 `fully_achieved` sessions at a rate within **provisional v1** `_BS_GUARD_FACTOR
 = 1.5`× the flagged rate, i.e. the behavior isn't actually predictive of
 failure for this user.
+
+**CJK normalization note (Fix 3)**: `prompt_similarity()` is word-token
+Jaccard by default, which assumes whitespace-delimited words. Chinese (and
+other CJK scripts) have no spaces between words, so a whole zh sentence
+normalizes to a single unsplit "token" — two near-identical zh prompts
+would score 0.0 instead of something graded, breaking sunk-cost pair
+matching (#2 below) for zh users. When either normalized string contains a
+CJK character (`一-鿿`), `prompt_similarity()` instead computes Jaccard over
+character BIGRAMS of the de-spaced string; strings shorter than 2 characters
+after de-spacing fall back to the word-token path (no bigrams possible).
+Non-CJK (English etc.) inputs are unaffected.
 
 ### #1 — Repeated-instruction tax
 
@@ -256,17 +268,35 @@ Symmetric comparison — **no counterexample guard** (both buckets are
 reported; there's no "guard direction" for a comparison that reports both
 sides).
 
-Buckets: `multi` = rated Claude sessions whose `[start, start+duration]`
-overlaps a merged interval where ≥2 sources were concurrently active
-(computed from Claude activity rows plus full/partial cross-LLM rows);
-`single` = the rest.
+**Common-window clipping (Fix 1)**: both buckets are restricted to the
+cross-source common window before comparison. Claude history predating
+Codex/Grok adoption would otherwise flood the single-tool bucket — those
+pre-overlap sessions could never have been multi-tool, biasing the
+comparison — so per spec §13 ("cross-source comparisons render only over
+the common time window"), `bs_switch_tax` computes each source's own
+`[min start, max end]` (via `_row_windows`, same building block
+`compute_cross_llm`'s `common_window` uses) over the comparable row pool
+(Claude activity rows, meta-only rated sessions with synthesized minimal
+activity, and full/partial cross-LLM rows — `presence_only` excluded), then
+intersects across sources with ≥1 row (`start = max(mins)`, `end =
+min(maxes)`). Fewer than 2 sources with a resolvable window → same "no
+multi-source windows" failure path as before. Only rated sessions whose
+start DATE falls inside `[start.date(), end.date()]` (inclusive at both
+ends — see Fix 6 below) are bucketed at all; the 20/20 gate evaluates on
+these clipped buckets, not the full history.
+
+Buckets: `multi` = in-window rated Claude sessions whose
+`[start, start+duration]` overlaps a merged interval where ≥2 sources were
+concurrently active (computed from Claude activity rows plus full/partial
+cross-LLM rows); `single` = the in-window rest.
 
 | Threshold | Value (provisional v1) |
 |-----------|-------------------------|
 | Minimum sessions per bucket | `_BS_SWITCH_MIN_PER_BUCKET = 20` |
 
-If no multi-source windows exist at all, or either bucket is below 20
-sessions, `gate_passed` is `False`. `metrics.multi` / `metrics.single` each
+If no multi-source windows exist at all, or either IN-WINDOW bucket is
+below 20 sessions (even if the bucket's all-time total would clear the
+floor), `gate_passed` is `False`. `metrics.multi` / `metrics.single` each
 report `n`, `good_rate`, `friction_per_session`, `interrupts_per_session`.
 
 ### #4 — The graveyard
@@ -277,8 +307,9 @@ failure mode from a session that simply didn't finish. **Not
 outcome-guarded** — achieved-but-never-shipped is precisely the finding, not
 a counterexample to explain away; guarded instead by structural exclusions.
 
-Per project (`normalize_project_path`), take the latest activity row. It
-qualifies as a graveyard item when all of:
+Per project (`normalize_project_path`), take the row owning the latest
+activity **end** (Fix 4 — see below). It qualifies as a graveyard item when
+all of:
 
 | Threshold | Value (provisional v1) |
 |-----------|-------------------------|
@@ -289,11 +320,21 @@ qualifies as a graveyard item when all of:
 | Project key resolvable | excludes `(unknown)` / non-shippable keys |
 | Minimum qualifying items | `_BS_GRAVEYARD_MIN_ITEMS = 2` |
 
-`window_end` (the newest activity timestamp seen this run, or "now" if the
-activity pool is empty) anchors "days untouched" — a project active within
-the last 14 days of the window is not yet a graveyard candidate, even with
-zero commits. `metrics.items` lists up to 8, sorted by `days_untouched`
-descending.
+**Staleness from activity END, not session START (Fix 4)**: `window_end`
+(the newest activity timestamp seen this run, or "now" if the activity pool
+is empty) anchors "days untouched", but the per-project "last touched"
+timestamp it's compared against is the max activity **end**, not the
+session's start. A row's activity end = `max(e for _, e in
+_row_windows(row))` — the same segment-aware helper `compute_cross_llm` uses
+— so a resumed multi-day session that started 20 days ago but has a segment
+active as recently as yesterday is correctly NOT stale, even though its
+`start_time` is old. `days_untouched = (window_end - latest_end).days`; the
+qualifying-session fields (`writes`, `git_commits`, `evidence`,
+`last_active_date`) all come from the row that owns that latest end, and
+`last_active_date = latest_end.date().isoformat()`. A project whose latest
+activity end falls within the last 14 days of the window is not yet a
+graveyard candidate, even with zero commits. `metrics.items` lists up to 8,
+sorted by `days_untouched` descending.
 
 ### #5 — Habit drift
 

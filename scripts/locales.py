@@ -482,6 +482,11 @@ STRINGS = {
             "Move this instruction into CLAUDE.md or memory so every "
             "session inherits it."
         ),
+        "leak_fix_repeated_instructions_cross": (
+            "Put this instruction in each tool's shared config (CLAUDE.md "
+            "for Claude Code, AGENTS.md or the equivalent for other tools) "
+            "so every session inherits it."
+        ),
         "leak_fix_sunk_cost": (
             "Set a bail-out rule: when a session stalls, restart with a "
             "tighter brief instead of pushing on."
@@ -923,6 +928,10 @@ STRINGS = {
         "leak_type_failed_session_burn": "失敗 session 燒掉的量",
         "leak_fix_repeated_instructions": (
             "把這條指令搬進 CLAUDE.md 或 memory，讓每個 session 自動繼承。"
+        ),
+        "leak_fix_repeated_instructions_cross": (
+            "把這條指令放進各工具的共用設定，Claude Code 用 CLAUDE.md，"
+            "其他工具用 AGENTS.md 或對應檔案，讓每個 session 自動繼承。"
         ),
         "leak_fix_sunk_cost": (
             "訂一條停損規則：session 卡住就開新的，附上更明確的任務描述，"

@@ -76,8 +76,8 @@ class LedgerLocaleKeyTests(unittest.TestCase):
         "ledger_leak_occurrences_template", "ledger_leak_fix_label",
         "leak_type_repeated_instructions", "leak_type_sunk_cost",
         "leak_type_failed_session_burn",
-        "leak_fix_repeated_instructions", "leak_fix_sunk_cost",
-        "leak_fix_failed_session_burn",
+        "leak_fix_repeated_instructions", "leak_fix_repeated_instructions_cross",
+        "leak_fix_sunk_cost", "leak_fix_failed_session_burn",
         "ledger_graveyard_exhibit_title", "ledger_graveyard_untouched_template",
         "ledger_graveyard_writes_template", "ledger_leaks_exhibit_title",
         "ledger_secondary_findings", "ledger_source_blind_spots",
@@ -208,11 +208,21 @@ LEDGER_LEAKS = dict(LEDGER, leaks={
     "window_weeks": 7.1,
     "items": [
         {"type": "repeated_instructions", "weekly_cost_usd": 4.32,
-         "weekly_tokens": 12000, "occurrences": 7, "evidence": ["sid-1"]},
+         "weekly_tokens": 12000, "occurrences": 7, "evidence": ["sid-1"],
+         "sources": ["claude"]},
         {"type": "sunk_cost", "weekly_cost_usd": 2.10,
          "weekly_tokens": 5000, "occurrences": 3, "evidence": ["sid-4"]},
         {"type": "failed_session_burn", "weekly_cost_usd": 1.05,
          "weekly_tokens": 3000, "occurrences": 5, "evidence": ["sid-7"]},
+    ],
+})
+
+LEDGER_LEAKS_CROSS_SOURCE = dict(LEDGER, leaks={
+    "window_weeks": 7.1,
+    "items": [
+        {"type": "repeated_instructions", "weekly_cost_usd": 4.32,
+         "weekly_tokens": 12000, "occurrences": 7, "evidence": ["sid-1"],
+         "sources": ["claude", "codex"]},
     ],
 })
 
@@ -385,6 +395,27 @@ class LeakLedgerRenderTests(unittest.TestCase):
         self.assertIn(STRINGS["en"]["ledger_secondary_findings"], html)
         self.assertIn("refactoring", html)
 
+    def test_cross_source_repeated_instructions_uses_cross_fix_text(self):
+        # Fix 5: when the repeated_instructions leak item's sources include
+        # a non-Claude tool, CLAUDE.md-only advice is wrong (Codex/Grok
+        # don't read it) — the cross-tool fix key must render instead, and
+        # the CLAUDE.md-only text must NOT appear.
+        from itertools import count
+        html = _build_leak_ledger(LEDGER_LEAKS_CROSS_SOURCE, BS_ALL_PASSED,
+                                  NARR, "en", count(1))
+        from scripts.locales import STRINGS
+        from scripts.report_render import esc
+        self.assertIn(esc(STRINGS["en"]["leak_fix_repeated_instructions_cross"]), html)
+        self.assertNotIn(esc(STRINGS["en"]["leak_fix_repeated_instructions"]), html)
+
+    def test_claude_only_repeated_instructions_uses_claude_md_fix_text(self):
+        from itertools import count
+        html = _build_leak_ledger(LEDGER_LEAKS, BS_ALL_PASSED, NARR, "en", count(1))
+        from scripts.locales import STRINGS
+        from scripts.report_render import esc
+        self.assertIn(esc(STRINGS["en"]["leak_fix_repeated_instructions"]), html)
+        self.assertNotIn(esc(STRINGS["en"]["leak_fix_repeated_instructions_cross"]), html)
+
     def test_all_gates_failed_and_no_leak_items_suppresses_whole_section(self):
         from itertools import count
         html = _build_leak_ledger(LEDGER_NO_LEAKS, BS_ALL_FAILED, NARR, "en", count(1))
@@ -473,6 +504,29 @@ class SwitchTaxOpenerTests(unittest.TestCase):
         from itertools import count
         html = _build_team_ledger(CROSS, NARR, "en", count(2), BS_ALL_FAILED)
         self.assertNotIn("c-blindspot", html)
+
+    def test_degraded_window_suppresses_callout_even_when_gate_passed(self):
+        # Fix 2: switch_tax gate passing is not enough — the callout is
+        # itself a cross-source comparison, so it must not render next to
+        # the degraded note that tells the reader cross-source comparisons
+        # were suppressed.
+        from itertools import count
+        degraded = dict(CROSS, common_window={"start": "2026-06-10",
+                                              "end": "2026-06-18",
+                                              "days": 8, "degraded": True})
+        html = _build_team_ledger(degraded, NARR, "en", count(2), BS_ALL_PASSED)
+        self.assertNotIn("c-blindspot", html)
+        from scripts.locales import STRINGS
+        self.assertNotIn(STRINGS["en"]["blindspot_switch_title"], html)
+        self.assertIn(STRINGS["en"]["ledger_degraded_note"], html)
+
+    def test_healthy_window_still_shows_callout(self):
+        # Existing behavior preserved: CROSS's common_window is healthy, so
+        # a gate-passing switch_tax still renders the callout.
+        from itertools import count
+        html = _build_team_ledger(CROSS, NARR, "en", count(2), BS_ALL_PASSED)
+        from scripts.locales import STRINGS
+        self.assertIn(STRINGS["en"]["blindspot_switch_title"], html)
 
 
 class ExhibitNumberingTests(unittest.TestCase):

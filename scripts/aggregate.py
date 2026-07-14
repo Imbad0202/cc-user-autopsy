@@ -278,8 +278,31 @@ def normalize_prompt(text):
     return _NORM_WS_RE.sub(" ", t).strip()
 
 
+_CJK_RE = re.compile(r"[一-鿿]")
+
+
 def prompt_similarity(a_norm, b_norm):
-    """Token-set Jaccard between two normalize_prompt() outputs."""
+    """Similarity between two normalize_prompt() outputs.
+
+    Default: token-set Jaccard on whitespace-split words. CJK scripts
+    (Chinese) have no whitespace between words, so a whole zh sentence
+    normalizes to a single "token" and near-identical zh prompts would
+    score 0.0 or 1.0 with nothing in between — breaking sunk-cost pair
+    matching for zh users. When either normalized string contains a CJK
+    character (U+4E00-U+9FFF), fall back to Jaccard over character
+    BIGRAMS of the de-spaced string instead, which degrades gracefully
+    for near-duplicate zh prompts. If a de-spaced string has fewer than 2
+    characters (no bigrams possible), fall back to the word-token path
+    for that comparison. Non-CJK (English etc.) behavior is unchanged.
+    """
+    if _CJK_RE.search(a_norm) or _CJK_RE.search(b_norm):
+        a_flat, b_flat = a_norm.replace(" ", ""), b_norm.replace(" ", "")
+        if len(a_flat) >= 2 and len(b_flat) >= 2:
+            ba = {a_flat[i:i + 2] for i in range(len(a_flat) - 1)}
+            bb = {b_flat[i:i + 2] for i in range(len(b_flat) - 1)}
+            if not ba or not bb:
+                return 0.0
+            return len(ba & bb) / len(ba | bb)
     ta, tb = set(a_norm.split()), set(b_norm.split())
     if not ta or not tb:
         return 0.0
@@ -2082,10 +2105,16 @@ def bs_repeated_instructions(claude_rows, cross_rows, window_start=None, window_
     the transcript-derived ledger window must not contribute occurrences,
     since compute_leaks divides all-time totals by the window's weeks and
     the render claims "N occurrences in window". Either bound alone (or
-    both None) disables windowing, matching prior behavior.
+    both None) disables windowing, matching prior behavior. The comparison
+    is by calendar DATE, inclusive at both ends (Fix 6): a cross-source row
+    earlier in the day than window_start (or later than window_end) on the
+    SAME calendar date still counts as in-window, matching the date-range
+    the rendered window note claims to cover.
     """
     occ = {}
     windowed = window_start is not None and window_end is not None
+    win_start_d = window_start.date() if windowed else None
+    win_end_d = window_end.date() if windowed else None
     for row in list(claude_rows) + list(cross_rows):
         if row.get("coverage") == "presence_only":
             continue
@@ -2095,7 +2124,7 @@ def bs_repeated_instructions(claude_rows, cross_rows, window_start=None, window_
         dt = _parse_dt(row.get("start_time"))
         if dt is None:
             continue
-        if windowed and not (window_start <= dt <= window_end):
+        if windowed and not (win_start_d <= dt.date() <= win_end_d):
             continue
         occ.setdefault(norm, []).append({
             "week": week_key(dt),
@@ -2226,10 +2255,55 @@ def _multi_source_intervals(activity_rows, cross_rows):
     return _merge_intervals([(s, e) for s, e, n in concurrent if n >= 2])
 
 
+def _common_window_dates(rows):
+    """Per-source [min start, max end] -> common window, mirroring
+    compute_cross_llm's common_window derivation (spec §13): the window a
+    reader is told cross-source comparisons cover is the overlap of every
+    source's own coverage span, not each source's full history. `rows` must
+    already be source-tagged (each row carries a "source" key) and exclude
+    presence_only rows. Returns (start_date, end_date) as `date` objects, or
+    None if fewer than 2 sources have any resolvable window.
+
+    Boundaries are calendar dates (inclusive) per spec: callers compare
+    `dt.date()` against these bounds rather than exact timestamps, so a
+    cross-source occurrence earlier in the day than the Claude minimum
+    start (or later than its maximum end) on the SAME calendar date still
+    counts as in-window (Fix 6)."""
+    per_source = {}
+    for r in rows:
+        windows = _row_windows(r)
+        if not windows:
+            continue
+        src = r.get("source") or "claude"
+        starts = [s for s, _ in windows]
+        ends = [e for _, e in windows]
+        lo, hi = min(starts), max(ends)
+        if src not in per_source:
+            per_source[src] = [lo, hi]
+        else:
+            per_source[src][0] = min(per_source[src][0], lo)
+            per_source[src][1] = max(per_source[src][1], hi)
+    if len(per_source) < 2:
+        return None
+    start = max(lo for lo, _ in per_source.values())
+    end = min(hi for _, hi in per_source.values())
+    if end < start:
+        return None
+    return start.date(), end.date()
+
+
 def bs_switch_tax(rated, activity_rows, cross_rows):
     """Spec §5 #3 — switch tax. Outcome labels exist only for Claude, so
     both buckets are Claude sessions; concurrency is measured against all
-    full/partial sources. Symmetric comparison — no counterexample guard."""
+    full/partial sources. Symmetric comparison — no counterexample guard.
+
+    Comparison runs over the cross-source common window only (spec: cross-
+    source comparisons render only over the common time window). Claude
+    history predating Codex/Grok adoption would otherwise flood the
+    single-tool bucket — those pre-overlap sessions could never have been
+    multi-tool, biasing the comparison — so BOTH buckets are restricted to
+    rated sessions whose start date falls inside the common window
+    (calendar-date comparison, inclusive at both ends per Fix 6)."""
     # Meta-only rated sessions (transcript rotated away) still exist in the
     # scoring pool but may be missing from activity_rows entirely — without
     # synthesizing minimal Claude activity for them, their Claude-side
@@ -2242,13 +2316,28 @@ def bs_switch_tax(rated, activity_rows, cross_rows):
     extra = [{"session_id": s["sid"], "start_time": s["start"],
               "duration_minutes": s.get("duration_min") or 0}
              for s in rated if s["sid"] not in activity_sids]
-    multi_iv = _multi_source_intervals(list(activity_rows) + extra, cross_rows)
+    comparable_pool = list(activity_rows) + extra
+    tagged_pool = []
+    for r in comparable_pool:
+        rr = dict(r)
+        rr.setdefault("source", "claude")
+        tagged_pool.append(rr)
+    tagged_pool += [r for r in cross_rows if r.get("coverage") != "presence_only"]
+
+    window = _common_window_dates(tagged_pool)
+    if window is None:
+        return _bs_result("switch_tax", False, reason="no multi-source windows")
+    win_start_d, win_end_d = window
+
+    multi_iv = _multi_source_intervals(comparable_pool, cross_rows)
     if not multi_iv:
         return _bs_result("switch_tax", False, reason="no multi-source windows")
     multi, single = [], []
     for s in rated:
         st = _parse_dt(s.get("start"))
         if st is None:
+            continue
+        if not (win_start_d <= st.date() <= win_end_d):
             continue
         # Mirror _row_windows' 1-minute minimum: a 0-minute session would
         # otherwise yield an empty [st, st) probe interval that never
@@ -2312,7 +2401,17 @@ def bs_graveyard(activity_rows, window_end):
     """Spec §5 #4 — the graveyard: substantive writes, no commit, project
     untouched >= 14 days after. Structural guards (scratch paths, unknown
     project) replace the outcome guard: achieved-but-never-shipped is
-    precisely the finding, not a counterexample."""
+    precisely the finding, not a counterexample.
+
+    Staleness is measured from each row's activity END, not its session
+    START: a resumed multi-day session that started 20 days ago but has a
+    segment active as recently as yesterday is not stale, even though its
+    start_time is old. `_row_windows(row)` already resolves explicit
+    segments (else start+duration) per row, so per-project "last touched"
+    is the max END across every row's windows, and the qualifying-session
+    fields (writes, commits, evidence, last_active_date) come from the row
+    that owns that latest end.
+    """
     by_project = {}
     for r in activity_rows:
         key = normalize_project_path(r.get("project_path") or "")
@@ -2320,15 +2419,16 @@ def bs_graveyard(activity_rows, window_end):
             continue
         if any(m in key.lower() for m in _SCRATCH_PATH_MARKERS):
             continue
-        dt = _parse_dt(r.get("start_time"))
-        if dt is None:
+        windows = _row_windows(r)
+        if not windows:
             continue
-        by_project.setdefault(key, []).append((dt, r))
+        row_end = max(e for _, e in windows)
+        by_project.setdefault(key, []).append((row_end, r))
     items = []
     for key, entries in by_project.items():
         entries.sort(key=lambda e: e[0])
-        last_dt, last_row = entries[-1]
-        days_untouched = (window_end - last_dt).days
+        last_end, last_row = entries[-1]
+        days_untouched = (window_end - last_end).days
         if days_untouched < _BS_GRAVEYARD_HORIZON_DAYS:
             continue
         tc = last_row.get("tool_counts") or {}
@@ -2338,7 +2438,7 @@ def bs_graveyard(activity_rows, window_end):
         if (last_row.get("git_commits") or 0) > 0:
             continue
         items.append({"project_key": project_name(key),
-                      "last_active_date": last_dt.date().isoformat(),
+                      "last_active_date": last_end.date().isoformat(),
                       "days_untouched": days_untouched,
                       "writes": writes,
                       "evidence": [last_row.get("session_id") or ""]})
@@ -2530,12 +2630,18 @@ def compute_leaks(blind_spots, rated, window):
         # priced at the Claude input rate, since they weren't billed there.
         claude_tokens_week = sum(
             p.get("claude_wasted_tokens", 0) for p in pats) / weeks
+        # Additive field: sorted union of sources across the qualifying
+        # patterns, so the renderer can tell whether any occurrences came
+        # from a tool that doesn't read CLAUDE.md (Fix 5) and pick the
+        # right fix text.
+        sources = sorted({src for p in pats for src in (p.get("sources") or [])})
         items.append({"type": "repeated_instructions",
                       "weekly_cost_usd": round(
                           claude_tokens_week / 1e6 * _dominant_input_rate(rated), 2),
                       "weekly_tokens": tokens_week,
                       "occurrences": sum(p["occurrences"] for p in pats),
-                      "evidence": pats[0]["evidence"]})
+                      "evidence": pats[0]["evidence"],
+                      "sources": sources})
 
     sunk_sids = set()
     bs2 = blind_spots.get("sunk_cost") or {}

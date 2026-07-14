@@ -50,6 +50,33 @@ class PromptSimilarityTests(unittest.TestCase):
     def test_empty_is_zero(self):
         self.assertEqual(prompt_similarity("", "anything"), 0.0)
 
+    def test_cjk_near_identical_scores_high_via_bigram_fallback(self):
+        # Two zh prompts differing only by one trailing word: word-token
+        # Jaccard would treat each as one giant unsplit "word" (no spaces
+        # between Chinese words) and score 0.0 despite being near-
+        # identical. The CJK bigram fallback must score this > 0.5.
+        a = normalize_prompt("回覆一律用繁體中文，先跑測試")
+        b = normalize_prompt("回覆一律用繁體中文，先跑測試，再送出")
+        sim = prompt_similarity(a, b)
+        self.assertGreater(sim, 0.5)
+
+    def test_cjk_unrelated_scores_low(self):
+        a = normalize_prompt("回覆一律用繁體中文，先跑測試")
+        b = normalize_prompt("今天天氣很好，適合出門散步")
+        sim = prompt_similarity(a, b)
+        self.assertLess(sim, 0.3)
+
+    def test_cjk_short_string_falls_back_to_word_path(self):
+        # A de-spaced normalized string under 2 chars has no bigrams;
+        # must not crash and must fall back to word-token comparison.
+        self.assertEqual(prompt_similarity("中", "中"), 1.0)
+
+    def test_english_prompts_unaffected_by_cjk_path(self):
+        # Regression guard: non-CJK inputs must take the original
+        # word-token Jaccard path, unchanged.
+        self.assertAlmostEqual(
+            prompt_similarity("fix the flaky test", "fix the broken test"), 0.6)
+
 
 class WeekKeyTests(unittest.TestCase):
     def test_iso_week_format(self):
@@ -176,6 +203,24 @@ class RepeatedInstructionTests(unittest.TestCase):
         self.assertTrue(out["gate_passed"])
         self.assertEqual(out["metrics"]["patterns"][0]["occurrences"], 5)
 
+    def test_date_inclusive_window_boundary(self):
+        # Fix 6: window_start is 09:00 on the window's first date. A
+        # cross-source occurrence at 06:00 the SAME calendar date is
+        # earlier in the day than window_start's exact timestamp, but the
+        # comparison must be by calendar date (inclusive) — so it still
+        # counts as in-window, matching the date range the rendered window
+        # note claims to cover.
+        window_start = BASE.replace(hour=9, minute=0)
+        window_end = window_start + timedelta(weeks=6)
+        early_same_day = window_start.replace(hour=6, minute=0)
+        rows = ([_prompt_row("c-early", early_same_day, INSTR)]
+                + [_prompt_row(f"c{i}", BASE + timedelta(weeks=i), INSTR)
+                   for i in range(1, 7)])
+        out = bs_repeated_instructions(
+            rows, [], window_start=window_start, window_end=window_end)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["patterns"][0]["occurrences"], 7)
+
 
 FAIL_PROMPT = "refactor the payment reconciliation pipeline to stream batches"
 RETRY_PROMPT = "refactor the payment reconciliation pipeline to stream batches cleanly"
@@ -280,8 +325,17 @@ class SwitchTaxTests(unittest.TestCase):
             if i not in drop_activity_for:
                 act.append(_act_row(f"m{i}", t))
             cross.append(_codex_act(f"x{i}", t + timedelta(minutes=10)))
-        for i in range(20):  # single-tool evenings
-            t = BASE + timedelta(days=i, hours=10)
+        for i in range(20):  # single-tool, same local calendar day, later
+            # +2h (not the wider offset originally used) keeps every
+            # session on the SAME local calendar day as its multi-tool
+            # morning sibling regardless of the test machine's UTC offset
+            # — Fix 1's common-window date bucketing (_common_window_dates)
+            # compares LOCAL calendar dates (matching _parse_dt's
+            # documented local-zone normalization), so a wider offset that
+            # crosses local midnight in positive-UTC-offset zones would
+            # push the session's date outside the codex-limited window and
+            # make the fixture flaky across machines/timezones.
+            t = BASE + timedelta(days=i, hours=2)
             rated.append(_rated(f"s{i}", t, "fully_achieved"))
             act.append(_act_row(f"s{i}", t))
         return rated, act, cross
@@ -333,6 +387,51 @@ class SwitchTaxTests(unittest.TestCase):
         self.assertTrue(out["gate_passed"])
         self.assertEqual(out["metrics"]["multi"]["n"], 20)
         self.assertEqual(out["metrics"]["single"]["n"], 20)
+
+    def test_pre_overlap_sessions_excluded_from_both_buckets(self):
+        # Fix 1: Claude has 30 single-tool sessions BEFORE codex/grok ever
+        # ran (pre-overlap history), then the normal fixture (20 multi +
+        # 20 single) inside the codex-covered window. The common window is
+        # [min codex start, max codex end] intersected with [min claude
+        # start-inside-that-range, max claude end] — codex only exists
+        # during the normal-fixture days, so the 30 pre-overlap Claude-only
+        # sessions (which could never have been multi-tool) must land in
+        # NEITHER bucket: single.n stays 20, not 50.
+        rated, act, cross = self._fixture()
+        pre_overlap_start = BASE - timedelta(days=40)
+        for i in range(30):
+            t = pre_overlap_start + timedelta(days=i)
+            rated.insert(0, _rated(f"pre{i}", t, "fully_achieved"))
+            act.insert(0, _act_row(f"pre{i}", t))
+        out = bs_switch_tax(rated, act, cross)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(out["metrics"]["multi"]["n"], 20)
+        self.assertEqual(out["metrics"]["single"]["n"], 20)
+
+    def test_in_window_single_bucket_below_floor_fails_gate_despite_total(self):
+        # Even though total single-tool sessions (in-window + pre-overlap)
+        # would clear the 20-session floor, only the IN-WINDOW ones count.
+        # Fixture: 20 multi (in-window) + only 5 single (in-window) + 30
+        # pre-overlap single-tool sessions outside the common window. Total
+        # non-multi sessions = 35 (>=20), but in-window single = 5 (<20) —
+        # gate must fail.
+        rated, act, cross = [], [], []
+        for i in range(20):  # multi-tool mornings, in-window
+            t = BASE + timedelta(days=i)
+            rated.append(_rated(f"m{i}", t, "fully_achieved"))
+            act.append(_act_row(f"m{i}", t))
+            cross.append(_codex_act(f"x{i}", t + timedelta(minutes=10)))
+        for i in range(5):  # single-tool, same local day, in-window
+            t = BASE + timedelta(days=i, hours=2)
+            rated.append(_rated(f"s{i}", t, "fully_achieved"))
+            act.append(_act_row(f"s{i}", t))
+        pre_overlap_start = BASE - timedelta(days=60)
+        for i in range(30):  # pre-overlap: clears the floor if wrongly counted
+            t = pre_overlap_start + timedelta(days=i)
+            rated.append(_rated(f"pre{i}", t, "fully_achieved"))
+            act.append(_act_row(f"pre{i}", t))
+        out = bs_switch_tax(rated, act, cross)
+        self.assertFalse(out["gate_passed"])
 
 
 class InterruptWinRateTests(unittest.TestCase):
@@ -404,6 +503,37 @@ class GraveyardTests(unittest.TestCase):
                            "/home/u/projects/b")]
         out = bs_graveyard(rows, WINDOW_END)
         self.assertFalse(out["gate_passed"])
+
+    def test_staleness_measured_from_segment_end_not_session_start(self):
+        # Fix 4: g1's session STARTED 30 days ago but has a segment that
+        # ENDS only 3 days before window_end (a resumed multi-day
+        # session). Staleness must be measured from that segment's end,
+        # not the session's start — so this project is NOT a graveyard
+        # candidate even though start-based staleness would say 30 days.
+        start = WINDOW_END - timedelta(days=30)
+        recent_end = WINDOW_END - timedelta(days=3)
+        g1 = {"session_id": "g1", "project_path": "/home/u/projects/resumed",
+              "segments": [[start.isoformat(), recent_end.isoformat()]],
+              "tool_counts": {"Edit": 6, "Read": 10}, "git_commits": 0}
+        g2 = _grave_row("g2", BASE, "/home/u/projects/b")  # ordinary graveyard item
+        out = bs_graveyard([g1, g2], WINDOW_END)
+        touched_keys = {i["project_key"] for i in out.get("metrics", {}).get("items", [])}
+        self.assertNotIn("projects/resumed", touched_keys)
+
+    def test_same_session_without_recent_segment_is_graveyard(self):
+        # Same fixture as above, but WITHOUT the recent-ending segment —
+        # only start+duration (60 min), which ends long before window_end
+        # minus the horizon. This project SHOULD be a graveyard candidate,
+        # confirming the previous test's non-graveyard result was due to
+        # the segment's end, not some other fixture difference.
+        start = WINDOW_END - timedelta(days=30)
+        g1 = {"session_id": "g1", "project_path": "/home/u/projects/resumed",
+              "start_time": start.isoformat(), "duration_minutes": 60,
+              "tool_counts": {"Edit": 6, "Read": 10}, "git_commits": 0}
+        g2 = _grave_row("g2", BASE, "/home/u/projects/b")
+        out = bs_graveyard([g1, g2], WINDOW_END)
+        touched_keys = {i["project_key"] for i in out["metrics"]["items"]}
+        self.assertIn("projects/resumed", touched_keys)
 
 
 def _goal_sess(sid, cats, commits=0):

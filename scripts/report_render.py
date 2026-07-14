@@ -492,8 +492,11 @@ def _source_card_html(s: dict, locale: str) -> str:
 def _build_team_ledger(cross_llm, narration, locale="en", exhibit_no=None,
                         blind_spots=None):
     """SELF-only team ledger: per-source cards, switch-tax opener (blind spot
-    #3, when its gate passed), then (only when a non-degraded common_window
-    exists) weekly-share / parallel-heatmap / project-matrix / head-to-head
+    #3, when its gate passed AND the common_window is healthy — the callout
+    is itself a cross-source comparison, so it must not render next to the
+    degraded note that tells the reader cross-source comparisons were
+    suppressed), then (only when a non-degraded common_window exists)
+    weekly-share / parallel-heatmap / project-matrix / head-to-head
     exhibits. Degraded or missing window: localized degraded note instead of
     the comparison exhibits; heatmap and matrix still render since they
     don't compare rates across sources. Counts, dates, minutes, and tokens
@@ -521,8 +524,16 @@ def _build_team_ledger(cross_llm, narration, locale="en", exhibit_no=None,
         note = t(locale, "ledger_unknown_parse_errors_template").format(n=unattributed)
         cards += f'<p class="method">{esc(note)}</p>'
 
+    win = cross_llm.get("common_window")
+    # Single source of truth for "is this a healthy (present, non-degraded)
+    # common_window" — computed here (before the switch-tax callout below)
+    # so it is available to gate that callout too, in addition to weekly
+    # share, heatmap/matrix, and head-to-head, all of which are cross-source
+    # COMPARISONS gated the same way (spec §13).
+    window_healthy = bool(win) and not win.get("degraded")
+
     bs3 = bs.get("switch_tax") or {}
-    if bs3.get("gate_passed"):
+    if bs3.get("gate_passed") and window_healthy:
         m = bs3.get("metrics", {})
         multi_rate = m.get("multi", {}).get("good_rate")
         single_rate = m.get("single", {}).get("good_rate")
@@ -544,12 +555,6 @@ def _build_team_ledger(cross_llm, narration, locale="en", exhibit_no=None,
         else:
             cards += _blindspot_callout(locale, "blindspot_switch_title", sentence)
 
-    win = cross_llm.get("common_window")
-    # Single source of truth for "is this a healthy (present, non-degraded)
-    # common_window" — reused below for weekly share, heatmap/matrix, and
-    # head-to-head, all of which are cross-source COMPARISONS gated the
-    # same way (spec §13).
-    window_healthy = bool(win) and not win.get("degraded")
     parts = [cards]
 
     if window_healthy:
@@ -680,6 +685,16 @@ def _build_leak_ledger(ledger, blind_spots, narration, locale, exhibit_no):
                 cost=f"{it['weekly_cost_usd']:.2f}")
             tokens_str = f"{it['weekly_tokens']:,}"
             leak_type = it["type"]
+            # repeated_instructions is the only leak type whose fix advice
+            # depends on which tools produced the occurrences: CLAUDE.md is
+            # Claude-Code-specific, so an item whose sources include a
+            # non-Claude tool (Codex/Grok) needs the cross-tool fix text
+            # instead (Fix 5) — other leak types are unaffected.
+            fix_key = "leak_fix_" + leak_type
+            if leak_type == "repeated_instructions":
+                sources = it.get("sources") or []
+                if any(s != "claude" for s in sources):
+                    fix_key = "leak_fix_repeated_instructions_cross"
             cards.append(
                 '<div class="c-leak-card">'
                 f'<div class="c-leak-type">{esc(t(locale, "leak_type_" + leak_type))}</div>'
@@ -687,7 +702,7 @@ def _build_leak_ledger(ledger, blind_spots, narration, locale, exhibit_no):
                 f'<div class="c-leak-meta">{esc(t(locale, "ledger_leak_tokens_template").format(tokens=tokens_str))}'
                 f' · {esc(t(locale, "ledger_leak_occurrences_template").format(n=it["occurrences"]))}</div>'
                 f'<div class="c-leak-fix"><span>{esc(t(locale, "ledger_leak_fix_label"))}</span> '
-                f'{esc(t(locale, "leak_fix_" + leak_type))}</div></div>')
+                f'{esc(t(locale, fix_key))}</div></div>')
         out.append(_exhibit(next(exhibit_no),
                             t(locale, "ledger_leaks_exhibit_title"),
                             '<div class="c-leak-cards">' + "".join(cards) + "</div>",
