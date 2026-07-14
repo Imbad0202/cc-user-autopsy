@@ -197,6 +197,7 @@ def scan_one(path: Path):
     in_tok = out_tok = cache_create = cache_read = 0
     model_counts = Counter()
     hit_output_limit = False
+    assistant_output_seq = []
     for r in asst_msgs:
         msg = r.get("message", {})
         if not isinstance(msg, dict):
@@ -209,6 +210,7 @@ def scan_one(path: Path):
         out_tok += u.get("output_tokens", 0) or 0
         cache_create += u.get("cache_creation_input_tokens", 0) or 0
         cache_read += u.get("cache_read_input_tokens", 0) or 0
+        assistant_output_seq.append(u.get("output_tokens", 0) or 0)
         if msg.get("stop_reason") == "max_tokens":
             hit_output_limit = True
 
@@ -306,6 +308,18 @@ def scan_one(path: Path):
                 response_times.append(round((ts - prev_asst_ts).total_seconds(), 3))
                 prev_asst_ts = None
 
+    # token_accel: output burn in the session's second half vs first half.
+    # Proxy for "flailing": regenerating ever-larger responses late in a
+    # session. Input tokens are excluded on purpose — context growth makes
+    # input rise monotonically in every session, which would flag everything.
+    token_accel = None
+    n = len(assistant_output_seq)
+    if n >= 6:
+        first = sum(assistant_output_seq[: n // 2])
+        second = sum(assistant_output_seq[n - n // 2:])
+        if first > 0:
+            token_accel = round(second / first, 2)
+
     return {
         "session_id": sid,
         "project_path": project_path,
@@ -324,6 +338,7 @@ def scan_one(path: Path):
         "user_interruptions": user_interruptions,
         "tool_errors": tool_errors,
         "hit_output_limit": hit_output_limit,
+        "token_accel": token_accel,
         "uses_task_agent": uses_task_agent,
         "uses_subagent": uses_subagent,
         "uses_mcp": uses_mcp,

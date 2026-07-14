@@ -338,6 +338,46 @@ class RedactedSchemaTests(unittest.TestCase):
     def test_redacted_keys_include_hit_output_limit(self):
         self.assertIn("hit_output_limit", aggregate._REDACTED_META_KEYS)
 
+    def test_redacted_keys_include_token_accel(self):
+        self.assertIn("token_accel", aggregate._REDACTED_META_KEYS)
+
+
+class TokenAccelTests(unittest.TestCase):
+    def _scan_with_outputs(self, outputs):
+        """Build a synthetic transcript with len(outputs) assistant messages
+        whose usage.output_tokens follow `outputs`, scan it, return the row."""
+        sid = "10101010-0000-0000-0000-000000000001"
+        rows = [
+            {"type": "user", "sessionId": sid,
+             "message": {"role": "user", "content": "hi"},
+             "timestamp": "2026-04-19T10:00:00Z"},
+        ]
+        for i, out_tok in enumerate(outputs):
+            rows.append({
+                "type": "assistant", "sessionId": sid,
+                "message": {"role": "assistant", "content": "ok",
+                            "model": "claude-opus-4-6",
+                            "usage": {"input_tokens": 10, "output_tokens": out_tok}},
+                "timestamp": f"2026-04-19T10:{i:02d}:05Z",
+            })
+        return _run_single_row_session(rows, sid)
+
+    def test_accelerating_session(self):
+        row = self._scan_with_outputs([100, 100, 100, 300, 300, 300])
+        self.assertAlmostEqual(row["token_accel"], 3.0)
+
+    def test_flat_session(self):
+        row = self._scan_with_outputs([200] * 6)
+        self.assertAlmostEqual(row["token_accel"], 1.0)
+
+    def test_too_few_messages_is_none(self):
+        row = self._scan_with_outputs([100] * 5)
+        self.assertIsNone(row["token_accel"])
+
+    def test_zero_first_half_is_none(self):
+        row = self._scan_with_outputs([0, 0, 0, 100, 100, 100])
+        self.assertIsNone(row["token_accel"])
+
 
 if __name__ == "__main__":
     unittest.main()
