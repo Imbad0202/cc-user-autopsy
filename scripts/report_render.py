@@ -282,6 +282,48 @@ def json_for_script(value) -> str:
     )
 
 
+def _exhibit(no, title, body_html, source_line, locale="en"):
+    """Direction-C numbered Exhibit frame: label + title + body + source line.
+
+    Every chart/table in the ledger sections goes through this so each
+    visual carries its own provenance (claim-indexed evidence discipline).
+    """
+    return (
+        '<figure class="c-exhibit">'
+        '<figcaption class="c-exhibit-head">'
+        f'<span class="c-exhibit-no">{t(locale, "ledger_exhibit_label")} '
+        f'{int(no)}</span> '
+        f'<span class="c-exhibit-t">{esc(title)}</span>'
+        '</figcaption>'
+        f'{body_html}'
+        f'<div class="c-exhibit-src">{t(locale, "ledger_source_prefix")} '
+        f'{esc(source_line)}</div>'
+        '</figure>'
+    )
+
+
+def _parse_ledger_narration(md: str) -> dict:
+    """Split an LLM-authored ledger narration markdown file on `^# ` headings.
+
+    Returns {"opening": str, "output-ledger": str, "team-ledger": str};
+    missing sections default to "".
+    """
+    books = {"opening": "", "output-ledger": "", "team-ledger": ""}
+    current = None
+    buf = []
+    for line in (md or "").splitlines():
+        if line.startswith("# "):
+            if current in books:
+                books[current] = "\n".join(buf).strip()
+            current = line[2:].strip().lower()
+            buf = []
+        else:
+            buf.append(line)
+    if current in books:
+        books[current] = "\n".join(buf).strip()
+    return books
+
+
 def sanitize_url(url: str, *, allow_mailto: bool = False) -> str:
     if not url:
         return "#"
@@ -1621,6 +1663,51 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
     details.evidence { break-inside: avoid; }
     details.evidence[open] { break-inside: avoid; }
   }
+
+  /* --- Direction-C foundation (AI work ledger, V5) ---
+     Tokens + component classes only in this phase; section builders that
+     consume them land in a later task. Values copied from the approved
+     mock docs/superpowers/specs/mocks/mock-c-business-report.html. */
+  :root {
+    --c-gold: #B08A2E;
+    --c-gold-deep: #7E6119;
+    --c-gold-soft: rgba(176,138,46,0.12);
+    --c-neg: #9C201A;
+    --c-src-0: var(--c-gold);
+    --c-src-1: #5C5850;
+    --c-src-2: #918C82;
+    --c-src-3: #7E6119;
+    --c-src-4: #26231E;
+    --c-src-5: #C9C4B8;
+  }
+  .c-src-0 { color: var(--c-src-0); }
+  .c-src-1 { color: var(--c-src-1); }
+  .c-src-2 { color: var(--c-src-2); }
+  .c-src-3 { color: var(--c-src-3); }
+  .c-src-4 { color: var(--c-src-4); }
+  .c-src-5 { color: var(--c-src-5); }
+  .c-exhibit { margin: 30px 0 6px; }
+  .c-exhibit-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+  .c-exhibit-no { font-size: 11.5px; font-weight: 800; letter-spacing: 0.14em;
+                  color: var(--c-gold-deep); white-space: nowrap; }
+  .c-exhibit-t { font-size: 14px; font-weight: 600; }
+  .c-exhibit-src { font-size: 11.5px; opacity: 0.65; margin-top: 10px; }
+  .c-finding { display: grid; grid-template-columns: 64px 1fr; gap: 20px;
+               padding: 18px 0; border-bottom: 1px solid rgba(128,128,128,0.25); }
+  .c-finding-no { font-size: 30px; font-weight: 800; color: var(--c-gold); line-height: 1.2; }
+  .c-finding-head { font-size: 19px; font-weight: 700; line-height: 1.6; }
+  .c-neg-num { color: var(--c-neg); }
+  .c-sec-title { font-size: 23px; font-weight: 800; line-height: 1.5; max-width: 30em; }
+  .c-kicker { font-size: 12.5px; letter-spacing: 0.22em; color: var(--c-gold-deep); font-weight: 700; }
+  .c-source-cards { display: flex; gap: 12px; flex-wrap: wrap; margin: 14px 0; }
+  .c-source-card { border: 1px solid rgba(128,128,128,0.3); padding: 10px 14px;
+                   font-size: 13px; min-width: 150px; }
+  .c-share-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12.5px; }
+  .c-share-bar { display: flex; height: 14px; flex: 1; }
+  .c-share-seg { height: 100%; }
+  .c-h2h { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid rgba(128,128,128,0.3); }
+  .c-h2h > div { padding: 14px 18px; }
+  .c-h2h .num { font-size: 22px; font-weight: 800; }
 </style>
 </head>
 <body>
