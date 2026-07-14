@@ -5,6 +5,7 @@ Outputs analysis-data.json.
 """
 import argparse
 import json
+import re
 import statistics
 import sys
 from collections import Counter, defaultdict
@@ -253,6 +254,43 @@ def bucket_prompt_len(n: int) -> str:
     return ">=300"
 
 
+# --- Phase 2 shared helpers (blind-spot engine) ---
+
+_NORM_KEEP_RE = re.compile(r"[^\w一-鿿]+")
+_NORM_WS_RE = re.compile(r"\s+")
+
+
+def normalize_prompt(text):
+    """Normalize an instruction for exact-match repetition detection.
+
+    Deliberately exact-match only (v1): lowercased, punctuation folded to
+    spaces, whitespace collapsed, truncated. No fuzzy matching — zero false
+    positives beats higher recall for a tax the user will be told to fix.
+    """
+    if not isinstance(text, str):
+        return ""
+    t = _NORM_KEEP_RE.sub(" ", text.lower())
+    return _NORM_WS_RE.sub(" ", t).strip()[:200]
+
+
+def prompt_similarity(a_norm, b_norm):
+    """Token-set Jaccard between two normalize_prompt() outputs."""
+    ta, tb = set(a_norm.split()), set(b_norm.split())
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def week_key(dt):
+    """ISO week label 'YYYY-Www' — the single week-bucketing helper.
+
+    build_sessions and the cross_llm weekly loop previously inlined this
+    format; a third copy for the blind-spot engine forced the factor-out.
+    """
+    iso = dt.isocalendar()
+    return f"{iso[0]}-W{iso[1]:02d}"
+
+
 def detect_tz() -> timezone:
     """Pick a tz: TPE if system locale is Asia, else UTC. User can override."""
     try:
@@ -432,7 +470,7 @@ def build_sessions(metas, facets, tz):
             "project_key": project_path,
             "project_path": project_path,
             "start": m.get("start_time", ""),
-            "week": f"{local.isocalendar().year}-W{local.isocalendar().week:02d}",
+            "week": week_key(local),
             "hour": local.hour,
             "weekday": local.weekday(),
             "duration_min": m.get("duration_minutes", 0),
@@ -1808,7 +1846,7 @@ def compute_cross_llm(claude_rows, cross_rows):
             if clipped is None:
                 continue
             s, e = clipped
-            wk = f"{s.isocalendar()[0]}-W{s.isocalendar()[1]:02d}"
+            wk = week_key(s)
             weekly.setdefault(wk, {}).setdefault(r["source"], 0)
             weekly[wk][r["source"]] += round((e - s).total_seconds() / 60)
     weekly_share = [{"week": wk, "minutes": mins}
