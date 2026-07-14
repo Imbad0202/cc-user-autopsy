@@ -233,6 +233,41 @@ class CrossLlmTests(unittest.TestCase):
         h2h = compute_cross_llm(claude, codex)["head_to_head"]
         self.assertIsNone(h2h["codex"]["total_tokens"])
 
+    def test_head_to_head_includes_session_via_resumed_segment_in_window(self):
+        # A codex session that STARTED before the common window (its
+        # start_time is outside the window) but was resumed with a second
+        # segment INSIDE the window is counted by parallel/project_matrix
+        # (which are window-clipped, via `windows`/`_clip`) but was
+        # previously excluded from head_to_head (which filtered by
+        # start_time alone). head_to_head must include it too — the two
+        # exhibits describe the same window and must agree on membership.
+        claude, codex = self._twenty_days_both()
+        window_start = date.fromisoformat(
+            compute_cross_llm(claude, codex)["common_window"]["start"])
+        # Resumed row: first segment well before the window, second segment
+        # squarely inside it (2 days after window start).
+        resumed_start = BASE - timedelta(days=10)
+        resumed_inside = datetime.combine(
+            window_start + timedelta(days=2), resumed_start.time(),
+            tzinfo=resumed_start.tzinfo)
+        resumed = {
+            "session_id": "x_resumed_h2h",
+            "project_path": "/home/user/projects/webapp",
+            "start_time": _iso(resumed_start), "duration_minutes": 30,
+            "segments": [
+                [_iso(resumed_start), _iso(resumed_start + timedelta(minutes=30))],
+                [_iso(resumed_inside), _iso(resumed_inside + timedelta(minutes=45))],
+            ],
+            "input_tokens": 500, "output_tokens": 100,
+            "source": "codex", "coverage": "full",
+        }
+        block = compute_cross_llm(claude, codex + [resumed])
+        h2h = block["head_to_head"]
+        self.assertIsNotNone(h2h)
+        # The resumed session's in-window segment must be counted: codex
+        # session count grows by 1 versus the baseline (20) fixture.
+        self.assertEqual(h2h["codex"]["sessions"], 21)
+
     def test_mixed_naive_and_aware_timestamps_does_not_raise(self):
         # One claude row has a timezone-naive start_time (no UTC offset),
         # mixed with aware codex rows. Regression for TypeError: can't
@@ -271,6 +306,40 @@ class CrossLlmTests(unittest.TestCase):
             sunday = monday + timedelta(days=6)
             self.assertGreaterEqual(sunday, win_start,
                                      f"week {wk['week']} entirely predates common window")
+
+    def test_weekly_share_full_first_day_when_local_offset_nonzero(self):
+        # Regression for the UTC-midnight clip bug: clip_start/clip_end used
+        # to be built as UTC midnights even though _parse_dt returns
+        # local-zone-aware datetimes. In a positive-UTC-offset zone (e.g.
+        # +08:00), the window's first LOCAL day starts before UTC midnight
+        # arrives, so activity between local midnight and the (wrongly UTC)
+        # clip boundary was silently dropped from weekly_share.
+        #
+        # Construct rows at a fixed local offset (independent of the actual
+        # machine running the test) so the fixture is deterministic: 20 days,
+        # 60 minutes each, starting at 07:00 local on day 0 — local offsets
+        # of +1h or more reproduce the bug (07:00 local < 08:00 = start of
+        # local day in UTC when offset is +8; more generally any offset > 0
+        # pushes local midnight before the UTC clip_start computed from the
+        # same calendar date). Use +08:00 explicitly, matching the finding.
+        tz8 = timezone(timedelta(hours=8))
+        base_local = datetime(2026, 6, 1, 7, 0, tzinfo=tz8)
+        claude = [_claude_row(f"c{i}", base_local + timedelta(days=i), dur=60)
+                  for i in range(20)]
+        codex = [_codex_row(f"x{i}", base_local + timedelta(days=i, minutes=30), dur=60)
+                 for i in range(20)]
+        block = compute_cross_llm(claude, codex)
+        win = block["common_window"]
+        self.assertIsNotNone(win)
+        total_minutes = sum(
+            mins for wk in block["weekly_share"] for mins in wk["minutes"].values()
+        )
+        # 20 days * (60 claude + 60 codex) = 2400 minutes total, if no
+        # activity is clipped away. The UTC-midnight bug drops the first
+        # local day's full hour of activity for both sources (120 minutes),
+        # yielding 2280 (or, in the finding's single-source phrasing,
+        # 19/20 days worth instead of 20/20).
+        self.assertEqual(total_minutes, 2400)
 
     def test_parallel_and_matrix_clipped_to_common_window_when_healthy(self):
         # Claude has 30 days of history; codex only shows up in the last 20
@@ -444,6 +513,86 @@ class LedgerTests(unittest.TestCase):
         self.assertIn("codex", ledger["sources_detected"])
         self.assertNotIn("grok", ledger["sources_detected"])
         self.assertNotIn("antigravity", ledger["sources_detected"])
+
+
+class MainWiringTests(unittest.TestCase):
+    """Drives aggregate.py's CLI entry point end-to-end to verify the
+    "(unknown)"-bucket errors from load_cross_llm_rows reach
+    cross_llm.unattributed_parse_errors in the written analysis-data.json —
+    the aggregation logic itself (load_cross_llm_rows bucketing under
+    "(unknown)") is already covered by LoadCrossLlmRowsTests; this covers
+    only the main()-level wiring of that bucket into the output JSON."""
+
+    @staticmethod
+    def _write_minimal_session_meta(data_dir: Path):
+        """aggregate.py's session-meta mode refuses to run with zero
+        sessions ("Use Claude Code first"). Write one minimal real
+        session-meta file so main() proceeds far enough to reach the
+        cross_llm wiring under test."""
+        meta_dir = data_dir / "session-meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        sid = "11111111-1111-1111-1111-111111111111"
+        (meta_dir / f"{sid}.json").write_text(json.dumps({
+            "session_id": sid,
+            "project_path": "/home/user/projects/demo",
+            "start_time": _iso(BASE),
+            "duration_minutes": 10,
+            "input_tokens": 100, "output_tokens": 50,
+            "git_commits": 0, "git_pushes": 0,
+        }), encoding="utf-8")
+
+    def test_unattributed_errors_reach_output_json(self):
+        import subprocess
+        import sys
+        import tempfile
+
+        skill_dir = Path(__file__).resolve().parent.parent
+        script = skill_dir / "scripts" / "aggregate.py"
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            empty_data_dir = td / "usage-data"
+            empty_data_dir.mkdir()
+            self._write_minimal_session_meta(empty_data_dir)
+            cross_rows_path = td / "cross.jsonl"
+            # One line that is valid JSON but not an object (bare scalar) —
+            # load_cross_llm_rows buckets this under "(unknown)" since no
+            # source can be guessed from it.
+            cross_rows_path.write_text(json.dumps("not-an-object") + "\n",
+                                       encoding="utf-8")
+            out_path = td / "analysis-data.json"
+            r = subprocess.run(
+                [sys.executable, str(script),
+                 "--data-dir", str(empty_data_dir),
+                 "--cross-llm-rows", str(cross_rows_path),
+                 "--output", str(out_path)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            data = json.loads(out_path.read_text())
+        self.assertEqual(data["cross_llm"].get("unattributed_parse_errors"), 1)
+
+    def test_unattributed_errors_zero_by_default(self):
+        import subprocess
+        import sys
+        import tempfile
+
+        skill_dir = Path(__file__).resolve().parent.parent
+        script = skill_dir / "scripts" / "aggregate.py"
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            empty_data_dir = td / "usage-data"
+            empty_data_dir.mkdir()
+            self._write_minimal_session_meta(empty_data_dir)
+            out_path = td / "analysis-data.json"
+            r = subprocess.run(
+                [sys.executable, str(script),
+                 "--data-dir", str(empty_data_dir),
+                 "--output", str(out_path)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            data = json.loads(out_path.read_text())
+        self.assertEqual(data["cross_llm"].get("unattributed_parse_errors"), 0)
 
 
 if __name__ == "__main__":

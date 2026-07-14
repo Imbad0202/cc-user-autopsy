@@ -436,6 +436,9 @@ STRINGS = {
         "ledger_output_pushes": "git pushes",
         "ledger_output_sessions_with_commits": "sessions that shipped commits",
         "ledger_parse_errors_template": "{n} unparseable lines skipped",
+        "ledger_unknown_parse_errors_template": (
+            "{n} lines from unrecognized sources skipped"
+        ),
     },
     "zh_TW": {
         # --- Document chrome ---
@@ -823,6 +826,7 @@ STRINGS = {
         "ledger_output_pushes": "git push 數",
         "ledger_output_sessions_with_commits": "有 commit 產出的 session 數",
         "ledger_parse_errors_template": "略過 {n} 行無法解析",
+        "ledger_unknown_parse_errors_template": "另有 {n} 行來源無法辨識, 已略過",
     },
 }
 

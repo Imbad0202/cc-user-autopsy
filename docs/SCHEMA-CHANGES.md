@@ -78,6 +78,11 @@ for dim, metrics in scores.items():
   unaffected (it lists protobuf files by mtime; no JSON-line parsing to
   fail).
 
+## 2026-07-14 — additive: `cross_llm.unattributed_parse_errors` (int) (codex-fix-wave round 3)
+
+**Added:** 2026-07-14
+**Purpose:** Count of malformed `--cross-llm-rows` lines that `load_cross_llm_rows` bucketed under `"(unknown)"` because no `source` could be guessed from the line (invalid JSON, or a row missing both `source` and `start_time`). Previously these errors were silently invisible — they never attached to any per-source card, since `cross_llm.sources[].parse_errors` only carries errors attributed to a known source. 0 default when no unattributed errors occurred.
+
 ## 2026-07-14 — semantics tightened: `ledger.sources_detected` (codex-fix-wave round 2)
 
 - `compute_ledger` now filters `cross_llm.sources` to entries with

@@ -1772,11 +1772,21 @@ def compute_cross_llm(claude_rows, cross_rows):
     # chart anyway), keep the unclipped behavior.
     clip_start = clip_end = None
     if common_window is not None:
+        # Boundaries must be local-zone midnights, matching the tzinfo
+        # _parse_dt normalizes every row datetime to (system local, via
+        # astimezone() — see _parse_dt's docstring). Building these as UTC
+        # midnights instead (the original bug) silently drops activity in
+        # positive-UTC-offset zones: local midnight on the window's first
+        # day falls BEFORE the wrongly-UTC clip_start, so real activity
+        # between local midnight and that boundary gets clipped away.
+        # datetime.min/max().astimezone() has no tz to convert FROM, so we
+        # instead combine the naive date/time and attach the local offset
+        # directly via .astimezone() on an already-local reference value.
         clip_start = datetime.combine(
-            date.fromisoformat(common_window["start"]), time.min, tzinfo=timezone.utc)
+            date.fromisoformat(common_window["start"]), time.min).astimezone()
         clip_end = datetime.combine(
-            date.fromisoformat(common_window["end"]) + timedelta(days=1), time.min,
-            tzinfo=timezone.utc)
+            date.fromisoformat(common_window["end"]) + timedelta(days=1),
+            time.min).astimezone()
 
     def _clip(s, e):
         """Clip window (s, e) to [clip_start, clip_end]; None if it falls
@@ -1892,11 +1902,20 @@ def compute_cross_llm(claude_rows, cross_rows):
         window_end_date = date.fromisoformat(common_window["end"])
 
         def _side(src):
+            # Membership: a session is "inside" the window when ANY of its
+            # activity windows intersects the common window — matching how
+            # the parallel/project_matrix blocks above select rows (via
+            # `windows`/`_clip`), rather than filtering on start_time alone.
+            # A session that STARTED before the window but was resumed with
+            # a segment inside it (a real rollout-file pattern for these
+            # adapters) is counted by the matrix/heatmap but was previously
+            # excluded here — the two exhibits describing the same window
+            # must agree on which sessions fall inside it.
             inside = []
             for r in comparable_by_source.get(src, []):
-                d = start_dt[id(r)]
-                if d and window_start_date <= d.date() <= window_end_date:
-                    inside.append((r, d))
+                clipped = [c for s, e in windows[id(r)] if (c := _clip(s, e)) is not None]
+                if clipped:
+                    inside.append((r, clipped))
             if not inside:
                 return None
             durs = [r.get("duration_minutes") or 0 for r, _ in inside]
@@ -1913,8 +1932,16 @@ def compute_cross_llm(claude_rows, cross_rows):
                 sum((i or 0) + (o or 0) for i, o in tok_rows)
                 if tok_rows else None
             )
+            # active_days: distinct calendar days covered by the CLIPPED
+            # windows inside the common window (a clipped window spanning
+            # local midnight contributes each day it touches).
+            active_days = {
+                day for _, clipped in inside
+                for s, e in clipped
+                for day, _ss, _ee in _split_at_midnight(s, e)
+            }
             return {"sessions": len(inside),
-                    "active_days": len({d.date() for _, d in inside}),
+                    "active_days": len(active_days),
                     "total_tokens": total_tokens,
                     "median_duration_minutes": round(statistics.median(durs))}
 
@@ -2146,6 +2173,12 @@ def main():
     cross_llm = compute_cross_llm(list(activity_rows.values()), cross_rows)
     for card in cross_llm["sources"]:
         card["parse_errors"] = cross_errors.get(card["source"], 0)
+    # Errors bucketed under "(unknown)" (malformed JSON, or a row missing
+    # both `source` and `start_time` so no source could be guessed) never
+    # attach to any per-source card — surface them as a separate count so
+    # they aren't silently dropped from the report. 0 default keeps older
+    # consumers that don't check this key unaffected.
+    cross_llm["unattributed_parse_errors"] = cross_errors.get("(unknown)", 0)
     final["cross_llm"] = cross_llm
     final["ledger"] = compute_ledger(activity_rows, cross_llm)
 

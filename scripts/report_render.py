@@ -410,10 +410,20 @@ def _source_card_html(s: dict, locale: str) -> str:
     """One source card: either the normal (label / count / date-span) body,
     or — for a source that produced no rows this run — the not-detected
     variant. Both share the same outer markup so the card's base styling
-    only needs to change in one place."""
+    only needs to change in one place.
+
+    parse_errors renders on BOTH variants: a source whose every line was
+    malformed shows session_count 0 (so it's "not detected"), but the
+    reader still needs the hint that something WAS there and failed to
+    parse, rather than silent absence."""
+    parse_errors = s.get("parse_errors") or 0
+    err_line_html = ""
+    if parse_errors > 0:
+        err_line = t(locale, "ledger_parse_errors_template").format(n=parse_errors)
+        err_line_html = f'<br><span class="c-source-card-errs">{esc(err_line)}</span>'
     if s.get("detected") is False:
         modifier = " c-source-card--absent"
-        body = f'{esc(t(locale, "ledger_not_detected"))}'
+        body = f'{esc(t(locale, "ledger_not_detected"))}{err_line_html}'
     else:
         modifier = ""
         label = t(locale, _SRC_LABEL_KEYS.get(s.get("coverage"),
@@ -421,11 +431,7 @@ def _source_card_html(s: dict, locale: str) -> str:
         span = ""
         if s.get("first_date") and s.get("last_date"):
             span = f'{esc(s["first_date"])} – {esc(s["last_date"])}'
-        body = f'{esc(label)}<br>{int(s.get("session_count") or 0)} · {span}'
-        parse_errors = s.get("parse_errors") or 0
-        if parse_errors > 0:
-            err_line = t(locale, "ledger_parse_errors_template").format(n=parse_errors)
-            body += f'<br><span class="c-source-card-errs">{esc(err_line)}</span>'
+        body = f'{esc(label)}<br>{int(s.get("session_count") or 0)} · {span}{err_line_html}'
     return (f'<div class="c-source-card{modifier}">'
             f'<b>{esc(s["source"])}</b> · {body}</div>')
 
@@ -446,6 +452,11 @@ def _build_team_ledger(cross_llm, narration, locale="en"):
 
     cards = "".join(_source_card_html(s, locale) for s in cross_llm["sources"])
     cards = f'<div class="c-source-cards">{cards}</div>'
+
+    unattributed = cross_llm.get("unattributed_parse_errors") or 0
+    if unattributed > 0:
+        note = t(locale, "ledger_unknown_parse_errors_template").format(n=unattributed)
+        cards += f'<p class="method">{esc(note)}</p>'
 
     win = cross_llm.get("common_window")
     # Single source of truth for "is this a healthy (present, non-degraded)

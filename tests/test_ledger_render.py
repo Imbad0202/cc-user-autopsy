@@ -201,6 +201,50 @@ class TeamLedgerTests(unittest.TestCase):
         self.assertIn(STRINGS["en"]["ledger_not_detected"], html)
         self.assertIn("grok", html.lower())
 
+    def test_not_detected_source_card_with_parse_errors_shows_error_line(self):
+        # A source whose EVERY line was malformed shows "not detected"
+        # (session_count 0) but parse_errors > 0 — the reader needs a hint
+        # that something WAS there but failed to parse, not just silence.
+        cross = dict(CROSS)
+        undetected_with_errors = {
+            "source": "grok", "coverage": None, "session_count": 0,
+            "first_date": None, "last_date": None,
+            "total_input_tokens": None, "total_output_tokens": None,
+            "parse_errors": 5, "detected": False,
+        }
+        cross["sources"] = [
+            dict(s, detected=True) for s in CROSS["sources"]
+        ] + [undetected_with_errors]
+        html = _build_team_ledger(cross, NARR, "en")
+        from scripts.locales import STRINGS
+        self.assertIn(STRINGS["en"]["ledger_not_detected"], html)
+        expected = STRINGS["en"]["ledger_parse_errors_template"].format(n=5)
+        self.assertIn(expected, html)
+
+    def test_unattributed_parse_errors_note_renders_when_set(self):
+        cross = dict(CROSS, unattributed_parse_errors=3)
+        html = _build_team_ledger(cross, NARR, "en")
+        from scripts.locales import STRINGS
+        expected = STRINGS["en"]["ledger_unknown_parse_errors_template"].format(n=3)
+        self.assertIn(expected, html)
+
+    def test_unattributed_parse_errors_note_absent_when_zero(self):
+        cross = dict(CROSS, unattributed_parse_errors=0)
+        html = _build_team_ledger(cross, NARR, "en")
+        from scripts.locales import STRINGS
+        unexpected = STRINGS["en"]["ledger_unknown_parse_errors_template"].format(n=0)
+        self.assertNotIn(unexpected, html)
+
+    def test_unattributed_parse_errors_note_absent_when_missing_key(self):
+        # cross_llm blocks from before this field existed lack the key
+        # entirely — must not raise and must not render the note.
+        cross = dict(CROSS)
+        cross.pop("unattributed_parse_errors", None)
+        html = _build_team_ledger(cross, NARR, "en")
+        from scripts.locales import STRINGS
+        unexpected_zero = STRINGS["en"]["ledger_unknown_parse_errors_template"].format(n=0)
+        self.assertNotIn(unexpected_zero, html)
+
 
 def _minimal_ledger_analysis():
     """Smallest analysis-data shape (same skeleton as
