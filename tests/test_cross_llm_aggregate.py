@@ -614,12 +614,13 @@ class MidnightBoundaryTests(unittest.TestCase):
 
 class HeadToHeadClippedDurationTests(unittest.TestCase):
     def test_resumed_session_contributes_only_in_window_minutes(self):
-        # 20-day two-source overlap so common_window exists and is healthy.
+        # 20-day claude history; codex has exactly TWO sessions so the
+        # median discriminates clipped vs whole-session durations.
         claude = [_claude_row(f"c{i}", BASE + timedelta(days=i))
                   for i in range(20)]
-        codex = [_codex_row(f"x{i}", BASE + timedelta(days=i, minutes=30))
-                 for i in range(1, 20)]
-        # One codex session STARTS 10 days before the window with 600
+        # Plain codex session late in the window, 60 in-window minutes.
+        plain = _codex_row("x-plain", BASE + timedelta(days=19, minutes=30))
+        # Resumed session: STARTS 10 days before the window with 600
         # pre-window minutes, then resumes for 10 minutes inside it.
         early = BASE - timedelta(days=10)
         inside = BASE + timedelta(days=5)
@@ -631,13 +632,13 @@ class HeadToHeadClippedDurationTests(unittest.TestCase):
                                  (inside + timedelta(minutes=10)).isoformat()]],
                    "input_tokens": 500, "output_tokens": 100,
                    "source": "codex", "coverage": "full"}
-        block = compute_cross_llm(claude, codex + [resumed])
+        block = compute_cross_llm(claude, [plain, resumed])
         h2h = block["head_to_head"]
         self.assertIsNotNone(h2h)
-        # Every plain codex row contributes 60 in-window minutes; the resumed
-        # one only 10. Median must stay 60, and no side may exceed the
-        # window-clipped per-session maximum of 60.
-        self.assertEqual(h2h["codex"]["median_duration_minutes"], 60)
+        # Clipped durations [60, 10] -> median 35. The pre-fix behavior
+        # (whole-session [60, 610] -> median 335) fails this assertion,
+        # so the test genuinely discriminates the fix.
+        self.assertEqual(h2h["codex"]["median_duration_minutes"], 35)
 
 
 if __name__ == "__main__":
