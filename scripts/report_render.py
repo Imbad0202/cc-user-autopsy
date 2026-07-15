@@ -2867,6 +2867,7 @@ def render(
     try_this_md: str = "",
     case_study_md: str = "",
     ledger_narration_md: str = "",
+    history_entries: list = None,
 ) -> str:
     """Render the full HTML report and return it as a string.
 
@@ -2884,6 +2885,8 @@ def render(
     category_map:   Optional category override dict (from --public-projects).
     ledger_narration_md: Markdown with # opening / # output-ledger / # team-ledger
                     books (SELF only; written by the skill in Step 3).
+    history_entries: Trend snapshots from read_history_snapshots() (SELF trend
+                    ledger; ignored for HR).
     """
     pr_html = md_to_html(peer_review_md)
 

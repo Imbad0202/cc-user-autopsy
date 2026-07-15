@@ -177,6 +177,14 @@ for dim, metrics in scores.items():
   earned-only; the JSON keeps unearned items so the standard is auditable.
 - No existing fields changed or removed.
 
+## 2026-07-15 — additive: snapshot `overall_avg` + populated `badges` (V5 Phase 3)
+
+- `autopsy-history.jsonl` snapshot lines gain `overall_avg` (float or null:
+  `scores._overall.avg` at snapshot time). Lines from before this change
+  lack the key — readers fall back to the mean of the per-dim `scores` map.
+- The snapshot `badges` field (present since Phase 1, always `[]`) is now
+  populated with **earned badge ids** (list of strings). Shape unchanged.
+
 ---
 
 *Maintained alongside `scripts/aggregate.py`. When adding, deprecating, or removing fields, update this file in the same commit.*

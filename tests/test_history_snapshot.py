@@ -7,6 +7,7 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_DIR / "scripts"))
 from build_html import append_history_snapshot  # noqa: E402
+from build_html import read_history_snapshots  # noqa: E402
 
 ANALYSIS = {
     "meta": {"total_sessions": 12},
@@ -109,6 +110,69 @@ class SnapshotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             hist = Path(td) / "autopsy-history.jsonl"
             append_history_snapshot(hist, malformed, "self")  # must not raise
+
+
+ANALYSIS_WITH_BADGES = {
+    "meta": {"total_sessions": 12},
+    "scores": {"D1_delegation": {"score": 7},
+               "_overall": {"avg": 6.1, "dimensions_scored": 9,
+                            "dimensions_total": 9}},
+    "ledger": {"schema_version": 1,
+               "output": {"git_commits": 9, "git_pushes": 4,
+                          "sessions_with_commits": 5},
+               "sources_detected": ["claude"]},
+    "badges": {"schema_version": 1, "standard_version": "v1",
+               "items": [
+                   {"id": "delegation", "earned": True, "n": 20,
+                    "metrics": {}, "thresholds": {}},
+                   {"id": "root_cause", "earned": False, "n": 40,
+                    "metrics": {}, "thresholds": {}},
+               ]},
+}
+
+
+class SnapshotBadgeTests(unittest.TestCase):
+    def test_snapshot_records_earned_badge_ids_and_overall(self):
+        with tempfile.TemporaryDirectory() as td:
+            hist = Path(td) / "h.jsonl"
+            append_history_snapshot(hist, ANALYSIS_WITH_BADGES, "self")
+            entry = json.loads(hist.read_text().strip())
+            self.assertEqual(entry["badges"], ["delegation"])
+            self.assertEqual(entry["overall_avg"], 6.1)
+
+    def test_snapshot_without_badges_block_is_empty_list(self):
+        with tempfile.TemporaryDirectory() as td:
+            hist = Path(td) / "h.jsonl"
+            append_history_snapshot(hist, ANALYSIS, "self")
+            entry = json.loads(hist.read_text().strip())
+            self.assertEqual(entry["badges"], [])
+
+
+class ReadHistoryTests(unittest.TestCase):
+    def test_reads_sorted_skips_corrupt_dedupes_by_date(self):
+        with tempfile.TemporaryDirectory() as td:
+            hist = Path(td) / "h.jsonl"
+            lines = [
+                json.dumps({"date": "2026-07-01", "schema_version": 1,
+                            "ledger": {"git_commits": 1}}),
+                "{not json",
+                json.dumps({"no_date_key": True}),
+                json.dumps({"date": "2026-05-01", "schema_version": 1}),
+                json.dumps({"date": "not-a-date", "schema_version": 1}),
+                # same-date rerun: last line must win
+                json.dumps({"date": "2026-07-01", "schema_version": 1,
+                            "ledger": {"git_commits": 2}}),
+            ]
+            hist.write_text("\n".join(lines) + "\n")
+            entries = read_history_snapshots(hist)
+            self.assertEqual([e["date"] for e in entries],
+                             ["2026-05-01", "2026-07-01"])
+            self.assertEqual(entries[1]["ledger"]["git_commits"], 2)
+
+    def test_missing_file_returns_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(
+                read_history_snapshots(Path(td) / "nope.jsonl"), [])
 
 
 if __name__ == "__main__":

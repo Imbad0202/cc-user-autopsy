@@ -80,11 +80,18 @@ def append_history_snapshot(history_path, analysis, audience):
                     "weekly_tokens": item.get("weekly_tokens"),
                     "occurrences": item.get("occurrences"),
                 })
+        badges_block = analysis.get("badges") or {}
+        earned = [b.get("id") for b in (badges_block.get("items") or [])
+                  if isinstance(b, dict) and b.get("earned") and b.get("id")]
+        overall_avg = ((analysis.get("scores") or {}).get("_overall") or {}).get("avg")
         entry = {
             "date": date.today().isoformat(),
             "schema_version": 1,
             "scores": scores,
-            "badges": [],
+            # additive since Phase 3: mean of scored dims at snapshot time —
+            # older lines lack it; readers fall back to mean(scores.values()).
+            "overall_avg": overall_avg,
+            "badges": earned,
             "ledger": {
                 "git_commits": (ledger.get("output") or {}).get("git_commits"),
                 "sessions": (analysis.get("meta") or {}).get("total_sessions"),
@@ -100,6 +107,44 @@ def append_history_snapshot(history_path, analysis, audience):
         # spec: append failure warns, never fails the build
         print(f"warning: could not append history snapshot: {exc}",
               file=sys.stderr)
+
+
+def read_history_snapshots(history_path):
+    """Load trend snapshots for the trend ledger (Phase 3).
+
+    Tolerates corrupt lines (spec §7: skip on read). Entries are deduped
+    by date — the LAST line for a given date wins, so re-running a report
+    the same day doesn't fake trend progress — and returned sorted
+    ascending by date. Entries without a parseable ISO date are skipped.
+    """
+    p = Path(history_path).expanduser()
+    if not p.exists():
+        return []
+    by_date = {}
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"warn: could not read history file: {exc}", file=sys.stderr)
+        return []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        d = entry.get("date")
+        if not isinstance(d, str):
+            continue
+        try:
+            date.fromisoformat(d)
+        except ValueError:
+            continue
+        by_date[d] = entry
+    return [by_date[d] for d in sorted(by_date)]
 
 
 def _load_narrative(locale: str):
@@ -221,6 +266,10 @@ def main():
 
     narrative = _load_narrative(args.locale)
 
+    # Read before append_history_snapshot() runs below, so "last run" in the
+    # report is genuinely the previous build, not this one.
+    history_entries = read_history_snapshots(Path(args.history_file))
+
     html_out = report_render.render(
         analysis=data,
         samples_data=samples,
@@ -235,6 +284,7 @@ def main():
         try_this_md=try_this_md,
         case_study_md=case_study_md,
         ledger_narration_md=ledger_narration_md,
+        history_entries=history_entries,
     )
 
     out = Path(args.output).expanduser()
