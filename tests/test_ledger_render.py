@@ -46,7 +46,7 @@ class NarrationParseTests(unittest.TestCase):
     def test_missing_sections_empty(self):
         d = _parse_ledger_narration("")
         self.assertEqual(d, {"opening": "", "output-ledger": "", "team-ledger": "",
-                             "leak-ledger": ""})
+                             "leak-ledger": "", "trend-ledger": ""})
 
     def test_parses_leak_ledger_book(self):
         md = ("# opening\nOne sentence.\n"

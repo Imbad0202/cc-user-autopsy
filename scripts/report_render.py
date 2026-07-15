@@ -10,6 +10,7 @@ import html
 import json
 import re
 import string
+from datetime import date, timedelta
 from itertools import count
 from pathlib import Path
 from urllib.parse import urlparse
@@ -307,10 +308,10 @@ def _parse_ledger_narration(md: str) -> dict:
     """Split an LLM-authored ledger narration markdown file on `^# ` headings.
 
     Returns {"opening": str, "output-ledger": str, "team-ledger": str,
-    "leak-ledger": str}; missing sections default to "".
+    "leak-ledger": str, "trend-ledger": str}; missing sections default to "".
     """
     books = {"opening": "", "output-ledger": "", "team-ledger": "",
-             "leak-ledger": ""}
+             "leak-ledger": "", "trend-ledger": ""}
     current = None
     buf = []
     for line in (md or "").splitlines():
@@ -346,13 +347,14 @@ def _rest_lines(text):
     return "\n".join(out).strip()
 
 
-def _build_opening_band(ledger, narration, locale="en", include_leak_finding=True):
+def _build_opening_band(ledger, narration, locale="en", include_leak_finding=True,
+                        include_trend_finding=False):
     """SELF-only opening band: kicker + LLM-written opening sentence, plus a
     numbered-finding list built from the output-ledger / team-ledger /
-    leak-ledger opener claims. Never fabricates prose — an empty narration
-    renders numbers-only. Finding numbers only increment for books that
-    actually have a first line, so a missing leak-ledger book leaves the
-    list at two findings rather than skipping a number.
+    leak-ledger / trend-ledger opener claims. Never fabricates prose — an
+    empty narration renders numbers-only. Finding numbers only increment for
+    books that actually have a first line, so a missing leak-ledger book
+    leaves the list at two findings rather than skipping a number.
 
     include_leak_finding=False suppresses the leak-ledger opener claim even
     when the narration has one: the leak section itself can be gated off
@@ -360,12 +362,18 @@ def _build_opening_band(ledger, narration, locale="en", include_leak_finding=Tru
     narration still contains a "# leak-ledger" book with an opener line —
     rendering that line would assert a leak the report's own leak section
     doesn't support. Output/team opener findings are unaffected.
+
+    include_trend_finding follows the same never-fabricate rule: the trend
+    claim only renders when the trend section itself is unlocked (>= 3
+    history snapshots), defaulting to False since most runs are locked.
     """
     opening = _first_line(narration.get("opening", ""))
     findings = []
     n = 0
-    for book in ("output-ledger", "team-ledger", "leak-ledger"):
+    for book in ("output-ledger", "team-ledger", "leak-ledger", "trend-ledger"):
         if book == "leak-ledger" and not include_leak_finding:
+            continue
+        if book == "trend-ledger" and not include_trend_finding:
             continue
         claim = _first_line(narration.get(book, ""))
         if claim:
@@ -787,6 +795,193 @@ def _build_leak_ledger(ledger, blind_spots, narration, locale, exhibit_no):
                    + esc(t(locale, "ledger_secondary_findings")) + "</h3><ul>"
                    + "".join(f"<li>{esc(x)}</li>" for x in sec) + "</ul></div>")
     out.append("</section>")
+    return "".join(out)
+
+
+# Trend ledger (Phase 3, spec §3 book 4). Unlock floor is a spec §13
+# default, independent of every other gate constant in this file.
+_TREND_MIN_SNAPSHOTS = 3
+_TREND_REF_TARGET_DAYS = 90
+
+
+def _sparkline_svg(values, width=120, height=28):
+    """Inline-SVG mini line chart (no JS, self-containment-safe).
+    Non-numeric entries are skipped; needs >= 2 numeric points."""
+    pts = [(i, v) for i, v in enumerate(values)
+           if isinstance(v, (int, float))]
+    if len(pts) < 2:
+        return ""
+    lo = min(v for _, v in pts)
+    hi = max(v for _, v in pts)
+    span = (hi - lo) or 1.0
+    n = len(values)
+    coords = []
+    for i, v in pts:
+        x = 2 + i * (width - 4) / max(n - 1, 1)
+        y = height - 3 - (v - lo) / span * (height - 6)
+        coords.append(f"{x:.1f},{y:.1f}")
+    return (f'<svg class="c-spark" width="{width}" height="{height}" '
+            f'viewBox="0 0 {width} {height}" role="img" aria-hidden="true">'
+            f'<polyline fill="none" stroke="currentColor" stroke-width="1.5" '
+            f'points="{" ".join(coords)}"/></svg>')
+
+
+def _entry_overall(entry):
+    """overall_avg (Phase 3 snapshots) with pre-Phase-3 fallback: mean of
+    the per-dim scores map."""
+    v = entry.get("overall_avg")
+    if isinstance(v, (int, float)):
+        return v
+    vals = [x for x in (entry.get("scores") or {}).values()
+            if isinstance(x, (int, float))]
+    return round(sum(vals) / len(vals), 2) if vals else None
+
+
+def _entry_leak_cost(entry):
+    """Weekly leak cost from a HISTORY snapshot. Snapshot ledger.leaks is
+    the COMPACT LIST shape ({type, weekly_cost_usd, ...} items, no
+    evidence) — NOT analysis-data.json's {window_weeks, items} dict (see
+    docs/SCHEMA-CHANGES.md). Tolerate the dict shape anyway."""
+    leaks = (entry.get("ledger") or {}).get("leaks")
+    if isinstance(leaks, dict):
+        leaks = leaks.get("items") or []
+    if not isinstance(leaks, list):
+        return None
+    vals = [it.get("weekly_cost_usd") for it in leaks
+            if isinstance(it, dict)
+            and isinstance(it.get("weekly_cost_usd"), (int, float))]
+    return round(sum(vals), 2) if vals else None
+
+
+def _current_trend_values(analysis):
+    """The same five metrics the snapshot records, taken from THIS run's
+    analysis dict (the snapshot for this run is appended after render)."""
+    ledger = analysis.get("ledger") or {}
+    items = ((ledger.get("leaks") or {}).get("items")) or []
+    cost_vals = [it.get("weekly_cost_usd") for it in items
+                 if isinstance(it, dict)
+                 and isinstance(it.get("weekly_cost_usd"), (int, float))]
+    badges = analysis.get("badges") or {}
+    earned = sum(1 for b in (badges.get("items") or [])
+                 if isinstance(b, dict) and b.get("earned"))
+    return {
+        "overall": ((analysis.get("scores") or {}).get("_overall") or {}).get("avg"),
+        "commits": (ledger.get("output") or {}).get("git_commits"),
+        "sessions": (analysis.get("meta") or {}).get("total_sessions"),
+        "leak_cost": round(sum(cost_vals), 2) if cost_vals else None,
+        "badges": earned,
+    }
+
+
+def _entry_trend_values(entry):
+    led = entry.get("ledger") or {}
+    badges = entry.get("badges")
+    return {
+        "overall": _entry_overall(entry),
+        "commits": led.get("git_commits"),
+        "sessions": led.get("sessions"),
+        "leak_cost": _entry_leak_cost(entry),
+        "badges": len(badges) if isinstance(badges, list) else None,
+    }
+
+
+def _pick_reference(entries):
+    """Among all snapshots except the newest, the one closest to
+    (newest date - 90 days). Callers guarantee len(entries) >= 3 and
+    ISO-parseable dates (read_history_snapshots enforces both)."""
+    newest = date.fromisoformat(entries[-1]["date"])
+    target = newest - timedelta(days=_TREND_REF_TARGET_DAYS)
+    return min(entries[:-1],
+               key=lambda e: abs((date.fromisoformat(e["date"]) - target).days))
+
+
+def _fmt_trend(key, v, locale):
+    if v is None:
+        return t(locale, "ledger_trend_na")
+    if key == "leak_cost":
+        return f"${v:,.2f}"
+    if key == "overall":
+        return f"{v:g}"
+    return fmt(v)
+
+
+def _build_trend_ledger(analysis, history_entries, narration, locale,
+                        exhibit_no, blind_spots):
+    """SELF-only trend ledger (spec §3 book 4). Locked (< 3 snapshots)
+    renders the spec-mandated one-line unlock note — the single allowed
+    exception to the no-placeholder suppression rule. Unlocked renders
+    the habit-drift opener (gated) + a this/last/reference comparison
+    exhibit with inline-SVG sparklines over all snapshots. Only counts,
+    dates, scores and dollar totals are read — never sids, prompt text,
+    or project names."""
+    entries = history_entries or []
+    if len(entries) < _TREND_MIN_SNAPSHOTS:
+        n_more = _TREND_MIN_SNAPSHOTS - len(entries)
+        return ('<section class="section" id="ledger-trend">'
+                f'<div class="c-kicker">{esc(t(locale, "ledger_trend_kicker"))}</div>'
+                f'<p class="c-trend-locked">'
+                f'{esc(t(locale, "ledger_trend_locked_template").format(n=n_more))}'
+                '</p></section>')
+
+    title = _first_line(narration.get("trend-ledger", "")) or t(
+        locale, "ledger_trend_title")
+    prose = _rest_lines(narration.get("trend-ledger", ""))
+
+    out = ['<section class="section" id="ledger-trend">',
+           f'<div class="c-kicker">{esc(t(locale, "ledger_trend_kicker"))}</div>',
+           f'<h2 class="c-action-title">{esc(title)}</h2>']
+
+    drift = (blind_spots or {}).get("habit_drift") or {}
+    if drift.get("gate_passed"):
+        m = drift.get("metrics") or {}
+        sentence = t(locale, "blindspot_drift_template").format(
+            weeks=m.get("weeks", 0),
+            early=fmt(m.get("early_median_len", 0)),
+            late=fmt(m.get("late_median_len", 0)),
+            early_rate=m.get("early_good_rate", 0),
+            late_rate=m.get("late_good_rate", 0))
+        out.append(_blindspot_callout(locale, "blindspot_drift_title", sentence))
+
+    if prose:
+        out.append(md_to_html(prose))
+
+    prev = entries[-1]
+    ref = _pick_reference(entries)
+    current = _current_trend_values(analysis)
+    rows_spec = [("overall", "ledger_trend_row_overall"),
+                 ("commits", "ledger_trend_row_commits"),
+                 ("sessions", "ledger_trend_row_sessions"),
+                 ("leak_cost", "ledger_trend_row_leak_cost"),
+                 ("badges", "ledger_trend_row_badges")]
+    prev_vals = _entry_trend_values(prev)
+    ref_vals = _entry_trend_values(ref)
+    all_series = [_entry_trend_values(e) for e in entries]
+
+    body = ['<table class="c-trend-table"><thead><tr>',
+            f'<th>{esc(t(locale, "ledger_trend_col_metric"))}</th>',
+            f'<th>{esc(t(locale, "ledger_trend_col_this"))}</th>',
+            f'<th>{esc(t(locale, "ledger_trend_col_prev_template").format(date=prev["date"]))}</th>',
+            f'<th>{esc(t(locale, "ledger_trend_col_ref_template").format(date=ref["date"]))}</th>',
+            f'<th>{esc(t(locale, "ledger_trend_col_spark"))}</th>',
+            '</tr></thead><tbody>']
+    for key, label_key in rows_spec:
+        series = [vals[key] for vals in all_series] + [current[key]]
+        # negative red is reserved for bad numbers: leak cost is the only
+        # inherently-bad row in this table.
+        neg = ' class="c-neg-num"' if key == "leak_cost" else ""
+        body.append(
+            f'<tr><td>{esc(t(locale, label_key))}</td>'
+            f'<td{neg}>{esc(_fmt_trend(key, current[key], locale))}</td>'
+            f'<td{neg}>{esc(_fmt_trend(key, prev_vals[key], locale))}</td>'
+            f'<td{neg}>{esc(_fmt_trend(key, ref_vals[key], locale))}</td>'
+            f'<td>{_sparkline_svg(series)}</td></tr>')
+    body.append('</tbody></table>')
+
+    out.append(_exhibit(next(exhibit_no),
+                        t(locale, "ledger_trend_exhibit_title"),
+                        "".join(body),
+                        t(locale, "ledger_source_trend"), locale))
+    out.append('</section>')
     return "".join(out)
 
 
@@ -2196,6 +2391,14 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .c-leak-fix { font-size: 12.5px; border-top: 1px solid rgba(128,128,128,0.25);
                 margin-top: 10px; padding-top: 8px; }
   .c-leak-fix span { font-weight: 700; }
+  .c-trend-locked { font-size: 13px; opacity: 0.75; margin: 6px 0 0; }
+  .c-trend-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .c-trend-table th, .c-trend-table td { text-align: right; padding: 6px 10px;
+                     border-bottom: 1px solid rgba(128,128,128,0.25); font-size: 13px; }
+  .c-trend-table th:first-child, .c-trend-table td:first-child { text-align: left; }
+  .c-trend-table thead th { font-size: 11px; letter-spacing: 0.05em;
+                     text-transform: uppercase; opacity: 0.7; }
+  .c-spark { color: var(--c-gold); vertical-align: middle; }
   .c-secondary { font-size: 13px; margin-top: 18px; }
   .c-secondary h3 { font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase;
                      opacity: 0.7; margin-bottom: 6px; }
@@ -3641,10 +3844,12 @@ def render(
         # two call sites can't drift (sunk_cost must be items-gated, not
         # bs2.gate_passed-gated — see that helper's docstring).
         include_leak_finding = _leak_section_available(blind_spots, ledger_block)
+        trend_unlocked = len(history_entries or []) >= _TREND_MIN_SNAPSHOTS
         if ledger_block:
             ledger_sections += _build_opening_band(
                 ledger_block, ledger_narration, locale,
-                include_leak_finding=include_leak_finding)
+                include_leak_finding=include_leak_finding,
+                include_trend_finding=trend_unlocked)
             ledger_sections += _build_output_ledger(
                 ledger_block, ledger_narration, locale, exhibit_no, blind_spots)
         if cross_block:
@@ -3653,6 +3858,9 @@ def render(
         if ledger_block:
             ledger_sections += _build_leak_ledger(
                 ledger_block, blind_spots, ledger_narration, locale, exhibit_no)
+            ledger_sections += _build_trend_ledger(
+                analysis, history_entries, ledger_narration, locale,
+                exhibit_no, blind_spots)
 
     # Assemble via string.Template to avoid CSS brace escaping
     subs = {
