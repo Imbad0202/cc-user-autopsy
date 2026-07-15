@@ -215,9 +215,16 @@ def main() -> None:
     hr_html = output_path.read_text()
     assert "<img src=x onerror=alert(1)>" not in hr_html
     assert "\\u003cimg src=x onerror=alert(1)" not in hr_html
-    assert "Private project" in hr_html
     assert "javascript:alert" not in hr_html
     assert 'href="#"' in hr_html
+
+    # --- Phase 3 recruiter rebuild invariants ---
+    assert 'id="hr-output"' in hr_html, "HR build missing output ledger"
+    assert 'id="scores"' not in hr_html, "HR must not render the scoring grid"
+    assert 'id="peer-review-section"' not in hr_html, "HR must not render peer review"
+    assert 'id="trends"' not in hr_html, "HR must not render trend charts"
+    assert "legacy-migration" not in hr_html, (
+        "non-allowlisted demo project name leaked into HR output")
 
     # --- V5 ledger: SELF renders the exhibit skeleton, HR must not ---
     self_html = html

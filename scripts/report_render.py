@@ -985,6 +985,134 @@ def _build_trend_ledger(analysis, history_entries, narration, locale,
     return "".join(out)
 
 
+# Badge layer (Phase 3, spec §4) — external versions only. Wording is
+# fixed locale template text (spec §2 rule 6); earned-only; zero-earned
+# suppresses the whole section (never render "failed").
+_BADGE_TEMPLATE_ARGS = {
+    "delegation": lambda m, th, n: {
+        "ta": fmt(m.get("ta_rate_pct")), "bar_ta": fmt(th.get("ta_rate_pct")),
+        "good": fmt(m.get("good_rate_with_ta_pct")),
+        "bar_good": fmt(th.get("good_rate_with_ta_pct"))},
+    "root_cause": lambda m, th, n: {
+        "pct": fmt(m.get("iter_buggy_pct")),
+        "bar": fmt(th.get("max_iter_buggy_pct"))},
+    "tool_breadth": lambda m, th, n: {
+        "mcp": fmt(m.get("mcp_rate_pct")), "bar_mcp": fmt(th.get("mcp_rate_pct")),
+        "top3": fmt(m.get("top3_share_pct")),
+        "bar_top3": fmt(th.get("max_top3_share_pct"))},
+    "token_efficiency": lambda m, th, n: {
+        "ratio": fmt(m.get("ratio")), "bar_ratio": fmt(th.get("max_ratio")),
+        "cache": fmt(m.get("cache_hit_pct")),
+        "bar_cache": fmt(th.get("min_cache_hit_pct"))},
+    "shipping_cadence": lambda m, th, n: {
+        "per_week": fmt(m.get("commits_per_week")),
+        "bar": fmt(th.get("commits_per_week")), "n": fmt(n)},
+    "cross_tool_orchestration": lambda m, th, n: {
+        "hours": fmt(m.get("hours_multi_source")),
+        "days": fmt(m.get("common_window_days")),
+        "bar": fmt(th.get("min_multi_hours"))},
+}
+
+
+def _hr_section_wrap(section_id, heading_key, subtitle_key, method_key,
+                     body_html, locale):
+    """Shared skeleton for a recruiter-v1 top-level section: id + numberless
+    §-heading + subtitle + method line + body. Both _build_badges_section
+    and _build_hr_output_ledger render this same 4-part shape."""
+    return (
+        f'<section id="{section_id}">'
+        f'<h2 class="sec" data-num="">{t(locale, heading_key)}</h2>'
+        f'<h2 class="sec-title">{t(locale, subtitle_key)}</h2>'
+        f'<p class="method">{t(locale, method_key)}</p>'
+        f'{body_html}'
+        '</section>')
+
+
+def _build_badges_section(badges, window, locale):
+    """Earned badges for external versions. Evidence pointer is
+    privacy-safe by construction: sample size + window dates only."""
+    items = [b for b in ((badges or {}).get("items") or [])
+             if isinstance(b, dict) and b.get("earned")]
+    if not items:
+        return ""
+    win = window or {}
+    cards = []
+    for b in items:
+        bid = b.get("id")
+        args_fn = _BADGE_TEMPLATE_ARGS.get(bid)
+        if args_fn is None:
+            continue
+        name = t(locale, f"badge_{bid}_name")
+        criteria = t(locale, f"badge_{bid}_criteria").format(
+            **args_fn(b.get("metrics") or {}, b.get("thresholds") or {},
+                      b.get("n", 0)))
+        evidence = t(locale, "badge_evidence_template").format(
+            n=fmt(b.get("n", 0)), start=win.get("start") or "?",
+            end=win.get("end") or "?")
+        cards.append(
+            '<div class="c-badge">'
+            f'<div class="c-badge-name">{esc(name)}</div>'
+            f'<div class="c-badge-criteria">{esc(criteria)}</div>'
+            f'<div class="c-badge-evidence">{esc(evidence)}</div>'
+            '</div>')
+    if not cards:
+        return ""
+    return _hr_section_wrap(
+        "badges", "hr_badges_h", "hr_badges_subtitle", "hr_badges_method",
+        f'<div class="c-badge-grid">{"".join(cards)}</div>', locale)
+
+
+def _build_hr_output_ledger(ledger, shipped, artifacts_list, is_public,
+                            locale):
+    """Recruiter output ledger (spec §4): ledger.output counters +
+    allowlist-filtered shipped work + public artifact links. Non-public
+    items are excluded entirely, not shown as redacted filler."""
+    out = (ledger or {}).get("output") or {}
+    counters = (
+        '<div class="metrics">'
+        f'<div class="metric"><div class="n">{fmt(out.get("git_commits") or 0)}</div>'
+        f'<div class="lbl">{t(locale, "hr_output_commits")}</div></div>'
+        f'<div class="metric"><div class="n">{fmt(out.get("git_pushes") or 0)}</div>'
+        f'<div class="lbl">{t(locale, "hr_output_pushes")}</div></div>'
+        f'<div class="metric"><div class="n">{fmt(out.get("sessions_with_commits") or 0)}</div>'
+        f'<div class="lbl">{t(locale, "hr_output_sessions_with_commits")}</div></div>'
+        '</div>')
+
+    # Codex v3 (V4 HR review): at most 3 PUBLIC items. Redacted items add
+    # near-zero signal for a hiring manager and read as padding, so a
+    # non-public item is dropped entirely rather than shown as filler.
+    MAX_SHIPPED_ITEMS = 3
+    shipped_items = ""
+    for item in [s for s in (shipped or []) if is_public(s["project"])][:MAX_SHIPPED_ITEMS]:
+        dur_hr = item["project_duration_min"] / 60
+        proj_sub = t(locale, "hr_output_proj_sub_template").format(
+            sessions=item["project_sessions"], hours=f'{dur_hr:.0f}')
+        shipped_items += (
+            '<div class="shipped-item"><div>'
+            f'<div class="proj">{esc(item["project"])}</div>'
+            f'<div class="proj-sub">{esc(proj_sub)}</div>'
+            '</div>'
+            f'<div class="desc">{esc(item["summary"])}</div>'
+            f'<div class="stats">{item["project_commits"]} {t(locale, "hr_output_commits_label")}<br>'
+            f'{fmt(item["total_tokens"])} {t(locale, "hr_output_tok_label")}</div></div>')
+    shipped_html = (f'<div class="shipped-list">{shipped_items}</div>'
+                    if shipped_items else "")
+
+    artifact_rows = ""
+    for a in (artifacts_list or []):
+        safe_url = sanitize_url(str(a.get("url", "")).strip())
+        artifact_rows += (
+            '<div class="artifact-row"><div>'
+            f'<div class="name">{esc(a.get("name", "(unnamed)"))}</div>'
+            f'<div class="desc">{esc(a.get("description", ""))}</div></div>'
+            f'<div class="link"><a rel="noopener noreferrer" href="{esc(safe_url)}">'
+            f'{esc(display_url(safe_url))}</a></div></div>')
+
+    return _hr_section_wrap(
+        "hr-output", "hr_output_h", "hr_output_subtitle", "hr_output_method",
+        f'{counters}{shipped_html}{artifact_rows}', locale)
+
+
 def sanitize_url(url: str, *, allow_mailto: bool = False) -> str:
     if not url:
         return "#"
@@ -1170,7 +1298,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
     /* --- Semantic aliases (design intent — add new ones as components need them).
        --card-padding / --card-radius were considered but removed pending a concrete
-       consumer; .profile-card currently uses primitives directly. --- */
+       consumer. --- */
     --section-gap: var(--space-15);
     --tag-padding-y: var(--space-1);
     --tag-padding-x: var(--space-3);
@@ -1352,97 +1480,7 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .plain-intro li { margin-bottom: 6px; }
   .plain-intro b { color: var(--accent); }
 
-  .zone-map {
-    border: 1px solid var(--rule);
-    padding: 24px 28px;
-    background: var(--paper);
-  }
-  .zone-map-h h3 {
-    font-family: var(--serif);
-    font-size: 19px;
-    margin: 0 0 6px 0;
-  }
-  .zone-map-sub {
-    font-size: 13.5px;
-    color: var(--ink-muted);
-    margin: 0 0 22px 0;
-    line-height: 1.5;
-  }
-  .zone-grid {
-    display: grid;
-    grid-template-columns: 1fr 28px 1fr 28px 1fr 28px 1fr;
-    gap: 0;
-    align-items: stretch;
-  }
-  .zone-card {
-    border: 1px solid var(--rule);
-    padding: 16px 14px 14px 14px;
-    background: rgba(255, 250, 240, 0.35);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .zone-card.zone-when { background: rgba(232, 218, 195, 0.35); }
-  .zone-card.zone-how { background: rgba(220, 232, 218, 0.35); }
-  .zone-card.zone-what { background: rgba(232, 218, 222, 0.40); }
-  .zone-card.zone-cost { background: rgba(218, 222, 232, 0.35); }
-  .zone-label {
-    font-family: var(--mono);
-    font-size: 11px;
-    letter-spacing: 0.18em;
-    color: var(--accent);
-    text-transform: uppercase;
-  }
-  html[lang="zh-Hant"] .zone-label {
-    letter-spacing: 0.05em;
-    font-size: 13px;
-    text-transform: none;
-    font-family: var(--serif);
-    font-weight: 600;
-  }
-  .zone-desc {
-    font-size: 13.5px;
-    line-height: 1.45;
-    color: var(--ink);
-  }
-  .zone-dims {
-    font-size: 11.5px;
-    color: var(--ink-muted);
-    margin-top: auto;
-    font-family: var(--mono);
-    line-height: 1.4;
-  }
-  html[lang="zh-Hant"] .zone-dims {
-    font-family: var(--serif);
-    font-size: 12.5px;
-  }
-  .zone-arrow {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--accent);
-    font-size: 22px;
-    font-weight: 300;
-  }
-  @media (max-width: 800px) {
-    .zone-grid {
-      grid-template-columns: 1fr;
-    }
-    .zone-arrow {
-      transform: rotate(90deg);
-      padding: 8px 0;
-    }
-  }
-  .zone-caption {
-    margin: 18px 0 0 0;
-    font-size: 13px;
-    line-height: 1.55;
-    color: var(--ink-muted);
-    border-top: 1px solid var(--rule);
-    padding-top: 14px;
-  }
-
-  /* SELF reading guide — replaces zone-map visual for the diagnostic audience */
+  /* SELF reading guide */
   .reading-guide {
     border-left: 3px solid var(--rule);
     background: transparent;
@@ -1501,18 +1539,6 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   }
   .try-this-body strong {
     color: var(--accent);
-  }
-
-  /* HR self-awareness caveat (replaces 5 collapsed dimensions) */
-  .self-awareness-caveat {
-    margin-top: 24px;
-    padding: 14px 18px;
-    background: rgba(232, 218, 222, 0.30);
-    border-left: 3px solid var(--accent);
-    font-size: 13.5px;
-    line-height: 1.6;
-    font-style: italic;
-    color: var(--ink-muted);
   }
 
   /* Method as footer (BOTH, smaller typography) */
@@ -1950,115 +1976,6 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
   .identity-sig b { color: var(--ink); font-family: var(--serif); font-size: 13px; letter-spacing: -0.01em; text-transform: none; font-weight: 500; }
 
   /* ---- HR-facing additions ---- */
-  .profile-card {
-    margin: var(--space-12) 0 48px 0;
-    padding: var(--space-15) 34px 34px 34px;
-    background: linear-gradient(135deg, rgba(255,250,240,0.8) 0%, rgba(236,229,213,0.4) 100%);
-    border: 1px solid var(--rule);
-    border-left: 4px solid var(--accent);
-    position: relative;
-  }
-  .profile-card::before {
-    content: "AT A GLANCE";
-    position: absolute;
-    top: -10px; left: var(--space-15);
-    background: var(--paper);
-    padding: 0 var(--space-5);
-    font-family: var(--mono);
-    font-size: 10.5px;
-    letter-spacing: 0.26em;
-    color: var(--accent);
-  }
-  .profile-lede {
-    font-family: var(--serif);
-    font-variation-settings: "opsz" 36, "wght" 400;
-    font-size: 22px;
-    line-height: 1.42;
-    letter-spacing: -0.012em;
-    color: var(--ink);
-    margin: 0 0 var(--space-11) 0;
-  }
-  .profile-lede em {
-    color: var(--accent);
-    font-style: italic;
-    font-weight: 500;
-  }
-  .profile-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 0;
-    margin-top: var(--space-10);
-    border-top: 1px solid var(--rule);
-    border-left: 1px solid var(--rule);
-  }
-  @media (max-width: 640px) { .profile-grid { grid-template-columns: repeat(2, 1fr); } }
-  .profile-cell {
-    border-right: 1px solid var(--rule);
-    border-bottom: 1px solid var(--rule);
-    padding: var(--space-7) var(--space-8) var(--space-8) var(--space-8);
-  }
-  .profile-cell .k {
-    font-family: var(--mono);
-    font-size: 9.5px;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--ink-muted);
-    margin-bottom: var(--space-3);
-  }
-  .profile-cell .v {
-    font-family: var(--serif);
-    font-variation-settings: "opsz" 72, "wght" 400;
-    font-size: var(--text-2xl);
-    line-height: 1.1;
-    letter-spacing: -0.02em;
-    color: var(--ink);
-  }
-  .profile-cell .sub {
-    font-family: var(--sans);
-    font-size: 12px;
-    color: var(--ink-muted);
-    margin-top: var(--space-1);
-  }
-
-  /* How to read */
-  details.how-to-read {
-    margin: 0 0 40px 0;
-    border: 1px dashed var(--rule);
-    padding: 12px 18px;
-    background: transparent;
-  }
-  details.how-to-read summary {
-    cursor: pointer;
-    font-family: var(--mono);
-    font-size: 11.5px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--ink-muted);
-    list-style: none;
-  }
-  details.how-to-read summary::-webkit-details-marker { display: none; }
-  details.how-to-read summary::before {
-    content: "+ ";
-    color: var(--accent);
-  }
-  details.how-to-read[open] summary::before { content: "− "; }
-  details.how-to-read[open] { padding-bottom: 18px; }
-  details.how-to-read .how-body {
-    margin-top: 14px;
-    font-family: var(--sans);
-    font-size: 14px;
-    line-height: 1.6;
-    color: var(--ink-soft);
-  }
-  details.how-to-read dl { margin: 10px 0; }
-  details.how-to-read dt {
-    font-family: var(--mono);
-    font-size: 11.5px;
-    letter-spacing: 0.06em;
-    color: var(--accent);
-    margin-top: 10px;
-  }
-  details.how-to-read dd { margin: 2px 0 0 0; }
 
   /* Shipped artifacts */
   .shipped-list { margin: 24px 0 0 0; border-top: 2px solid var(--ink); }
@@ -2404,6 +2321,11 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
                      opacity: 0.7; margin-bottom: 6px; }
   .c-secondary ul { margin: 0; padding-left: 20px; }
   .c-secondary li { margin: 4px 0; }
+  .c-badge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin-top: 14px; }
+  .c-badge { border: 1px solid rgba(128,128,128,0.3); border-top: 3px solid #B08A2E; padding: 12px 14px; }
+  .c-badge-name { font-weight: 700; font-size: 15px; color: #7E6119; }
+  .c-badge-criteria { font-size: 12.5px; margin-top: 6px; }
+  .c-badge-evidence { font-size: 11.5px; opacity: 0.65; margin-top: 8px; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -2425,6 +2347,8 @@ $ledger_sections
 $identity_block
 
 $hero_block
+
+$badges_section
 
 $profile_section
 
@@ -3101,6 +3025,8 @@ def render(
     redact = (audience == "hr")
     label_project = lambda name: display_project(name, redact, public_set, category_map, locale)
     is_public = lambda name: (not redact) or _matches_allowlist(name, public_set)
+    badges_data = analysis.get("badges") or {}
+    ledger_data = analysis.get("ledger") or {}
 
     meta = analysis["meta"]
     agg = analysis["aggregates"]
@@ -3150,16 +3076,11 @@ def render(
         plen_good_pct.append(round(100 * good / tot, 1) if tot else 0)
         plen_n.append(tot)
 
-    # Score rows. HR audience shows only 4 candidate-relevant dimensions
-    # (Codex v3 review). The other 5 collapse into one self-awareness caveat.
-    if audience == "hr":
-        dim_titles = {
-            "D1_delegation": t(locale, "score_d1"),
-            "D2_root_cause": t(locale, "score_d2"),
-            "D6_tool_breadth": t(locale, "score_d6"),
-            "D9_token_efficiency": t(locale, "score_d9"),
-        }
-    else:
+    # Score rows (SELF only — recruiter v1, spec §4, drops the scoring grid
+    # entirely in favor of earned badges, so this is never consumed by the
+    # HR branch's diagnosis_block).
+    score_rows = ""
+    if audience != "hr":
         dim_titles = {
             "D1_delegation": t(locale, "score_d1"),
             "D2_root_cause": t(locale, "score_d2"),
@@ -3171,29 +3092,28 @@ def render(
             "D8_time_mgmt": t(locale, "score_d8"),
             "D9_token_efficiency": t(locale, "score_d9"),
         }
-    score_rows = ""
-    for key, title in dim_titles.items():
-        s = scores.get(key, {})
-        sc = s.get("score")
-        band = score_band(sc)
-        display = f'<span class="num">{sc}</span><span class="out">/ 10</span>' if sc is not None else 'n/a'
-        dim_label = f"{key.split('_', 1)[0]} · {key.split('_', 1)[1].replace('_', ' ')}"
-        dim_key = key.split('_', 1)[0].lower()  # "D1_delegation" -> "d1"
-        exp_fn = getattr(narrative, f"{dim_key}_explanation", None)
-        pat_fn = getattr(narrative, f"{dim_key}_pattern", None)
-        if exp_fn is None:
-            raise AttributeError(
-                f"narrative module {narrative.__name__} missing {dim_key}_explanation"
-            )
-        if pat_fn is None:
-            raise AttributeError(
-                f"narrative module {narrative.__name__} missing {dim_key}_pattern"
-            )
-        reason = exp_fn(s) if sc is not None else s.get("reason", "")
-        pattern_html = ""
-        if s.get("pattern_emit"):
-            pattern_html = f'\n    <p class="pattern">{esc(pat_fn(s))}</p>'
-        score_rows += f'''<div class="score-row {band}">
+        for key, title in dim_titles.items():
+            s = scores.get(key, {})
+            sc = s.get("score")
+            band = score_band(sc)
+            display = f'<span class="num">{sc}</span><span class="out">/ 10</span>' if sc is not None else 'n/a'
+            dim_label = f"{key.split('_', 1)[0]} · {key.split('_', 1)[1].replace('_', ' ')}"
+            dim_key = key.split('_', 1)[0].lower()  # "D1_delegation" -> "d1"
+            exp_fn = getattr(narrative, f"{dim_key}_explanation", None)
+            pat_fn = getattr(narrative, f"{dim_key}_pattern", None)
+            if exp_fn is None:
+                raise AttributeError(
+                    f"narrative module {narrative.__name__} missing {dim_key}_explanation"
+                )
+            if pat_fn is None:
+                raise AttributeError(
+                    f"narrative module {narrative.__name__} missing {dim_key}_pattern"
+                )
+            reason = exp_fn(s) if sc is not None else s.get("reason", "")
+            pattern_html = ""
+            if s.get("pattern_emit"):
+                pattern_html = f'\n    <p class="pattern">{esc(pat_fn(s))}</p>'
+            score_rows += f'''<div class="score-row {band}">
       <div class="dim">{esc(dim_label)}</div>
       <div class="body">
     <div class="h">{esc(title)}</div>
@@ -3406,195 +3326,39 @@ def render(
             identity_block = f'<div class="identity-sig">Report subject &nbsp;·&nbsp; {" &nbsp;·&nbsp; ".join(sig_parts)}</div>'
 
     # -------- HR-facing blocks --------
-    profile = agg.get("profile_summary", {})
     shipped = agg.get("shipped_artifacts", [])
-    efficiency = agg.get("efficiency", {})
-    scores_overall = scores.get("_overall", {}).get("avg")
-
-    # weakest dimension (excluding _overall and nulls)
-    weakest = None
-    for k, v in scores.items():
-        if k.startswith("_"):
-            continue
-        sc = v.get("score")
-        if sc is None:
-            continue
-        if weakest is None or sc < weakest[1]:
-            weakest = (k, sc, v.get("explanation", ""))
-
-    # Generate profile lede (auto, plain English)
-    if profile:
-        lede_parts = [
-            f"<em>{profile['scale_tier'].capitalize()}</em> Claude Code user — "
-            f"<strong>{profile['total_sessions']}</strong> sessions totalling "
-            f"<strong>{profile['total_duration_hr']:.0f} hours</strong> across "
-            f"<strong>{profile['project_count_active']} active projects</strong> "
-            f"over {profile['date_span_days']} days."
-        ]
-        if profile["ta_pct"] >= 30:
-            lede_parts.append(
-                f" Strongest pattern: parallel work through Task agent "
-                f"(<strong>{profile['ta_pct']:.0f}%</strong> of sessions)."
-            )
-        if weakest and weakest[1] < 6:
-            weakest_title = weakest[0].split("_", 1)[1].replace("_", " ")
-            lede_parts.append(
-                f" Honest weakest area: <em>{esc(weakest_title)}</em> ({weakest[1]}/10)."
-            )
-        if profile["specialty"]:
-            lede_parts.append(f" Specialty: {esc(profile['specialty'])}.")
-        profile_lede_html = "".join(lede_parts)
-    else:
-        profile_lede_html = ""
 
     # Build hero + profile section depending on audience
     if audience == "hr":
+        # Recruiter v1 (spec §4): identity letterhead -> hero -> earned
+        # badges -> output ledger -> case study -> scope disclosure.
+        # Everything else V4-HR (profile card, zone map, how-to-read,
+        # candidate-memo peer review, 4-signal scoring + self-awareness
+        # caveat, HR trends/growth charts, separate artifacts section) is
+        # removed — see task-4-brief.md spec §4 v1 scope.
         hero_block = (
             f'<h1 class="title">{t(locale, "hero_hr_title_line1")}<br>'
             f'<em>{t(locale, "hero_hr_title_line2_em")}</em></h1>\n'
             f'<p class="dek">{t(locale, "hero_hr_dek")}</p>'
         )
-        profile_section = f'''<div class="profile-card">
-      <div class="profile-lede">{profile_lede_html}</div>
-      <div class="profile-grid">
-    <div class="profile-cell">
-      <div class="k">{t(locale, "hr_profile_scale_label")}</div>
-      <div class="v">{fmt(profile.get("total_duration_hr", 0))}h</div>
-      <div class="sub">{profile.get("total_sessions", 0)} {t(locale, "hr_profile_sessions_unit")}</div>
-    </div>
-    <div class="profile-cell">
-      <div class="k">{t(locale, "hr_profile_velocity_label")}</div>
-      <div class="v">{efficiency.get("commits_per_hour", 0)}</div>
-      <div class="sub">{t(locale, "profile_sub_commits_per_hour")}</div>
-    </div>
-    <div class="profile-cell">
-      <div class="k">{t(locale, "hr_profile_parallel_label")}</div>
-      <div class="v">{profile.get("ta_pct", 0):.0f}%</div>
-      <div class="sub">{t(locale, "profile_sub_task_agent_adoption")}</div>
-    </div>
-    <div class="profile-cell">
-      <div class="k">{t(locale, "hr_profile_tool_breadth_label")}</div>
-      <div class="v">{profile.get("mcp_pct", 0):.0f}%</div>
-      <div class="sub">{t(locale, "profile_sub_mcp_sessions")}</div>
-    </div>
-    <div class="profile-cell">
-      <div class="k">{t(locale, "hr_profile_self_audit_label")}</div>
-      <div class="v">{scores_overall if scores_overall else "n/a"}<span style="font-size:14px;color:var(--ink-muted);"> / 10</span></div>
-      <div class="sub">{t(locale, "toc_hr_scores")}</div>
-    </div>
-    <div class="profile-cell">
-      <div class="k">{t(locale, "hr_profile_focus_label")}</div>
-      <div class="v" style="font-size:14.5px;line-height:1.3;">{esc(profile.get("specialty", "—"))}</div>
-      <div class="sub">{t(locale, "hr_profile_top_project_share").format(pct=f'{profile.get("top_project_share_pct", 0):.0f}')}</div>
-    </div>
-      </div>
-    </div>'''
+        profile_section = ""
+        how_to_read_section = ""
+        badges_section = _build_badges_section(
+            badges_data, ledger_data.get("window"), locale)
+        shipped_section = _build_hr_output_ledger(
+            ledger_data, shipped, artifacts_list, is_public, locale)
+        artifacts_section = ""
 
-        # Shipped artifacts — Codex v3: HR shows AT MOST 3 PUBLIC items.
-        # Redacted items ("Private platform project") provide near-zero signal
-        # for a hiring manager and look like padding. If there are fewer than 3
-        # public items, show only what is public.
-        public_shipped = [item for item in shipped if is_public(item["project"])]
-        public_shipped = public_shipped[:3]
-        if public_shipped:
-            shipped_items = ""
-            for item in public_shipped:
-                raw_proj = item["project"]
-                dur_hr = item["project_duration_min"] / 60
-                proj_display = raw_proj
-                summary_display = item["summary"]
-                proj_sub = t(locale, "hr_shipped_proj_sub_template").format(
-                    sessions=item["project_sessions"],
-                    hours=f'{dur_hr:.0f}',
-                )
-                shipped_items += f'''<div class="shipped-item">
-      <div>
-    <div class="proj">{esc(proj_display)}</div>
-    <div class="proj-sub">{esc(proj_sub)}</div>
-      </div>
-      <div class="desc">{esc(summary_display)}</div>
-      <div class="stats">
-    {item["project_commits"]} {t(locale, "hr_shipped_commits_label")}<br>
-    {fmt(item["total_tokens"])} {t(locale, "hr_shipped_top_session_tok")}
-      </div>
-    </div>'''
-            if public_set:
-                privacy_note = " " + t(locale, "hr_shipped_privacy_note_allowlist").strip()
-            else:
-                privacy_note = " " + t(locale, "hr_shipped_privacy_note_anonymised").strip()
-            shipped_section = f'''<section id="shipped">
-      <h2 class="sec" data-num="§ HR-02">{t(locale, "hr_shipped_h")}</h2>
-      <h2 class="sec-title">{t(locale, "hr_shipped_subtitle")}</h2>
-      <p class="method">{t(locale, "hr_shipped_method")}{privacy_note}</p>
-      <div class="shipped-list">{shipped_items}</div>
-    </section>'''
-        else:
-            shipped_section = ""
-
-        # Public artifacts (from --artifacts JSON)
-        if artifacts_list:
-            artifact_rows = ""
-            for a in artifacts_list:
-                safe_url = sanitize_url(str(a.get("url", "")).strip())
-                artifact_rows += f'''<div class="artifact-row">
-      <div>
-    <div class="name">{esc(a.get("name", "(unnamed)"))}</div>
-    <div class="desc">{esc(a.get("description", ""))}</div>
-      </div>
-      <div class="link"><a rel="noopener noreferrer" href="{esc(safe_url)}">{esc(display_url(safe_url))}</a></div>
-    </div>'''
-            artifacts_section = f'''<section id="artifacts">
-      <h2 class="sec" data-num="§ HR-03">{t(locale, "hr_artifacts_h")}</h2>
-      <h2 class="sec-title">{t(locale, "hr_artifacts_subtitle")}</h2>
-      <p class="method">{t(locale, "hr_artifacts_method")}</p>
-      {artifact_rows}
-    </section>'''
-        else:
-            artifacts_section = ""
-
-        # How-to-read for HR
-        how_to_read_section = f'''<details class="how-to-read" open>
-    <summary>{t(locale, "how_to_read_summary")}</summary>
-    <div class="how-body">
-    <p>{t(locale, "how_to_read_intro")}</p>
-    <dl>
-    <dt>{t(locale, "how_to_read_dt_session")}</dt>
-    <dd>{t(locale, "how_to_read_dd_session")}</dd>
-    <dt>{t(locale, "how_to_read_dt_subagent")}</dt>
-    <dd>{t(locale, "how_to_read_dd_subagent")}</dd>
-    <dt>{t(locale, "how_to_read_dt_mcp")}</dt>
-    <dd>{t(locale, "how_to_read_dd_mcp")}</dd>
-    <dt>{t(locale, "how_to_read_dt_facet")}</dt>
-    <dd>{t(locale, "how_to_read_dd_facet")}</dd>
-    <dt>{t(locale, "how_to_read_dt_interrupt")}</dt>
-    <dd>{t(locale, "how_to_read_dd_interrupt")}</dd>
-    <dt>{t(locale, "how_to_read_key_relate")}</dt>
-    <dd>{t(locale, "how_to_read_val_relate")}</dd>
-    </dl>
-    </div>
-    </details>'''
-
-        # TOC — HR-ordered
-        shipped_toc = (
-            f'<a href="#shipped">{t(locale, "toc_hr_shipped")}</a>'
-            if shipped_section else ""
-        )
-        artifacts_toc = (
-            f'<a href="#artifacts">{t(locale, "hr_artifacts_h")}</a>'
-            if artifacts_section else ""
-        )
-        case_study_toc = (
-            f'<a href="#case-study">{t(locale, "toc_hr_case_study")}</a>'
-            if case_study_md else ""
-        )
+        # TOC — recruiter v1 order: badges -> output ledger -> case study -> method
+        badges_toc = (f'<a href="#badges">{t(locale, "toc_hr_badges")}</a>'
+                      if badges_section else "")
+        case_study_toc = (f'<a href="#case-study">{t(locale, "case_study_h")}</a>'
+                          if case_study_md else "")
         toc_links = (
-            shipped_toc
-            + artifacts_toc
-            + f'<a href="#peer-review-section">{t(locale, "toc_hr_peer_review")}</a>'
-            + f'<a href="#scores">{t(locale, "toc_hr_scores")}</a>'
+            badges_toc
+            + f'<a href="#hr-output">{t(locale, "toc_hr_output")}</a>'
             + case_study_toc
-            + f'<a href="#trends">{t(locale, "toc_hr_trends")}</a>'
-            + f'<a href="#method">{t(locale, "toc_hr_method")}</a>'
+            + f'<a href="#method">{t(locale, "hr_scope_h")}</a>'
         )
     else:
         # --- SELF audience (default, original layout) ---
@@ -3608,6 +3372,7 @@ def render(
             f'  {preliminary_warning}\n'
             f'</div>'
         )
+        badges_section = ""
         profile_section = ""
         shipped_section = ""
         artifacts_section = ""
@@ -3639,23 +3404,14 @@ def render(
     growth_ta = json_for_script([g["ta_rate"] for g in growth])
     growth_good = json_for_script([g["good_rate"] for g in growth])
 
-    # HR version hides Overview (§ 01) entirely — profile-card + activity
-    # panel cover the same ground without duplicating 8 more tiles and 3
-    # charts. Self audit keeps Overview as the unfiltered raw-numbers view.
+    # HR version (recruiter v1) renders no Overview / activity-panel block
+    # at all — spec §4 v1 scope is identity -> hero -> badges -> output
+    # ledger -> case study -> scope disclosure only. Self audit keeps
+    # Overview as the unfiltered raw-numbers view.
     activity_panel_html = _build_activity_panel(agg.get("activity", {}), locale=locale)
     if audience == "hr":
         overview_section = ""
-        # Drop the activity panel directly under the profile card so readers
-        # still see cache/models/cost — the most compelling scale evidence.
-        # Benchmark caveat sits between profile and activity panel.
-        caveat_line = (
-            f'<p class="benchmark-caveat" style="margin-top:24px">'
-            f'{t(locale, "benchmark_caveat")}</p>'
-        )
-        hr_activity_block = (
-            f'{caveat_line}<div style="margin-top:16px">{activity_panel_html}</div>'
-            if activity_panel_html else caveat_line
-        )
+        hr_activity_block = ""
     else:
         hr_activity_block = ""
         # SELF Usage Snapshot: merged overview + activity. Codex v2: the
@@ -3685,49 +3441,17 @@ def render(
       <div class="chart-box tall" data-fig="Fig. 03"><canvas id="projChart"></canvas></div>
     </section>'''
 
-    # -------- Plain-language intro + 4-zone relationship (audience-conditional) --------
-    # SELF audience: short reading-guide paragraph (the user already knows their workflow).
-    # HR audience: full visual zone-map (first-time reader needs orientation).
+    # -------- Plain-language intro + 4-zone relationship (SELF only) --------
+    # Recruiter v1 (spec §4) has no story-section / zone-map block at all.
     if audience == "hr":
-        zone_visual_html = f'''<div class="zone-map">
-    <div class="zone-map-h">
-      <h3>{t(locale, "section_relationships")}</h3>
-      <p class="zone-map-sub">{t(locale, "section_relationships_subtitle")}</p>
-    </div>
-    <div class="zone-grid">
-      <div class="zone-card zone-when">
-    <div class="zone-label">{t(locale, "plain_zone_when")}</div>
-    <div class="zone-desc">{t(locale, "plain_zone_when_desc")}</div>
-    <div class="zone-dims">{t(locale, "plain_zone_when_dims")}</div>
-      </div>
-      <div class="zone-arrow">→</div>
-      <div class="zone-card zone-how">
-    <div class="zone-label">{t(locale, "plain_zone_how")}</div>
-    <div class="zone-desc">{t(locale, "plain_zone_how_desc")}</div>
-    <div class="zone-dims">{t(locale, "plain_zone_how_dims")}</div>
-      </div>
-      <div class="zone-arrow">→</div>
-      <div class="zone-card zone-what">
-    <div class="zone-label">{t(locale, "plain_zone_what")}</div>
-    <div class="zone-desc">{t(locale, "plain_zone_what_desc")}</div>
-    <div class="zone-dims">{t(locale, "plain_zone_what_dims")}</div>
-      </div>
-      <div class="zone-arrow">→</div>
-      <div class="zone-card zone-cost">
-    <div class="zone-label">{t(locale, "plain_zone_cost")}</div>
-    <div class="zone-desc">{t(locale, "plain_zone_cost_desc")}</div>
-    <div class="zone-dims">{t(locale, "plain_zone_cost_dims")}</div>
-      </div>
-    </div>
-    <p class="zone-caption">{t(locale, "relationships_flow_caption")}</p>
-      </div>'''
+        plain_intro_block = ""
     else:
         zone_visual_html = f'''<div class="reading-guide">
     <h3 class="reading-guide-h">{t(locale, "self_reading_guide_h")}</h3>
     <p>{t(locale, "self_reading_guide_body")}</p>
       </div>'''
 
-    plain_intro_block = f'''<section id="story" class="story-section">
+        plain_intro_block = f'''<section id="story" class="story-section">
       <div class="plain-intro">
     <h3 class="plain-intro-h">{t(locale, "plain_intro_header")}</h3>
     {t(locale, "plain_intro_body")}
@@ -3755,8 +3479,10 @@ def render(
     # HR gets the redacted category label.
     # NOTE: case_study_md is loaded externally via build_html.py.
     if case_study_md:
-        # HR drops try-this so case-study takes §04 slot. SELF keeps try-this at §04 so case-study is §05.
-        cs_num = "§ 04" if audience == "hr" else "§ 05"
+        # Recruiter v1: case study is the 3rd of 5 blocks (badges, output
+        # ledger, case study, method). SELF keeps try-this at §04 so case
+        # study is §05.
+        cs_num = "§ HR-03" if audience == "hr" else "§ 05"
         case_study_block = f'''<section id="case-study" class="case-study-section">
       <h2 class="sec" data-num="{cs_num}">{t(locale, "case_study_h")}</h2>
       <h2 class="sec-title">{t(locale, "case_study_subtitle")}</h2>
@@ -3767,32 +3493,21 @@ def render(
     else:
         case_study_block = ""
 
-    # -------- Diagnosis block: peer review THEN scoring (BOTH audiences) --------
+    # -------- Diagnosis block: peer review THEN scoring (SELF only) --------
     # Codex V2 review: story-first, quantification-after. The reader sees the
     # narrative before the grid so the grid reads as an index, not a verdict.
-    # V4: HR uses different scoring chrome (4 hiring signals, no 9-dim language,
-    # no overall average since the visible 4 are cherry-picked from a larger set).
-    self_awareness_caveat_html = (
-        f'<p class="self-awareness-caveat">{t(locale, "hr_self_awareness_caveat")}</p>'
-        if audience == "hr" else ""
-    )
+    # Recruiter v1 (spec §4) drops peer review + scoring entirely — badges
+    # replace both with published-threshold claims.
     if audience == "hr":
-        scoring_h = t(locale, "hr_section_scoring_h")
-        scoring_subtitle = t(locale, "hr_section_scoring_subtitle")
-        scoring_method = t(locale, "hr_section_scoring_method")
-        overall_strip_html = ""  # No average over a cherry-picked 4-dim subset.
-        score_disclaimer_html = ""
+        diagnosis_block = ""
     else:
-        scoring_h = t(locale, "section_scoring")
-        scoring_subtitle = t(locale, "section_scoring_subtitle")
-        scoring_method = t(locale, "section_scoring_method")
         overall_strip_html = (
             f'<div class="overall-strip">{t(locale, "section_scoring_overall_label")} '
             f'&nbsp;·&nbsp; {overall_line}</div>'
         )
         score_disclaimer_html = f'<p class="score-disclaimer">{t(locale, "score_disclaimer")}</p>'
 
-    diagnosis_block = f'''<section id="peer-review-section">
+        diagnosis_block = f'''<section id="peer-review-section">
       <h2 class="sec" data-num="§ 02">{t(locale, "section_peer_review")}</h2>
       <h2 class="sec-title">{t(locale, "section_peer_review_subtitle")}</h2>
       <p class="method">{t(locale, "section_peer_review_method")}</p>
@@ -3802,9 +3517,9 @@ def render(
     </section>
 
     <section id="scores">
-      <h2 class="sec" data-num="§ 03">{scoring_h}</h2>
-      <h2 class="sec-title">{scoring_subtitle}</h2>
-      <p class="method">{scoring_method}</p>
+      <h2 class="sec" data-num="§ 03">{t(locale, "section_scoring")}</h2>
+      <h2 class="sec-title">{t(locale, "section_scoring_subtitle")}</h2>
+      <p class="method">{t(locale, "section_scoring_method")}</p>
 
       {overall_strip_html}
 
@@ -3812,7 +3527,6 @@ def render(
       <div class="score-table">
     {score_rows}
       </div>
-      {self_awareness_caveat_html}
     </section>'''
 
     # -------- SELF-only AI work ledger sections (V5 direction C) --------
@@ -3861,6 +3575,20 @@ def render(
             ledger_sections += _build_trend_ledger(
                 analysis, history_entries, ledger_narration, locale,
                 exhibit_no, blind_spots)
+
+    # -------- Scope disclosure (HR method-footer, spec §4) --------
+    hr_method = ""
+    if audience == "hr":
+        badge_items = badges_data.get("items") or []
+        earned_count = sum(1 for b in badge_items
+                           if isinstance(b, dict) and b.get("earned"))
+        std_version = badges_data.get("standard_version", "v1")
+        hr_method = (
+            f'<section id="method" class="method-footer">'
+            f'<h3 class="method-footer-h">{t(locale, "hr_scope_h")}</h3>'
+            f'<p class="method-footer-body">'
+            f'{t(locale, "hr_scope_body_template").format(version=esc(std_version), total=len(badge_items), earned=earned_count)}'
+            f'</p></section>')
 
     # Assemble via string.Template to avoid CSS brace escaping
     subs = {
@@ -3919,6 +3647,7 @@ def render(
         "ledger_sections": ledger_sections,
         "identity_block": identity_block,
         "hero_block": hero_block,
+        "badges_section": badges_section,
         "profile_section": profile_section,
         "hr_activity_block": hr_activity_block,
         "overview_section": overview_section,
@@ -3961,19 +3690,8 @@ def render(
             f'</section>'
         ),
         "trends_section": (
-            # HR: keep only growth curve + outcome mix. SELF: full weekly suite.
-            f'<section id="trends">'
-            f'<h2 class="sec" data-num="§ 05">{t(locale, "section_trends")}</h2>'
-            f'<h2 class="sec-title">{t(locale, "trends_subtitle_template").format(n=len(weekly))}</h2>'
-            f'<h3>{t(locale, "trends_h_growth")}</h3>'
-            f'<p class="method">{t(locale, "trends_growth_method")}</p>'
-            f'<div class="chart-box" data-fig="Fig. 09"><canvas id="growthChart"></canvas></div>'
-            f'<div class="two-col" style="margin-top:24px">'
-            f'<div class="chart-box" data-fig="Fig. 01"><canvas id="outcomeChart"></canvas></div>'
-            f'<div class="chart-box" data-fig="Fig. 02"><canvas id="stypeChart"></canvas></div>'
-            f'</div>'
-            f'</section>'
-            if audience == "hr" else
+            # Recruiter v1 (spec §4) has no trends/growth-curve section.
+            "" if audience == "hr" else
             f'<section id="trends">'
             f'<h2 class="sec" data-num="§ 07">{t(locale, "section_trends")}</h2>'
             f'<h2 class="sec-title">{t(locale, "trends_subtitle_template").format(n=len(weekly))}</h2>'
@@ -3989,10 +3707,7 @@ def render(
             f'</section>'
         ),
         "method_section": (
-            f'<section id="method" class="method-footer">'
-            f'<h3 class="method-footer-h">{t(locale, "hr_method_disclosure_h")}</h3>'
-            f'<p class="method-footer-body">{t(locale, "hr_method_disclosure_body")}</p>'
-            f'</section>'
+            hr_method
             if audience == "hr" else
             f'<section id="method" class="method-footer">'
             f'<h3 class="method-footer-h">{t(locale, "section_method")}</h3>'
