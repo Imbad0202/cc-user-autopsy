@@ -1,6 +1,6 @@
 ---
 name: cc-user-autopsy
-description: Produces a deep, honest peer-review of how someone uses Claude Code by statistically analyzing their local session data (~/.claude/usage-data/ and ~/.claude/projects/). Trigger whenever the user asks to review, analyze, audit, or critique their own Claude Code usage, workflow, habits, or skill level — including phrases like "analyze my cc usage", "review my cc sessions", "peer review my cc workflow", "deeper than /insights", or any ask for an honest audit of their AI workflow. Also covers portfolio/hiring-manager framings (e.g. "portfolio for Anthropic/OpenAI/xAI"), but ALWAYS ask the user in Step 0 which version to build (self / hr / both) before running — never silently produce an HR report, because that version goes to outsiders and needs explicit privacy setup. The HTML report is laid out story-first: a story-style peer review (when / how / where stuck / cost) leads, then 9-dim scoring (or 4-signal scoring for HR), then a "this week try this" action block, a strongest-single-session case study, and claim-indexed evidence. HR variant additionally suppresses the evidence library, collapses scoring into 4 hiring signals, and trims pattern charts.
+description: Produces a deep, honest peer-review of how someone uses Claude Code by statistically analyzing their local session data (~/.claude/usage-data/ and ~/.claude/projects/). Trigger whenever the user asks to review, analyze, audit, or critique their own Claude Code usage, workflow, habits, or skill level — including phrases like "analyze my cc usage", "review my cc sessions", "peer review my cc workflow", "deeper than /insights", or any ask for an honest audit of their AI workflow. Also covers portfolio/hiring-manager framings (e.g. "portfolio for Anthropic/OpenAI/xAI"), but ALWAYS ask the user in Step 0 which version to build (self / hr / both) before running — never silently produce an HR report, because that version goes to outsiders and needs explicit privacy setup. The HTML report is laid out ledger-first for SELF (opening band, output/team/leak/trend ledgers, then peer review, 9-dim scoring, try-this-week, case study, claim-indexed evidence). The HR variant is a recruiter version v1: identity card, earned badges (threshold-based, earned-only), allowlist-filtered output ledger, one case study, and a methodology & scope disclosure — no scores, no peer-review memo, no charts.
 ---
 
 # Claude Code User Autopsy
@@ -19,7 +19,7 @@ A self-contained HTML report at `~/.claude/usage-data/cc-user-autopsy.html` (or 
 
 **SELF audit layout** (private diagnostic letter):
 
-0. **AI work ledger** (opening band, output ledger, team ledger, leak ledger) — SELF-only, rendered before everything else including the usage snapshot; see Step 3b.
+0. **AI work ledger** (opening band, output ledger, team ledger, leak ledger, trend ledger) — SELF-only, rendered before everything else including the usage snapshot; see Step 3b. Trend ledger unlocks at 3 snapshots (before that it renders a locked one-liner instead of the exhibit).
 1. **Usage snapshot** §01 — activity panel (cache, models, cost, characteristics) + a 4-tile behavior strip (commits / interactive time / Task agent % / MCP %). Replaces the old 8-tile metric grid. Benchmark caveat at the top.
 2. **Reading guide** — short paragraph orienting the four-zone story (when / how / where stuck / cost).
 3. **Peer review** §02 — Claude-written story in 4 sections plus a "connecting it back" paragraph. Comes BEFORE scoring so the grid reads as an index, not a verdict.
@@ -31,14 +31,16 @@ A self-contained HTML report at `~/.claude/usage-data/cc-user-autopsy.html` (or 
 9. **Evidence library** §08 — claim-indexed (not by 7 tag buckets). Each peer-review claim shows 2-3 sessions that prove it. Empty claim groups are hidden, not apologetically labeled.
 10. **Methodology footer** — small-type appendix, not a full section.
 
-**HR / portfolio layout** differs:
+**HR / portfolio layout** is the recruiter version v1 — a five-block layout, not a trimmed copy of the SELF layout:
 
-- Profile card + activity panel → Public Artifacts → Peer review (250-350-word candidate memo) §02 → Hiring signals (4 dims, not 9) §03 → Case study §04 → Growth curve + outcome donut §05 → Methodology disclosure.
-- Evidence library is **hidden entirely**, no #evidence anchor.
-- Scoring chrome reads "Hiring signals" (not "Rule-based scores"), shows only D1 delegation, D2 root-cause, D6 tool breadth, D9 token efficiency. No overall average.
-- A short self-awareness caveat under the grid acknowledges that more dimensions exist privately. **Does not name the hidden ones.**
-- Pattern mining is dropped entirely. Only growth curve + outcome donut survive.
-- Shipped-with-Claude shows at most 3 items, all from the public-projects allowlist. Redacted private projects are dropped, not displayed as "Private platform project" filler.
+- **Identity letterhead** (`--profile`, full letterhead style, not the SELF subtle signature).
+- **Hero block** — practice summary framing (not the SELF diagnostic-letter framing).
+- **Earned badges** (`id="badges"`) — threshold-based, earned-only. A badge either clears its published bar or it doesn't show at all; if zero badges are earned the whole section is absent (never rendered as a row of greyed-out locks).
+- **Output ledger** (`id="hr-output"`) — allowlist-filtered counters (git commits/pushes/sessions-with-commits) plus the top-3 public shipped items and public artifact links. Non-public items are excluded entirely, never shown as "Private project" filler.
+- **One case study** — same format as SELF's case study, redacted project label, no sid.
+- **Methodology & scope disclosure** (`id="method"`) — standard version, earned/total badge count, rubric location, reproducibility note, privacy model. Replaces the old self-awareness caveat.
+
+No scores, no peer-review memo, no pattern mining, no weekly-trends charts, no evidence library, no trend ledger in HR — all of that is SELF-only.
 
 Both audiences get a **benchmark caveat** disclaimer at the top reminding readers this is unbenchmarked individual data.
 
@@ -52,13 +54,14 @@ Step 1b  → scripts/aggregate.py            (combines transcript-rows + session
 Step 1c  → scripts/scan_codex.py / scan_grok.py / scan_antigravity.py  (optional, cross-LLM)
            re-run aggregate.py with --cross-llm-rows (repeatable)
 Step 2   → scripts/sample_sessions.py      (picks 15-24 representative sessions)
-Step 3   → Claude writes peer-review.{audience}.{locale}.md  (V4 story format)
+Step 3   → Claude writes peer-review.{locale}.md  (SELF only, V4 story format — HR needs no peer-review file, see Step 3 HR note below)
 Step 3b  → Claude writes ledger-narration.md (SELF only, V5 addition; opening/output/team/leak)
+           (SELF only; books: opening/output-ledger/team-ledger/leak-ledger/trend-ledger — write the trend-ledger book ONLY if ~/.claude/usage-data/autopsy-history.jsonl has ≥3 snapshot lines; check with wc -l)
 Step 3.5 → Claude writes try-this-week.{locale}.md (SELF only)
            Claude writes case-study.{self|hr}.{locale}.md (BOTH audiences, two files)
 Step 4.5 → (zh_TW only) rewrite the EN peer review natively into zh_TW
 Step 4   → scripts/build_html.py with --peer-review --try-this --case-study --audience --locale
-           (SELF adds --ledger-narration and --history-file; HR gets --history-file only)
+           (SELF adds --ledger-narration; both audiences take --history-file)
 Step 5   → open the HTML in browser and tell the user
 ```
 
@@ -70,7 +73,7 @@ Before running anything, **ask the user two questions in a single prompt**. Neve
 
 > "I can build two versions of this report:
 >   **A. Self audit** — honest diagnostic letter for your eyes only. Shows every project name, session ID, and friction detail.
->   **B. HR / portfolio** — public-facing summary for recruiters. Hides private projects, redacts session IDs, and leads with a profile card.
+>   **B. HR / portfolio** — public-facing summary for recruiters. Hides private projects, redacts session IDs, and leads with an identity letterhead + earned badges.
 >   **C. Both.**
 > Which one(s)?
 >
@@ -333,6 +336,21 @@ valid run. When it is, do NOT invent a leak. Instead:
     section gracefully when there is nothing to show, and falls back to
     the locale-default title if the book is missing. Never fabricate a
     leak or a number to fill the opener.>
+
+# trend-ledger
+
+<Only write this book if ~/.claude/usage-data/autopsy-history.jsonl has
+>= 3 snapshot lines (check with `wc -l`) — below that the renderer shows
+a locked one-liner regardless of what you write here, so writing it early
+is wasted tokens.
+
+First line: the opener claim compares a key ledger number across
+snapshots (e.g. "Commits per run rose from 20 to 44 across three runs.") —
+read the actual snapshot values from the history file, don't estimate.
+Rest: body prose comparing this run to the last run and to the reference
+run (~90 days back), covering the same numbers-before-adjectives audit-
+discipline rules as every other book above. Only counts, dates, scores,
+and dollar totals — never sids, prompt text, or project names.>
 ```
 
 Pass the file to the build with `--ledger-narration /tmp/cc-autopsy/ledger-narration.md` (SELF builds only — HR never sees the ledger; see the audience table below).
@@ -354,43 +372,9 @@ This is a ledger, not a pep talk. Write it the way an auditor writes a finding, 
 - **The opening line is load-bearing.** It has to survive as a standalone "thirty-second read" — assume some readers stop there.
 - **No em-dash overuse in zh_TW.** Use commas, colons, or new sentences. Per `feedback_writing_style`: 中文寫作不濫用破折號。
 
-### HR audience format (different file, different format)
+### HR
 
-Write a **separate** peer review to `/tmp/cc-autopsy/peer-review-hr.{locale}.md` in **candidate memo** format, not story format:
-
-```markdown
-### Signal
-
-<2-3 sentences. The single load-bearing claim about who this user is as
-an AI-native engineer. Cite top-line metrics.>
-
-### Evidence
-
-<One paragraph naming the strongest single session in third-person without
-sid (e.g. "451-minute multi-task session that shipped 14 commits, 56 tests,
-Vercel deploy"). Then list public-facing artifacts that back the claim.>
-
-### Caveat
-
-<Overall score. The self-awareness note: a private audit covers more
-dimensions; this excerpt shows the four most hiring-relevant ones. DO NOT
-name the hidden weak dimensions — that draws the reader's eye to weaknesses.>
-
-### Why interview this person
-
-- **<Role 1>**: <one-line pitch + concrete evidence>
-- **<Role 2>**: <one-line pitch + concrete evidence>
-- **<Role 3>**: <one-line pitch + concrete evidence>
-```
-
-Length target: 250-350 words English (~1000-1500 zh_TW characters at same density).
-
-**HR memo MUST**:
-
-- Not cite raw `sid` values or 8-char session IDs.
-- Not name non-allowlisted projects. Use category labels from `--public-projects` (e.g. "higher-ed QA platform") or speak in aggregates.
-- Not name the hidden lower-scored dimensions. The self-awareness caveat says "additional dimensions exist privately"; that's all.
-- Keep quantitative claims that don't tie to private project names.
+HR needs no peer-review file — the recruiter version renders badges + output ledger + case study only. Write only `case-study.hr.{locale}.md` (Step 3.5).
 
 ## Step 3.5 — Write try-this-week + case-study markdowns (V4)
 
@@ -487,31 +471,33 @@ python3 scripts/build_html.py \
 ### For a hiring-manager / portfolio audience
 
 If the user is producing this report to share with AI-company recruiters, add
-`--audience hr`. This re-orders sections to lead with a profile card (at-a-glance
-scale / velocity / parallel-work / tool breadth / self-audit score / focus area),
-then a "Shipped with Claude" section grouped by broad category (not raw repo name
-unless the user allowlisted it), then optionally a list of public artifacts
-they want to link.
+`--audience hr`. This produces the recruiter version v1 (see "What you get"
+above): identity letterhead, hero, earned badges, allowlist-filtered output
+ledger (top-3 public shipped items + public artifact links), one case study,
+and a scope-disclosure methodology footer. No scores, no peer-review memo,
+no pattern mining, no trends.
 
 **Privacy model in HR mode:**
 
 - Project names are redacted by default. Only those listed in
   `--public-projects <file>` appear verbatim. Everything else becomes its
-  `category_overrides` label (or `"Private project"` if no override).
-- Session IDs (`sid`) are not shown. The evidence library is hidden in HR mode;
-  it belongs in a self audit, not a public artefact.
-- Per-session LLM-written summaries are replaced with category-level roll-ups in
-  the shipped section. Only allowlisted projects get their verbatim summary.
+  `category_overrides` label (or is dropped entirely if no override — never
+  shown as generic "Private project" filler).
+- Session IDs (`sid`) are not shown anywhere. The evidence library and trend
+  ledger don't render in HR mode at all; they belong in a self audit, not a
+  public artefact.
+- Per-session LLM-written summaries are replaced with category-level roll-ups
+  in the output ledger. Only allowlisted projects get their verbatim summary.
 - Friction detail, first-prompt text, and facet crosstabs tied to specific
   projects are aggregated to category buckets.
 
 ```bash
-# HR omits --try-this (hiring managers can't act on the candidate's calendar).
+# HR needs no --peer-review or --try-this (no peer-review memo or
+# calendar-actionable items in the recruiter version).
 # Case study is BOTH audiences and uses the HR-redacted version here.
 python3 scripts/build_html.py \
   --input /tmp/cc-autopsy/analysis-data.json \
   --samples /tmp/cc-autopsy/samples.json \
-  --peer-review /tmp/cc-autopsy/peer-review-hr.{locale}.md \
   --case-study /tmp/cc-autopsy/case-study.hr.{locale}.md \
   --audience hr \
   --locale {locale} \
@@ -614,27 +600,21 @@ Read `references/scoring-rubric.md` for the exact threshold logic if you need to
 
 The same `build_html.py` produces both audiences from one analysis-data.json. Key conditional rules to be aware of when modifying the renderer:
 
-| Aspect | SELF | HR |
+| Aspect | SELF | HR (recruiter v1) |
 |---|---|---|
-| Opening band | rendered | absent |
-| Output ledger | rendered | absent |
-| Team ledger | rendered | absent |
-| Leak ledger | rendered | absent |
-| Blind-spot openers | rendered | absent |
+| Opening band / output / team / leak ledgers | rendered | absent |
+| Trend ledger | rendered (locked note below 3 snapshots) | absent |
+| Badges section | absent (badge data still in analysis-data.json + snapshots) | earned-only cards, criteria + n + window; zero earned → section absent |
 | Hero block | Diagnostic letter framing | Practice summary framing |
-| Overview / activity | Merged "usage snapshot" + 4-tile behavior strip | Profile card + activity panel + benchmark caveat |
-| Reading guide vs zone-map | Short reading-guide paragraph | Full visual 4-zone map (first-time reader) |
-| Peer review | Story format (4 zones + connect-back), 700–1000 words | Candidate memo (Signal/Evidence/Caveat/Why), 250-350 words |
-| Scoring grid | 9 dimensions, overall average, full disclaimer | 4 hiring signals (D1+D2+D6+D9), no average, "Hiring signals" chrome |
-| Self-awareness caveat | (none) | One line: "Private audit covers additional dimensions; this excerpt shows 4 most hiring-relevant signals" — DO NOT name the hidden ones |
-| Try-this-week | §04 — 3-5 action items | (hidden — recruiter can't act on it) |
-| Case study | §05 — metric strip + 3 paragraphs, raw project name + sid | §04 — same format, redacted project label, NO sid |
-| Pattern mining | §06 — full 5-chart suite (plen / friction / tools / heatmap / helpfulness) | (hidden) |
-| Weekly trends | §07 — growth curve + 5 weekly detail charts | §05 — growth curve only + outcome donut |
-| Evidence library | §08 — claim-indexed (4 peer-review claims, 2-3 sessions per claim, empty groups hidden) | (hidden entirely, no #evidence anchor) |
-| Shipped with Claude | (not rendered in SELF) | Top 3 only, public-allowlist filtered, redacted items dropped (not displayed as "Private project" filler) |
-| Methodology | Full content but styled as footer (small font) | Compact disclosure note only |
-| sid8 prefixes | Shown everywhere | Stripped from all chrome AND from peer-review prose |
+| Identity | subtle signature | full letterhead |
+| Peer review | Story format (4 zones + connect-back) | absent |
+| Scoring grid | 9 dimensions, overall average, full disclaimer | absent |
+| Output ledger (HR) | n/a (SELF has ledger books) | counters + top-3 allowlisted shipped + artifact links; non-public items excluded entirely |
+| Try-this-week | §04 | absent |
+| Case study | §05, raw project name + sid | § HR-03, redacted label, NO sid |
+| Pattern mining / weekly trends / evidence library | rendered | absent |
+| Methodology | full footer | scope disclosure: standard version, earned/total badges, rubric location, reproducibility, privacy model |
+| sid8 prefixes | shown | never |
 
 Cross-LLM prompt text (e.g. Grok's `prompt_history.jsonl` entries) never renders in any external version of the report — the ledger builders only ever take counts, dates, minutes, and tokens from cross-LLM rows, never raw prompt text, and the whole ledger is gated `audience == "self"` besides.
 
@@ -655,10 +635,10 @@ When adding a new block, ask: does this block convey diagnostic value (SELF) or 
 - `scripts/scan_codex.py` — full-tier adapter: walks `~/.codex/sessions`, writes tokens/models/transcript-shaped rows to codex-rows.jsonl
 - `scripts/scan_grok.py` — partial-tier adapter: walks `~/.grok/sessions`, writes prompt-text/timestamp rows (no tokens/models) to grok-rows.jsonl
 - `scripts/scan_antigravity.py` — presence-only adapter: walks `~/.gemini/antigravity/conversations`, writes file count + mtime only (no content parsing) to anti-rows.jsonl
-- `scripts/aggregate.py` — combines transcript rows + session-meta + facets, writes analysis-data.json (includes cost estimate via `PRICING` table); `--cross-llm-rows` (repeatable) feeds the additive `cross_llm` / `ledger` blocks only
+- `scripts/aggregate.py` — combines transcript rows + session-meta + facets, writes analysis-data.json (includes cost estimate via `PRICING` table); `--cross-llm-rows` (repeatable) feeds the additive `cross_llm` / `ledger` blocks only + `badges` block (`compute_badges`, bars in scoring-rubric.md)
 - `scripts/sample_sessions.py` — picks representative sessions, writes samples.json
-- `scripts/build_html.py` — CLI entry point. Wires `--peer-review`, `--try-this`, `--case-study`, `--ledger-narration`, `--audience`, `--locale`, `--profile`, `--public-projects`, `--artifacts`, `--history-file` into the renderer. Also owns `append_history_snapshot()` — the SELF-only, warn-never-fail trend-snapshot append to `--history-file` (default `~/.claude/usage-data/autopsy-history.jsonl`) that runs after a successful build.
-- `scripts/report_render.py` — all HTML rendering logic. Owns the audience-conditional branches (SELF vs HR), claim-indexed evidence selectors, section ordering, and the SELF-only ledger builders (`_parse_ledger_narration`, `_build_opening_band`, `_build_output_ledger`, `_build_team_ledger`, `_build_leak_ledger`).
+- `scripts/build_html.py` — CLI entry point. Wires `--peer-review`, `--try-this`, `--case-study`, `--ledger-narration`, `--audience`, `--locale`, `--profile`, `--public-projects`, `--artifacts`, `--history-file` into the renderer. Also owns `append_history_snapshot()` — the SELF-only, warn-never-fail trend-snapshot append to `--history-file` (default `~/.claude/usage-data/autopsy-history.jsonl`) that runs after a successful build — and `read_history_snapshots()`, which loads those snapshots back for the trend ledger.
+- `scripts/report_render.py` — all HTML rendering logic. Owns the audience-conditional branches (SELF vs HR), claim-indexed evidence selectors, section ordering, and the SELF-only ledger builders (`_parse_ledger_narration`, `_build_opening_band`, `_build_output_ledger`, `_build_team_ledger`, `_build_leak_ledger`, `_build_trend_ledger`, `_build_badges_section`, `_build_hr_output_ledger`).
 - `scripts/locales.py` — single source of truth for every UI chrome string. Both locales must share the same key set (enforced by tests). Two locales: `en` (canonical), `zh_TW`.
 - `scripts/narrative_en.py` / `scripts/narrative_zh.py` — locale-specific narrative helpers (outcome labels, evidence badges, methodology sub-blocks).
 - `tests/test_scan_transcripts.py` — scanner unit tests

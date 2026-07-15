@@ -180,6 +180,11 @@ def main() -> None:
             capture=capture,
         )
 
+    # Seed history with the demo's 3 synthetic trend snapshots BEFORE the
+    # SELF build so the trend ledger unlocks (_TREND_MIN_SNAPSHOTS == 3);
+    # the SELF build below then appends a 4th line via the snapshot hook.
+    shutil.copy(DEMO_ROOT / "autopsy-history.jsonl", history_path)
+
     # Self audit shows verbatim project labels so XSS escaping is exercised
     # end-to-end on the hostile payloads injected above. Captured so we can
     # assert the praise-word lint fired on the "impressive" seeded above.
@@ -226,8 +231,18 @@ def main() -> None:
     assert "legacy-migration" not in hr_html, (
         "non-allowlisted demo project name leaked into HR output")
 
-    # --- V5 ledger: SELF renders the exhibit skeleton, HR must not ---
+    # --- Phase 3 trend ledger + badges: seeded 3-snapshot history unlocks
+    # the trend book on SELF; badges are earned-only and HR-only ---
     self_html = html
+    assert 'id="ledger-trend"' in self_html, "SELF build missing trend ledger"
+    assert '<svg class="c-spark"' in self_html, "trend sparklines missing"
+    assert 'id="ledger-trend"' not in hr_html, "HR must not render the trend ledger"
+    # badge section in HR: earned-only. Demo earns >=1 badge (test_demo_data
+    # pins the exact set), so the section must be present.
+    assert 'id="badges"' in hr_html, "HR build missing earned badges section"
+    assert 'id="badges"' not in self_html, "badge cards are external-only"
+
+    # --- V5 ledger: SELF renders the exhibit skeleton, HR must not ---
     assert 'id="ledger-opening"' in self_html, "SELF build missing ledger-opening"
     assert 'id="ledger-output"' in self_html, "SELF build missing ledger-output"
     assert 'id="ledger-team"' in self_html, "SELF build missing ledger-team"
@@ -278,9 +293,10 @@ def main() -> None:
     # narration is escaped, not executed
     assert "<script>alert('n')</script>" not in self_html
 
-    # snapshot hook: SELF appended exactly one line, HR none
+    # snapshot hook: history was seeded with 3 demo snapshots, SELF appended
+    # exactly one more line, HR appended none.
     history_lines = history_path.read_text().strip().splitlines()
-    assert len(history_lines) == 1, f"expected 1 snapshot line, got {len(history_lines)}"
+    assert len(history_lines) == 4, f"expected 4 snapshot lines, got {len(history_lines)}"
 
     node = shutil.which("node")
     if node:
