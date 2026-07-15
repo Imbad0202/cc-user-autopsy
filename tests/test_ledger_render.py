@@ -475,6 +475,32 @@ class LeakLedgerRenderTests(unittest.TestCase):
         self.assertNotIn("c-blindspot", html)
         self.assertNotIn("c-leak-cards", html)
 
+    def test_ask_ship_known_category_localizes_in_zh_tw(self):
+        # Codex round 16: raw facet keys (snake_case identifiers) must not
+        # leak into the report — known categories map to locale labels.
+        from itertools import count
+        bs = dict(BS_ALL_FAILED, ask_vs_ship=dict(
+            BS_ALL_PASSED["ask_vs_ship"],
+            metrics={"top_gap": {"category": "feature_implementation",
+                                 "ask_share_pct": 30.0, "ship_share_pct": 8.0,
+                                 "gap_pp": 22.0},
+                     "shipped_sessions": 14}))
+        html = _build_leak_ledger(LEDGER_NO_LEAKS, bs, NARR, "zh_TW", count(1))
+        self.assertIn("功能實作", html)
+        self.assertNotIn("feature_implementation", html)
+
+    def test_ask_ship_unknown_category_falls_back_de_underscored(self):
+        from itertools import count
+        bs = dict(BS_ALL_FAILED, ask_vs_ship=dict(
+            BS_ALL_PASSED["ask_vs_ship"],
+            metrics={"top_gap": {"category": "schema_wrangling",
+                                 "ask_share_pct": 30.0, "ship_share_pct": 8.0,
+                                 "gap_pp": 22.0},
+                     "shipped_sessions": 14}))
+        html = _build_leak_ledger(LEDGER_NO_LEAKS, bs, NARR, "en", count(1))
+        self.assertIn("schema wrangling", html)
+        self.assertNotIn("schema_wrangling", html)
+
     def test_all_gates_failed_still_suppresses_with_ask_ship_and_interrupt_off(self):
         # Regression guard: BS_ALL_FAILED (nothing passes anything, leaks
         # empty) must still yield no section — existing suppression case.

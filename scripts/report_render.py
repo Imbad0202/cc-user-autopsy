@@ -407,6 +407,17 @@ def _blindspot_callout(locale, title_key, sentence, detail=None,
             f'<div class="c-blindspot-metric">{metric}</div>{d}</div>')
 
 
+def _goal_category_label(locale, category):
+    """Localized display label for a goal-category facet key. The facet
+    vocabulary is open-ended (session-meta emits whatever it saw), so only
+    the known keys have locale entries; unknown ones fall back to the
+    de-underscored key rather than leaking raw snake_case into the report."""
+    key = "goal_cat_" + category
+    if key in STRINGS[locale]:
+        return t(locale, key)
+    return category.replace("_", " ")
+
+
 def _build_output_ledger(ledger, narration, locale="en", exhibit_no=None,
                           blind_spots=None):
     """SELF-only output ledger: action-title head + prose + graveyard opener
@@ -756,7 +767,8 @@ def _build_leak_ledger(ledger, blind_spots, narration, locale, exhibit_no):
     if bs6.get("gate_passed"):
         g = bs6["metrics"]["top_gap"]
         sec.append(t(locale, "blindspot_askship_template").format(
-            cat=g["category"], ask=g["ask_share_pct"], ship=g["ship_share_pct"]))
+            cat=_goal_category_label(locale, g["category"]),
+            ask=g["ask_share_pct"], ship=g["ship_share_pct"]))
     if bs7.get("gate_passed"):
         m = bs7["metrics"]
         sec.append(t(locale, "blindspot_interrupt_template").format(
