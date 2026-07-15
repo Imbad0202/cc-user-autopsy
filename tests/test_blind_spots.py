@@ -145,6 +145,29 @@ class RepeatedInstructionTests(unittest.TestCase):
         # claude_wasted_tokens uses (3-1) — claude occurrences only
         self.assertEqual(p["claude_wasted_tokens"], 2 * (len(p["exemplar"]) // 4))
 
+    def test_mixed_length_raws_charged_at_normalized_length(self):
+        # Codex round 20: punctuation-heavy raw variants share one folded
+        # identity with a plain variant; every occurrence must be charged
+        # at its own NORMALIZED length, not the most-common (longer) raw
+        # exemplar's — the exemplar remains display-only.
+        from scripts.cross_llm_common import normalize_prompt
+        plain = "run the full pytest suite before you claim done"
+        noisy = "RUN --- the FULL pytest suite ... before you CLAIM done!!!"
+        self.assertEqual(normalize_prompt(plain), normalize_prompt(noisy))
+        self.assertGreater(len(noisy), len(plain))
+        rows = ([_prompt_row(f"n{i}", BASE + timedelta(weeks=i % 3, days=i),
+                             noisy) for i in range(3)]
+                + [_prompt_row(f"p{i}",
+                               BASE + timedelta(weeks=i % 3, days=3 + i),
+                               plain) for i in range(2)])
+        out = bs_repeated_instructions(rows, [])
+        self.assertTrue(out["gate_passed"])
+        p = out["metrics"]["patterns"][0]
+        tok = len(normalize_prompt(plain)) // 4
+        self.assertEqual(p["est_wasted_tokens"], 4 * tok)
+        self.assertEqual(p["claude_wasted_tokens"], 4 * tok)
+        self.assertEqual(p["exemplar"], noisy[:120])
+
     def test_presence_only_rows_ignored(self):
         cross = [{"session_id": f"a{i}", "start_time": (BASE + timedelta(weeks=i)).isoformat(),
                   "first_prompt": None, "source": "antigravity",
@@ -734,6 +757,21 @@ class GraveyardTests(unittest.TestCase):
         self.assertTrue(out["gate_passed"])
         self.assertEqual(len(out["metrics"]["items"]), 2)
         self.assertGreaterEqual(out["metrics"]["items"][0]["days_untouched"], 14)
+
+    def test_zero_length_segment_padding_does_not_shave_days_untouched(self):
+        # Codex round 20: staleness must measure from the FACTUAL activity
+        # end. A [t, t] segment right at the 14-day horizon used to get the
+        # 1-minute overlap padding, making the project look one day fresher
+        # and silently disqualifying it.
+        t = WINDOW_END - timedelta(days=14, seconds=30)
+        rows = [_grave_row("g1", t, "/home/u/projects/legacy-migration",
+                           segments=[(t, t)]),
+                _grave_row("g2", BASE, "/home/u/projects/docs-site")]
+        out = bs_graveyard(rows, WINDOW_END)
+        self.assertTrue(out["gate_passed"])
+        self.assertEqual(len(out["metrics"]["items"]), 2)
+        self.assertEqual(
+            min(i["days_untouched"] for i in out["metrics"]["items"]), 14)
 
     def test_later_activity_disqualifies(self):
         rows = [_grave_row("g1", BASE, "/home/u/projects/legacy-migration"),

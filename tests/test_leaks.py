@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from scripts.aggregate import (
     bs_repeated_instructions, bs_sunk_cost, compute_api_equivalent_cost,
     compute_blind_spots, compute_leaks, PRICING, _leak_cost_usd)
+from scripts.cross_llm_common import normalize_prompt
 
 BASE = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
 WINDOW = {"start": "2026-06-01", "end": "2026-07-11", "days": 40}
@@ -142,8 +143,11 @@ class LeakCatalogTests(unittest.TestCase):
         self.assertTrue(bs1["gate_passed"])
         p = bs1["metrics"]["patterns"][0]
         self.assertEqual(p["occurrences"], 2010)
-        self.assertEqual(p["claude_wasted_tokens"], 9 * (len(p["exemplar"]) // 4))
-        self.assertEqual(p["est_wasted_tokens"], 2009 * (len(p["exemplar"]) // 4))
+        # per-hit token estimates use each occurrence's own NORMALIZED
+        # length (codex round 20), not the display exemplar's
+        tok = len(normalize_prompt(INSTR)) // 4
+        self.assertEqual(p["claude_wasted_tokens"], 9 * tok)
+        self.assertEqual(p["est_wasted_tokens"], 2009 * tok)
         self.assertGreater(p["claude_wasted_tokens"], 0)
         self.assertLess(p["claude_wasted_tokens"], p["est_wasted_tokens"])
 
@@ -231,7 +235,7 @@ class RepeatedInstructionsAttributionPricingTests(unittest.TestCase):
             self._rows(5, {"claude-opus-4-6": 3}), [])
         self.assertTrue(bs1["gate_passed"])
         p = bs1["metrics"]["patterns"][0]
-        tok = len(p["exemplar"]) // 4
+        tok = len(normalize_prompt(self.INSTR)) // 4
         opus_in = PRICING["claude-opus-4-6"]["input"]
         # 5 occurrences, first typing free: 4 priced at the opus floor.
         self.assertEqual(p["claude_wasted_usd"],
@@ -268,7 +272,7 @@ class RepeatedInstructionsAttributionPricingTests(unittest.TestCase):
         bs1 = bs_repeated_instructions(rows, [])
         self.assertTrue(bs1["gate_passed"])
         p = bs1["metrics"]["patterns"][0]
-        tok = len(p["exemplar"]) // 4
+        tok = len(normalize_prompt(self.INSTR)) // 4
         opus_in = PRICING["claude-opus-4-6"]["input"]
         self.assertEqual(p["claude_wasted_usd"],
                          round(2 * opus_in * tok / 1e6, 6))

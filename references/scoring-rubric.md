@@ -211,10 +211,14 @@ across Claude rows and full/partial-coverage cross-LLM rows (`coverage ==
 | Minimum distinct weeks | `_BS_REPEAT_MIN_WEEKS = 3` |
 
 `metrics.patterns` reports the top 5 patterns by occurrence count; each
-carries the most-common raw exemplar (≤120 chars), a lower-bound
-`est_wasted_tokens = (occurrences - 1) * (len(exemplar) // 4)` (only the
-retyped text — thinking/re-reading time not counted), and up to 3 evidence
-session IDs.
+carries the most-common raw exemplar (≤120 chars, display only), a
+lower-bound `est_wasted_tokens` (each occurrence charged at its own
+NORMALIZED length in tokens, `len(normalized) // 4`, summed with the
+single largest occurrence dropped as the free "first typing" — only the
+retyped text, thinking/re-reading time not counted), and up to 3 evidence
+session IDs. Charging per-occurrence rather than at the exemplar's length
+matters because raw prompts of different lengths can share one folded
+identity.
 
 If no pattern reaches 5 occurrences across ≥3 distinct weeks, `gate_passed`
 is `False` and `reason` explains which floor wasn't met. The heuristic is
@@ -226,16 +230,17 @@ the weekly leak items are suppressed for the same invalid window.
 Pricing rule: `compute_leaks` prices the repeated-instruction leak's dollar
 figure from `claude_wasted_usd`, which prices each Claude occurrence at its
 own row's verified input-rate floor (the cheapest input rate among the
-row's observed models). An occurrence with no verified rate — missing model
-attribution, or any model absent from the pricing table (a cheaper
-historical model may have processed it) — contributes $0, and the one free
-"first typing" is discounted at the highest observed rate, so the total
-stays a floor. `claude_wasted_tokens` (`max(claude_occurrences - 1, 0) *
-(len(exemplar) // 4)`) remains as the Claude-share token count, and
-`weekly_tokens` in the leak-catalog item still reports the all-source
-`est_wasted_tokens` total, so cross-tool (Codex/Grok) repetition is visible
-in the token count without being priced at a Claude rate it was never
-billed at.
+row's observed models) times that occurrence's own normalized-length
+tokens. An occurrence with no verified rate — missing model attribution, or
+any model absent from the pricing table (a cheaper historical model may
+have processed it) — contributes $0, and the one free "first typing" is
+discounted at the largest single-occurrence dollar value, so the total
+stays a floor. `claude_wasted_tokens` (the same per-occurrence sum
+restricted to Claude hits, largest hit dropped) remains as the Claude-share
+token count, and `weekly_tokens` in the leak-catalog item still reports the
+all-source `est_wasted_tokens` total, so cross-tool (Codex/Grok) repetition
+is visible in the token count without being priced at a Claude rate it was
+never billed at.
 
 ### #2 — Sunk-cost sessions
 

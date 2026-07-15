@@ -1578,13 +1578,17 @@ def compute_aggregates(sessions, rated, facets_coverage):
     return result
 
 
-def _row_windows(row):
+def _row_windows(row, pad=True):
     """Activity windows for a row: explicit segments, else start+duration.
 
-    Zero-length windows (a single-event session's [t, t] segment, or a
-    duration_minutes of 0) are expanded to a minimum of 1 minute — otherwise
-    they contribute 0 minutes to weekly_share and no presence to the
-    parallel-overlap sweep, silently vanishing from both.
+    With pad=True (default), zero-length windows (a single-event session's
+    [t, t] segment, or a duration_minutes of 0) are expanded to a minimum
+    of 1 minute — otherwise they contribute 0 minutes to weekly_share and
+    no presence to the parallel-overlap sweep, silently vanishing from
+    both. Pass pad=False when deriving FACTUAL activity instants (the
+    ledger window's end, graveyard last-touched dates): the padding is an
+    overlap-accounting convention, and a padded end just before local
+    midnight would fabricate an activity date on which nothing happened.
     """
     segs = row.get("segments")
     out = []
@@ -1595,7 +1599,7 @@ def _row_windows(row):
             except (TypeError, IndexError):
                 continue
             if s and e and e >= s:
-                if e == s:
+                if e == s and pad:
                     e = s + timedelta(minutes=1)
                 out.append((s, e))
         if out:
@@ -1604,7 +1608,7 @@ def _row_windows(row):
     if not s:
         return []
     dur = row.get("duration_minutes") or 0
-    return [(s, s + timedelta(minutes=max(dur, 1)))]
+    return [(s, s + timedelta(minutes=max(dur, 1) if pad else dur))]
 
 
 def _split_at_midnight(start, end):
@@ -2181,6 +2185,11 @@ def bs_repeated_instructions(claude_rows, cross_rows, window_start=None,
             "source": source,
             "sid": row.get("session_id") or "",
             "raw": row.get("first_prompt") or "",
+            # This occurrence's own retyped-text token estimate — raw
+            # prompts of different lengths can share one identity after
+            # punctuation/whitespace folding, so each hit carries its own
+            # normalized length instead of inheriting the exemplar's.
+            "tok": len(norm) // 4,
             # Verified input-rate floor for pricing this occurrence — only
             # Claude rows can carry one (cross-tool tokens were never
             # billed at a Claude rate); 0.0 means "no verified rate".
@@ -2194,30 +2203,32 @@ def bs_repeated_instructions(claude_rows, cross_rows, window_start=None,
         for h in hits:
             raw_counts[h["raw"]] = raw_counts.get(h["raw"], 0) + 1
         exemplar = max(raw_counts, key=raw_counts.get)[:120]
-        # claude_wasted_tokens counts only the Claude share as a defensible
-        # lower bound: est_wasted_tokens counts occurrences across
-        # Claude+Codex+Grok, but non-Claude tokens were never billed at a
-        # Claude rate. claude_wasted_usd (additive) prices each Claude
-        # occurrence at ITS OWN row's verified input-rate floor —
-        # occurrences without a verified rate (missing attribution, or a
-        # model absent from PRICING) contribute $0, same policy as
-        # _leak_cost_usd — and discounts the one free "first typing" at the
-        # HIGHEST observed rate so the remainder stays a floor. This field
-        # feeds compute_leaks' USD figure; est_wasted_tokens (all-source)
-        # still drives the tokens/week display.
-        claude_occurrences = sum(1 for h in hits if h["source"] == "claude")
-        claude_wasted_tokens = max(claude_occurrences - 1, 0) * (len(exemplar) // 4)
-        claude_rates = sorted(h["rate"] for h in hits if h["source"] == "claude")
-        claude_wasted_usd = round(
-            sum(claude_rates[:-1]) * (len(exemplar) // 4) / 1e6, 6)
+        # All three waste figures are per-hit floors: each occurrence
+        # counts its OWN normalized length (h["tok"]), not the most-common
+        # exemplar's — mixed-length raws sharing one folded identity must
+        # not all be charged at the longest variant. claude_* fields count
+        # only the Claude share (non-Claude tokens were never billed at a
+        # Claude rate); claude_wasted_usd prices each Claude occurrence at
+        # its own row's verified input-rate floor ($0 when attribution is
+        # missing or names a model absent from PRICING, same policy as
+        # _leak_cost_usd). Each figure discounts one free "first typing"
+        # at the LARGEST per-hit value (tokens or dollars respectively) so
+        # the remainder stays a floor. claude_wasted_usd feeds
+        # compute_leaks' USD figure; est_wasted_tokens (all-source) still
+        # drives the tokens/week display.
+        toks = sorted(h["tok"] for h in hits)
+        claude_toks = sorted(h["tok"] for h in hits if h["source"] == "claude")
+        usd_contrib = sorted(h["rate"] * h["tok"] for h in hits
+                             if h["source"] == "claude")
         patterns.append({
             "exemplar": exemplar,
             "occurrences": len(hits),
             "weeks": len(weeks),
             "sources": sorted({h["source"] for h in hits}),
-            "est_wasted_tokens": (len(hits) - 1) * (len(exemplar) // 4),
-            "claude_wasted_tokens": claude_wasted_tokens,
-            "claude_wasted_usd": claude_wasted_usd,
+            "est_wasted_tokens": sum(toks[:-1]),
+            "claude_wasted_tokens": sum(claude_toks[:-1]) if claude_toks else 0,
+            "claude_wasted_usd": (round(sum(usd_contrib[:-1]) / 1e6, 6)
+                                  if usd_contrib else 0.0),
             "evidence": [h["sid"] for h in hits[:3]]})
     patterns.sort(key=lambda p: -p["occurrences"])
     if not patterns:
@@ -2533,9 +2544,10 @@ def bs_graveyard(activity_rows, window_end):
     Staleness is measured from each row's activity END, not its session
     START: a resumed multi-day session that started 20 days ago but has a
     segment active as recently as yesterday is not stale, even though its
-    start_time is old. `_row_windows(row)` already resolves explicit
-    segments (else start+duration) per row, so per-project "last touched"
-    is the max END across every row's windows, and the qualifying-session
+    start_time is old. `_row_windows(row, pad=False)` resolves explicit
+    segments (else start+duration) per row without the 1-minute overlap
+    padding (which could fabricate a next-day date), so per-project "last
+    touched" is the max END across every row's windows, and the qualifying-session
     fields (writes, commits, evidence, last_active_date) come from the row
     that owns that latest end.
     """
@@ -2546,7 +2558,10 @@ def bs_graveyard(activity_rows, window_end):
             continue
         if _is_scratch_path(key.lower()):
             continue
-        windows = _row_windows(r)
+        # pad=False: last-touched must be a factual instant — a padded end
+        # crossing local midnight would report a last_active_date on which
+        # nothing actually happened (and shift days_untouched by one).
+        windows = _row_windows(r, pad=False)
         if not windows:
             continue
         row_end = max(e for _, e in windows)
@@ -3129,7 +3144,10 @@ def main():
         d = _parse_dt(r.get("start_time"))
         if d:
             all_starts.append(d)
-        all_ends.extend(e for _, e in _row_windows(r))
+        # pad=False: window_end must be a factual activity instant — the
+        # 1-minute overlap padding could push a just-before-midnight end
+        # onto a date with no real activity (codex round 20).
+        all_ends.extend(e for _, e in _row_windows(r, pad=False))
     if all_ends:
         window_end = max(all_ends)
     elif all_starts:

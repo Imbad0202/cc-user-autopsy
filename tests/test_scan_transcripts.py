@@ -706,6 +706,31 @@ class SegmentsTests(unittest.TestCase):
         for start, end in windows:
             self.assertLess((end - start).total_seconds(), 3600)
 
+    def test_row_windows_pad_false_keeps_factual_ends(self):
+        # Codex round 20: the 1-minute padding on zero-length windows is an
+        # overlap-accounting convention — a [t, t] segment (or a zero
+        # duration_minutes fallback) just before local midnight would
+        # otherwise fabricate an activity end on the following date. Callers
+        # deriving factual instants (ledger window end, graveyard
+        # last-touched) pass pad=False and must get the raw end back.
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        from aggregate import _row_windows
+        seg_row = {"start_time": "2026-04-01T23:59:30+00:00",
+                   "duration_minutes": 0,
+                   "segments": [["2026-04-01T23:59:30+00:00",
+                                 "2026-04-01T23:59:30+00:00"]]}
+        padded = _row_windows(seg_row)
+        self.assertEqual((padded[0][1] - padded[0][0]).total_seconds(), 60)
+        factual = _row_windows(seg_row, pad=False)
+        self.assertEqual(factual[0][1], factual[0][0])
+        dur_row = {"start_time": "2026-04-01T23:59:30+00:00",
+                   "duration_minutes": 0}
+        self.assertEqual(
+            (_row_windows(dur_row)[0][1]
+             - _row_windows(dur_row)[0][0]).total_seconds(), 60)
+        f = _row_windows(dur_row, pad=False)
+        self.assertEqual(f[0][1], f[0][0])
+
     def test_switch_tax_false_positive_gone_for_row_in_idle_gap(self):
         """A codex row active inside the claude row's 10-day idle gap must NOT
         overlap the claude row's windows once segments are honored."""
