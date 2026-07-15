@@ -470,3 +470,25 @@ sessions drops below gate"), read per-heuristic:
 - **#4 graveyard** — not outcome-guarded: an achieved-but-never-shipped
   artifact is precisely the finding; guarded instead by the structural
   exclusions (scratch paths, `(unknown)` project, 14-day horizon).
+
+## Badges (v1, provisional)
+
+The badge layer (spec §4) publishes absolute thresholds; claims that clear
+them may be displayed affirmatively in external report versions. Badges are
+threshold-based, never percentile-based; unearned badges are silently absent
+in external versions (never shown as "failed"). Bars are **provisional v1**
+(spec §13) — revisit after the first real runs. Where a 9-dim analogue
+exists, each bar equals that dimension's "score ≥ 8" band. Badge wording in
+reports is fixed template text in `scripts/locales.py`, not LLM prose.
+Computed by `compute_badges()` in `scripts/aggregate.py`; the full item list
+(earned and unearned, with metrics and thresholds) ships in
+`analysis-data.json` under the top-level `badges` block.
+
+| Badge | Earned when | Minimum sample |
+|---|---|---|
+| `delegation` | Task-agent adoption ≥ 30% of sessions AND good-outcome rate on Task-agent sessions ≥ 70% | ≥ 15 rated Task-agent sessions |
+| `root_cause` | D2 scored AND iterative-refinement-with-buggy-code co-occurrence ≤ 7% of rated sessions | ≥ 30 rated sessions |
+| `tool_breadth` | MCP used in ≥ 15% of sessions AND top-3 built-in tools (Bash/Read/Edit) ≤ 55% of all tool calls | ≥ 30 sessions |
+| `token_efficiency` | not-good/good token ratio ≤ 1.1 AND cache hit ≥ 80% | ≥ 30 rated sessions |
+| `shipping_cadence` | git commits per active week ≥ 5 (evidence-backed ledger count) AND ≥ 10 sessions with commits | ledger window ≥ 14 days |
+| `cross_tool_orchestration` | ≥ 2 full-tier sources detected AND common window ≥ 14 days (not degraded) AND ≥ 10 hours of multi-source parallel work | n = multi-source hours |

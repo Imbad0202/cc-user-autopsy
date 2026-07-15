@@ -2085,6 +2085,189 @@ def compute_ledger(activity_metas, cross_llm, window_end=None):
     }
 
 
+# --- Badge layer (Phase 3, spec §4) -----------------------------------
+# Bars are PROVISIONAL v1 (spec §13) and mirrored in
+# references/scoring-rubric.md "## Badges (v1, provisional)" — keep the
+# two in sync (tests/test_badges.py checks ids; numbers are hand-synced).
+# Where a 9-dim analogue exists (D1/D2/D6/D9) each bar equals that
+# dimension's "score >= 8" band, so earning a badge reads as "top band
+# with enough sample". Threshold constants are independent from the
+# scorers' literals on purpose — retuning a score curve must not silently
+# move a published badge bar.
+_BADGE_STANDARD_VERSION = "v1"
+_BADGE_DELEGATION_MIN_TA_RATED = 15
+_BADGE_DELEGATION_TA_RATE = 30.0
+_BADGE_DELEGATION_GOOD_RATE = 70.0
+_BADGE_ROOTCAUSE_MIN_RATED = 30
+_BADGE_ROOTCAUSE_MAX_ITER_BUGGY_PCT = 7.0
+_BADGE_BREADTH_MIN_SESSIONS = 30
+_BADGE_BREADTH_MCP_RATE = 15.0
+_BADGE_BREADTH_TOP3_SHARE = 55.0
+_BADGE_EFFICIENCY_MIN_RATED = 30
+_BADGE_EFFICIENCY_MAX_RATIO = 1.1
+_BADGE_EFFICIENCY_MIN_CACHE_PCT = 80.0
+_BADGE_SHIPPING_MIN_WINDOW_DAYS = 14
+_BADGE_SHIPPING_COMMITS_PER_WEEK = 5.0
+_BADGE_SHIPPING_MIN_SESSIONS_WITH_COMMITS = 10
+_BADGE_ORCH_MIN_WINDOW_DAYS = 14
+_BADGE_ORCH_MIN_MULTI_HOURS = 10
+
+
+def _badge(id_, earned, n, metrics, thresholds, reason=None):
+    item = {"id": id_, "earned": bool(earned), "n": int(n),
+            "metrics": metrics or {}, "thresholds": thresholds}
+    if reason:
+        item["reason"] = reason
+    return item
+
+
+def compute_badges(scores, ledger, cross_llm, sessions, rated):
+    """Threshold-based badge layer (spec §4). Self-referential only —
+    every bar is an absolute published threshold, never a percentile.
+    Missing/unscored inputs mean "not earned" with a reason, never a
+    crash and never an imputed value. Renders earned-only in external
+    versions; the full item list (incl. unearned) ships in
+    analysis-data.json so the standard is auditable."""
+    items = []
+
+    # 1. delegation — D1 metrics over rated Task-agent sessions
+    d1 = scores.get("D1_delegation") or {}
+    ta_rated_n = sum(1 for s in rated if s.get("uses_task_agent"))
+    ta_rate = d1.get("metric_ta_rate_pct")
+    good_ta = d1.get("metric_good_rate_with_ta_pct")
+    thr = {"min_ta_rated": _BADGE_DELEGATION_MIN_TA_RATED,
+           "ta_rate_pct": _BADGE_DELEGATION_TA_RATE,
+           "good_rate_with_ta_pct": _BADGE_DELEGATION_GOOD_RATE}
+    met = {"ta_rate_pct": ta_rate, "good_rate_with_ta_pct": good_ta}
+    if ta_rated_n < _BADGE_DELEGATION_MIN_TA_RATED:
+        items.append(_badge("delegation", False, ta_rated_n, met, thr,
+                            reason="below minimum sample"))
+    elif ta_rate is None or good_ta is None:
+        items.append(_badge("delegation", False, ta_rated_n, met, thr,
+                            reason="dimension not scored"))
+    else:
+        items.append(_badge(
+            "delegation",
+            ta_rate >= _BADGE_DELEGATION_TA_RATE
+            and good_ta >= _BADGE_DELEGATION_GOOD_RATE,
+            ta_rated_n, met, thr))
+
+    # 2. root_cause — D2 iterative-buggy co-occurrence over rated pool
+    d2 = scores.get("D2_root_cause") or {}
+    iter_buggy = d2.get("metric_iter_buggy_pct")
+    thr = {"min_rated": _BADGE_ROOTCAUSE_MIN_RATED,
+           "max_iter_buggy_pct": _BADGE_ROOTCAUSE_MAX_ITER_BUGGY_PCT}
+    met = {"iter_buggy_pct": iter_buggy}
+    if len(rated) < _BADGE_ROOTCAUSE_MIN_RATED:
+        items.append(_badge("root_cause", False, len(rated), met, thr,
+                            reason="below minimum sample"))
+    elif d2.get("score") is None or iter_buggy is None:
+        items.append(_badge("root_cause", False, len(rated), met, thr,
+                            reason="dimension not scored"))
+    else:
+        items.append(_badge(
+            "root_cause", iter_buggy <= _BADGE_ROOTCAUSE_MAX_ITER_BUGGY_PCT,
+            len(rated), met, thr))
+
+    # 3. tool_breadth — D6 metrics over the full session pool
+    d6 = scores.get("D6_tool_breadth") or {}
+    mcp = d6.get("metric_mcp_rate_pct")
+    top3 = d6.get("metric_top3_share_pct")
+    thr = {"min_sessions": _BADGE_BREADTH_MIN_SESSIONS,
+           "mcp_rate_pct": _BADGE_BREADTH_MCP_RATE,
+           "max_top3_share_pct": _BADGE_BREADTH_TOP3_SHARE}
+    met = {"mcp_rate_pct": mcp, "top3_share_pct": top3}
+    if len(sessions) < _BADGE_BREADTH_MIN_SESSIONS:
+        items.append(_badge("tool_breadth", False, len(sessions), met, thr,
+                            reason="below minimum sample"))
+    elif mcp is None or top3 is None:
+        items.append(_badge("tool_breadth", False, len(sessions), met, thr,
+                            reason="dimension not scored"))
+    else:
+        items.append(_badge(
+            "tool_breadth",
+            mcp >= _BADGE_BREADTH_MCP_RATE and top3 <= _BADGE_BREADTH_TOP3_SHARE,
+            len(sessions), met, thr))
+
+    # 4. token_efficiency — D9 ratio + cache hit
+    d9 = scores.get("D9_token_efficiency") or {}
+    ratio = d9.get("metric_ratio")
+    cache = d9.get("metric_cache_hit_pct")
+    thr = {"min_rated": _BADGE_EFFICIENCY_MIN_RATED,
+           "max_ratio": _BADGE_EFFICIENCY_MAX_RATIO,
+           "min_cache_hit_pct": _BADGE_EFFICIENCY_MIN_CACHE_PCT}
+    met = {"ratio": ratio, "cache_hit_pct": cache}
+    if len(rated) < _BADGE_EFFICIENCY_MIN_RATED:
+        items.append(_badge("token_efficiency", False, len(rated), met, thr,
+                            reason="below minimum sample"))
+    elif d9.get("score") is None or ratio is None or cache is None:
+        items.append(_badge("token_efficiency", False, len(rated), met, thr,
+                            reason="dimension not scored"))
+    else:
+        items.append(_badge(
+            "token_efficiency",
+            ratio <= _BADGE_EFFICIENCY_MAX_RATIO
+            and cache >= _BADGE_EFFICIENCY_MIN_CACHE_PCT,
+            len(rated), met, thr))
+
+    # 5. shipping_cadence — evidence-backed commits per active week
+    win = (ledger or {}).get("window") or {}
+    out = (ledger or {}).get("output") or {}
+    days = win.get("days") or 0
+    commits = out.get("git_commits") or 0
+    with_commits = out.get("sessions_with_commits") or 0
+    weeks = days / 7 if days else 0
+    per_week = round(commits / weeks, 1) if weeks else None
+    thr = {"min_window_days": _BADGE_SHIPPING_MIN_WINDOW_DAYS,
+           "commits_per_week": _BADGE_SHIPPING_COMMITS_PER_WEEK,
+           "min_sessions_with_commits": _BADGE_SHIPPING_MIN_SESSIONS_WITH_COMMITS}
+    met = {"commits_per_week": per_week, "git_commits": commits,
+           "window_days": days, "sessions_with_commits": with_commits}
+    if days < _BADGE_SHIPPING_MIN_WINDOW_DAYS:
+        items.append(_badge("shipping_cadence", False, with_commits, met, thr,
+                            reason="window shorter than 14 days"))
+    else:
+        items.append(_badge(
+            "shipping_cadence",
+            per_week is not None
+            and per_week >= _BADGE_SHIPPING_COMMITS_PER_WEEK
+            and with_commits >= _BADGE_SHIPPING_MIN_SESSIONS_WITH_COMMITS,
+            with_commits, met, thr))
+
+    # 6. cross_tool_orchestration — sustained multi-source parallel work.
+    # "detected" fallback mirrors compute_ledger's sources_detected logic
+    # for pre-"detected"-field JSON.
+    full_tier = [
+        s["source"] for s in (cross_llm or {}).get("sources") or []
+        if s.get("coverage") == "full"
+        and (s.get("detected", True) or (s.get("session_count") or 0) > 0)
+    ]
+    cwin = (cross_llm or {}).get("common_window")
+    multi_hours = (((cross_llm or {}).get("parallel") or {})
+                   .get("hours_multi_source") or 0)
+    thr = {"min_full_tier_sources": 2,
+           "min_window_days": _BADGE_ORCH_MIN_WINDOW_DAYS,
+           "min_multi_hours": _BADGE_ORCH_MIN_MULTI_HOURS}
+    met = {"full_tier_sources": sorted(full_tier),
+           "hours_multi_source": multi_hours,
+           "common_window_days": (cwin or {}).get("days")}
+    if len(full_tier) < 2:
+        items.append(_badge("cross_tool_orchestration", False, multi_hours,
+                            met, thr, reason="fewer than 2 full-tier sources"))
+    elif not cwin or cwin.get("degraded") or (cwin.get("days") or 0) < _BADGE_ORCH_MIN_WINDOW_DAYS:
+        items.append(_badge("cross_tool_orchestration", False, multi_hours,
+                            met, thr, reason="common window shorter than 14 days"))
+    else:
+        items.append(_badge(
+            "cross_tool_orchestration",
+            multi_hours >= _BADGE_ORCH_MIN_MULTI_HOURS,
+            multi_hours, met, thr))
+
+    return {"schema_version": 1,
+            "standard_version": _BADGE_STANDARD_VERSION,
+            "items": items}
+
+
 # --- Blind-spot engine (Phase 2, spec §5) -----------------------------
 # Gate literals below are heuristic-eligibility thresholds: independent
 # from _PATTERN_MIN_SAMPLE (the pattern-floor constant). Keep separate so
@@ -3175,6 +3358,11 @@ def main():
         window_start=window_start, tz=tz)
     final["ledger"]["leaks"] = compute_leaks(
         final["blind_spots"], rated, final["ledger"]["window"])
+
+    # badges: additive top-level block (Phase 3, spec §4). Reads the
+    # already-computed scores/ledger/cross_llm; never mutates them.
+    final["badges"] = compute_badges(
+        final["scores"], final["ledger"], cross_llm, sessions, rated)
 
     out.write_text(json.dumps(final, ensure_ascii=False, indent=2))
     print(f"wrote {out} ({out.stat().st_size} bytes)", file=sys.stderr)
