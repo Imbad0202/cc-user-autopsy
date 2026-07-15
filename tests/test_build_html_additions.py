@@ -63,14 +63,10 @@ class ModelsChartTests(unittest.TestCase):
 
 
 class HRLayoutTests(unittest.TestCase):
-    """HR version should not duplicate at-a-glance data.
-
-    profile-card already exposes scale / velocity / parallel-work. Adding a
-    full Overview section with 8 more tiles + charts duplicates the story
-    and pushes the peer review below the fold. HR-specific: Overview is
-    hidden, but the activity panel (cache/models/cost — the highest-value
-    numbers for readers comparing builders) lives directly under the
-    profile card. Self audit still gets the full Overview.
+    """HR (recruiter v1, spec §4) is a five-block layout: identity letterhead
+    -> hero -> earned badges -> output ledger -> case study -> scope
+    disclosure. No Overview section, no profile card, no activity panel —
+    those are self-audit-only. Self audit still gets the full Overview.
     """
     def _build_hr(self, **overrides):
         # Minimal analysis-data + profile to exercise build_report_html.
@@ -141,13 +137,12 @@ class HRLayoutTests(unittest.TestCase):
         self.assertNotIn('id="overview"', html)
         self.assertNotIn('§ 01', html)
 
-    def test_hr_still_shows_activity_panel_under_profile(self):
-        """Activity panel (cache/models/cost) must remain — it's the most
-        compelling scale signal for a reader who lacks access to raw data."""
+    def test_hr_has_no_activity_panel(self):
+        """Recruiter v1 (spec §4) has no profile card / activity panel at
+        all — the five-block layout is identity -> hero -> badges -> output
+        ledger -> case study -> scope disclosure."""
         html = self._build_hr()
-        self.assertIn("Cache-read tokens", html)
-        self.assertIn("API-equivalent", html)
-        self.assertIn('id="models-chart"', html)
+        self.assertNotIn('id="models-chart"', html)
 
     def test_self_still_has_overview_section(self):
         """Self audit keeps Overview — the reader is the user themselves and
@@ -665,18 +660,6 @@ class PatternRenderTests(unittest.TestCase):
             "&lt;script&gt;alert(1)&lt;/script&gt;", rendered,
             "Escaped payload not found; the reason fallback path may not render at all",
         )
-
-
-class HowScoresRelateTests(unittest.TestCase):
-    def test_how_to_read_hr_mode_includes_relate_entry(self):
-        """build_html.py source must reference both locale keys for the new
-        HOW SCORES RELATE dt/dd entry in the HR how-to-read block."""
-        # PAGE_TEMPLATE lives in report_render.py after Task 7 extraction.
-        src = (Path(__file__).resolve().parent.parent / "scripts" / "report_render.py").read_text()
-        self.assertIn('how_to_read_key_relate', src,
-                      "report_render.py must reference locale key 'how_to_read_key_relate'")
-        self.assertIn('how_to_read_val_relate', src,
-                      "report_render.py must reference locale key 'how_to_read_val_relate'")
 
 
 class ScoreDisclaimerTests(unittest.TestCase):

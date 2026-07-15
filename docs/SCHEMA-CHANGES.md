@@ -164,6 +164,27 @@ for dim, metrics in scores.items():
 
 `scan_transcripts.py`, `scan_codex.py`, and `scan_grok.py` now additionally emit a `first_prompt_hash` field per row: a sha1 identity key over the normalized FULL prompt text (computed before the 500-char display truncation adapters apply to `first_prompt`), or `null` when there's no usable prompt text. `bs_repeated_instructions` groups by this hash when present, falling back to `prompt_identity(first_prompt)` (the sha1 of the normalized text, computed at grouping time) for legacy rows that predate this field, so mixed-version rows share one hash key space — this prevents two different prompts that merely share a 500-char truncated prefix from false-merging, and lets an identical long Claude prompt still match its truncated cross-tool copy. No raw prompt text is added; the field is purely an identity key.
 
+## 2026-07-15 — additive: `badges` top-level block (V5 Phase 3)
+
+- `badges`: `{schema_version: 1, standard_version: "v1", items: [...]}` —
+  six threshold-based badge entries in fixed order (`delegation`,
+  `root_cause`, `tool_breadth`, `token_efficiency`, `shipping_cadence`,
+  `cross_tool_orchestration`), each
+  `{id, earned, n, metrics, thresholds}` plus optional `reason` when the
+  badge could not be evaluated (below sample / dimension unscored /
+  window too short). Bars live in `references/scoring-rubric.md`
+  "## Badges (v1, provisional)". External report versions render
+  earned-only; the JSON keeps unearned items so the standard is auditable.
+- No existing fields changed or removed.
+
+## 2026-07-15 — additive: snapshot `overall_avg` + populated `badges` (V5 Phase 3)
+
+- `autopsy-history.jsonl` snapshot lines gain `overall_avg` (float or null:
+  `scores._overall.avg` at snapshot time). Lines from before this change
+  lack the key — readers fall back to the mean of the per-dim `scores` map.
+- The snapshot `badges` field (present since Phase 1, always `[]`) is now
+  populated with **earned badge ids** (list of strings). Shape unchanged.
+
 ---
 
 *Maintained alongside `scripts/aggregate.py`. When adding, deprecating, or removing fields, update this file in the same commit.*

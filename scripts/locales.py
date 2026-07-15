@@ -108,10 +108,6 @@ STRINGS = {
         # --- Letterhead ---
         "letterhead_sessions_analyzed": "sessions analyzed",
         "letterhead_facet_coverage": "Facet coverage",
-        # --- Profile-card sub labels (HR view) ---
-        "profile_sub_commits_per_hour": "commits / interactive hour",
-        "profile_sub_task_agent_adoption": "Task agent adoption",
-        "profile_sub_mcp_sessions": "MCP-using sessions",
         # --- TOC nav links (self audience) ---
         "toc_self_overview": "Overview",
         "toc_self_scores": "Rule-based scores",
@@ -123,15 +119,9 @@ STRINGS = {
         "toc_self_evidence": "Evidence library",
         "toc_self_method": "Methodology",
         # --- TOC nav links (HR audience) ---
-        "toc_hr_shipped": "Shipped with Claude",
         "toc_hr_overview": "Raw numbers",
-        "toc_hr_scores": "Hiring signals",
-        "toc_hr_peer_review": "Peer review",
-        "toc_hr_case_study": "Case study",
-        "toc_hr_trends": "Growth curve",
         "toc_hr_patterns": "Pattern mining",
         "toc_hr_evidence": "Evidence library",
-        "toc_hr_method": "Methodology",
         # --- Chart series labels (JS) ---
         "series_session_count": "Session count",
         "series_good_rate_pct": "Good rate %",
@@ -204,12 +194,6 @@ STRINGS = {
             "contribute to multiple dimensions, so the nine scores describe independent "
             "slices, not shares of a whole."
         ),
-        "how_to_read_key_relate": "HOW SCORES RELATE",
-        "how_to_read_val_relate": (
-            "Each dimension scores a different aspect of sessions. A session can score "
-            "high on Delegation but low on Time-of-day; they are independent "
-            "characteristics, not shares of a total."
-        ),
         "usage_char_header": "Usage characteristics",
         "usage_char_note_template": (
             "Across {n_sessions} sessions from {since} to {until}, local only."
@@ -243,96 +227,10 @@ STRINGS = {
             "<li><b>AT WHAT COST</b>? (tokens spent vs. results shipped)</li></ul>"
             "<p>The peer review below tells the story; the dimensions further down show the receipts.</p>"
         ),
-        "plain_zone_when": "WHEN you work",
-        "plain_zone_how": "HOW you direct it",
-        "plain_zone_what": "WHAT goes wrong",
-        "plain_zone_cost": "AT WHAT COST",
-        "plain_zone_when_desc": "Time-of-day patterns",
-        "plain_zone_how_desc": "Delegation, prompts, tool breadth",
-        "plain_zone_what_desc": "Debugging style, context drift, interrupt judgment",
-        "plain_zone_cost_desc": "Token efficiency, writing consistency",
-        "plain_zone_when_dims": "D8 Time-of-day management",
-        "plain_zone_how_dims": "D1 Delegation · D3 Prompt quality · D6 Tool breadth",
-        "plain_zone_what_dims": "D2 Root-cause debugging · D4 Context management · D5 Interrupt judgment",
-        "plain_zone_cost_dims": "D9 Token efficiency · D7 Writing consistency",
-        "section_relationships": "How the dimensions relate",
-        "section_relationships_subtitle": "A map of the nine scores, grouped into four zones.",
-        "relationships_flow_caption": (
-            "<b>WHEN</b> and <b>HOW</b> are the input conditions; <b>WHAT</b> goes wrong is the "
-            "output friction; <b>COST</b> is the price tag of the whole loop. Improving an "
-            "upstream zone usually pulls downstream zones with it."
-        ),
-        # --- HR shipped section ---
-        "hr_shipped_outcome_template": "Outcome: fully achieved across {n} sessions. Details withheld; {label}.",
-        "hr_shipped_proj_sub_template": "{sessions} sessions · {hours}h",
-        "hr_shipped_commits_label": "commits",
-        "hr_shipped_sessions_label": "sessions",
         # --- Preliminary warning ---
         "preliminary_warning": "⚠ Preliminary report — fewer than 20 rated sessions. Scores directional.",
         # --- Identity letterhead ---
         "letterhead_contact": "Contact",
-        # --- HR Shipped section ---
-        "hr_shipped_h": "Shipped with Claude",
-        "hr_shipped_subtitle": "Representative outcomes — fully achieved, essential-tier sessions, grouped by project.",
-        "hr_shipped_method": (
-            "Extracted from session facets where <code>outcome = fully_achieved</code> and "
-            "<code>helpfulness ∈ (essential, very_helpful)</code>. One representative per project, "
-            "ranked by total time invested."
-        ),
-        "hr_shipped_top_session_tok": "tok / top session",
-        "hr_shipped_privacy_note_allowlist": (
-            " Allowlisted public projects appear by name; everything else is shown as a generic category label."
-        ),
-        "hr_shipped_privacy_note_anonymised": (
-            " All project names are anonymised; no public-projects allowlist was supplied. "
-            "Pass <code>--public-projects</code> to show specific repos by name."
-        ),
-        # --- HR Artifacts section ---
-        "hr_artifacts_h": "Public artifacts",
-        "hr_artifacts_subtitle": "Links the user chose to surface.",
-        "hr_artifacts_method": "Self-reported. Not auto-extracted.",
-        # --- How to read (HR) ---
-        "how_to_read_summary": "How to read this report (30-second primer)",
-        "how_to_read_intro": (
-            "This report is generated by <code>cc-user-autopsy</code>, a skill that reads "
-            "a user's local Claude Code usage data. It combines deterministic rule-based "
-            "scoring with an LLM-written peer review."
-        ),
-        "how_to_read_dt_session": "Session",
-        "how_to_read_dd_session": (
-            "One continuous Claude Code conversation, bounded by either a fresh start or "
-            "a <code>/clear</code>. A typical heavy user has hundreds per quarter."
-        ),
-        "how_to_read_dt_subagent": "Task agent / Subagent",
-        "how_to_read_dd_subagent": (
-            "Claude Code lets you spawn isolated child agents to run a subtask in parallel. "
-            "Heavy adoption signals fluency with agentic workflows."
-        ),
-        "how_to_read_dt_mcp": "MCP (Model Context Protocol)",
-        "how_to_read_dd_mcp": (
-            "A standard for connecting Claude to external tools (Playwright, Supabase, "
-            "GitHub, etc). MCP adoption rate correlates with tool breadth."
-        ),
-        "how_to_read_dt_facet": "Facet",
-        "how_to_read_dd_facet": (
-            "LLM-classified outcome / friction labels per session, produced by the built-in "
-            "<code>/insights</code> command. Coverage &lt; 100% is normal."
-        ),
-        "how_to_read_dt_interrupt": "Interrupt recovery rate",
-        "how_to_read_dd_interrupt": (
-            "Of sessions where the user interrupted Claude's action, what fraction still "
-            "reached a \"good\" outcome. High = good judgment about when to stop Claude."
-        ),
-        # --- HR Profile card sub labels ---
-        "hr_profile_scale_label": "Scale",
-        "hr_profile_velocity_label": "Velocity",
-        "hr_profile_parallel_label": "Parallel work",
-        "hr_profile_tool_breadth_label": "Tool breadth",
-        "hr_profile_self_audit_label": "Self-audit",
-        "hr_profile_focus_label": "Focus",
-        "hr_profile_sessions_unit": "sessions",
-        "hr_profile_top_project_share": "{pct}% on top project",
-        # --- v3: Benchmark caveat (BOTH audiences) ---
         "benchmark_caveat": (
             "Unbenchmarked individual data. The numbers below describe one user's "
             "local Claude Code traces; they cannot be compared to other users without a cohort."
@@ -366,14 +264,6 @@ STRINGS = {
         "hr_why_interview_subtitle": (
             "Specific roles this trace argues for, with the concrete signal that supports each."
         ),
-        # --- v3: HR Self-awareness caveat (collapsed dimensions) ---
-        # V4: Codex round 2 said naming hidden weak dims is weasel-worded —
-        # draws the reader's eye to weaknesses then spins. Now: just say a
-        # larger private audit exists, do not enumerate the weak dimensions.
-        "hr_self_awareness_caveat": (
-            "Private audit covers additional self-improvement dimensions; "
-            "this portfolio excerpt shows the four most hiring-relevant signals."
-        ),
         # --- v3: Usage snapshot header (SELF, merged overview+activity) ---
         "self_snapshot_h": "Usage snapshot",
         "self_snapshot_subtitle": (
@@ -389,23 +279,6 @@ STRINGS = {
         "claim_interrupt_h": "Claim 4 — Interrupt is treated as redirect",
         "claim_interrupt_intro": "Sessions where you cut Claude off and steered, with the outcome that followed. Examples:",
         "claim_no_evidence": "No sessions in the current sample match this claim. Expected because samples cap at 24.",
-        # --- v4: HR scoring section (4 hiring signals, not 9-dim) ---
-        "hr_section_scoring_h": "Hiring signals",
-        "hr_section_scoring_subtitle": (
-            "Four dimensions most relevant to AI-native engineering hiring."
-        ),
-        "hr_section_scoring_method": (
-            "Scored from this user's local Claude Code traces using explicit thresholds. "
-            "Higher is better. The four shown here are selected from a larger private audit."
-        ),
-        # --- v3: HR Methodology disclosure note ---
-        "hr_method_disclosure_h": "How this was generated",
-        "hr_method_disclosure_body": (
-            "Compiled by <code>cc-user-autopsy</code> from this user's local Claude Code "
-            "session traces. Project names not on the public allowlist are anonymised. "
-            "Session IDs are not exposed. Do not infer relative ranking against other users; "
-            "no cohort baseline exists."
-        ),
         # --- V5 ledger ---
         "ledger_exhibit_label": "EXHIBIT",
         "ledger_source_prefix": "Source:",
@@ -525,6 +398,56 @@ STRINGS = {
         "ledger_secondary_findings": "Secondary findings",
         "ledger_source_graveyard": "blind-spot engine, transcript activity pool",
         "ledger_source_leaks": "blind-spot engine, scoring pool + cross-LLM prompt history",
+        # --- Phase 3: trend ledger (SELF book 4) ---
+        "ledger_trend_kicker": "Trend ledger",
+        "ledger_trend_title": "Key ledger numbers, this run against your own history",
+        "ledger_trend_locked_template": "The trend ledger unlocks after {n} more report run(s). Each successful self-report appends one snapshot to autopsy-history.jsonl; three snapshots are needed before trends mean anything.",
+        "ledger_trend_exhibit_title": "This run vs last run vs ~3 months ago",
+        "ledger_source_trend": "autopsy-history.jsonl snapshots + this run's analysis-data.json",
+        "ledger_trend_col_metric": "Metric",
+        "ledger_trend_col_this": "This run",
+        "ledger_trend_col_prev_template": "Last run ({date})",
+        "ledger_trend_col_ref_template": "{date}",
+        "ledger_trend_col_spark": "All snapshots",
+        "ledger_trend_row_overall": "Overall score (avg of scored dims)",
+        "ledger_trend_row_commits": "Git commits in window",
+        "ledger_trend_row_sessions": "Sessions analyzed",
+        "ledger_trend_row_leak_cost": "Leak cost, USD per week (lower-bound)",
+        "ledger_trend_row_badges": "Badges earned",
+        "ledger_trend_na": "n/a",
+        "blindspot_drift_title": "Habit drift",
+        "blindspot_drift_template": "Across {weeks} plottable weeks, your median first-prompt length fell from {early} to {late} characters while the good-outcome rate went from {early_rate}% to {late_rate}%. Shorter instructions are not being paid back with equal outcomes.",
+        # --- Phase 3: badge layer (external versions) ---
+        "hr_badges_h": "§ HR-01 · Earned badges",
+        "hr_badges_subtitle": "Claims that cleared published thresholds",
+        "hr_badges_method": "Each badge is an absolute, published threshold from the cc-user-autopsy standard (references/scoring-rubric.md). Badges below their bar or below minimum sample are simply absent. No percentile or population claim is made.",
+        "badge_evidence_template": "n = {n} · window {start} → {end}",
+        "badge_delegation_name": "Delegation",
+        "badge_delegation_criteria": "Task-agent adoption {ta}% (bar ≥ {bar_ta}%) · good-outcome rate on delegated sessions {good}% (bar ≥ {bar_good}%)",
+        "badge_root_cause_name": "Root-cause debugging",
+        "badge_root_cause_criteria": "Iterative-refinement-with-buggy-code sessions {pct}% of rated pool (bar ≤ {bar}%)",
+        "badge_tool_breadth_name": "Tool breadth",
+        "badge_tool_breadth_criteria": "MCP used in {mcp}% of sessions (bar ≥ {bar_mcp}%) · top-3 built-in tools {top3}% of calls (bar ≤ {bar_top3}%)",
+        "badge_token_efficiency_name": "Token efficiency",
+        "badge_token_efficiency_criteria": "Failed-vs-good token ratio {ratio}× (bar ≤ {bar_ratio}×) · cache hit {cache}% (bar ≥ {bar_cache}%)",
+        "badge_shipping_cadence_name": "Shipping cadence",
+        "badge_shipping_cadence_criteria": "{per_week} git commits per active week (bar ≥ {bar}) · {n} sessions with commits",
+        "badge_cross_tool_orchestration_name": "Cross-tool orchestration",
+        "badge_cross_tool_orchestration_criteria": "{hours} hours of multi-source parallel work in a {days}-day common window (bar ≥ {bar} h, ≥ 2 full-tier sources)",
+        # --- Phase 3: HR output ledger + scope disclosure ---
+        "hr_output_h": "§ HR-02 · Output ledger",
+        "hr_output_subtitle": "Evidence-backed deliverables, allowlisted projects only",
+        "hr_output_method": "Counts cover only the projects the subject explicitly allowlisted; everything else is excluded from this version entirely.",
+        "hr_output_commits": "git commits, listed projects",
+        "hr_output_sessions": "sessions, listed projects",
+        "hr_output_hours": "interactive hours, listed projects",
+        "hr_output_proj_sub_template": "{sessions} sessions · {hours}h",
+        "hr_output_commits_label": "commits",
+        "hr_output_tok_label": "tok",
+        "toc_hr_badges": "Badges",
+        "toc_hr_output": "Output ledger",
+        "hr_scope_h": "Methodology & scope",
+        "hr_scope_body_template": "Produced by the public cc-user-autopsy standard, version {version}. {total} badge criteria were assessed against the subject's local Claude Code data; {earned} cleared their published thresholds and are shown above. Badges not shown either fell short of the bar or lacked minimum sample. Criteria and minimum sample sizes are published in references/scoring-rubric.md in the same repository; anyone can run the same skill on their own data to reproduce this assessment. Session identifiers and non-allowlisted project names are excluded by a default-deny privacy model.",
     },
     "zh_TW": {
         # --- Document chrome ---
@@ -609,10 +532,6 @@ STRINGS = {
         # --- Letterhead ---
         "letterhead_sessions_analyzed": "段對話已分析",
         "letterhead_facet_coverage": "標籤覆蓋率",
-        # --- Profile-card sub labels (HR view) ---
-        "profile_sub_commits_per_hour": "次提交 / 每小時",
-        "profile_sub_task_agent_adoption": "委派採用率",
-        "profile_sub_mcp_sessions": "使用外部工具的對話",
         # --- TOC nav links (self audience) ---
         "toc_self_overview": "概覽",
         "toc_self_scores": "九面向評分",
@@ -624,15 +543,9 @@ STRINGS = {
         "toc_self_evidence": "對話舉證",
         "toc_self_method": "方法說明",
         # --- TOC nav links (HR audience) ---
-        "toc_hr_shipped": "用 Claude 交付的成果",
         "toc_hr_overview": "原始數字",
-        "toc_hr_scores": "招募訊號",
-        "toc_hr_peer_review": "同行回饋",
-        "toc_hr_case_study": "代表性對話",
-        "toc_hr_trends": "成長曲線",
         "toc_hr_patterns": "深入模式",
         "toc_hr_evidence": "對話舉證",
-        "toc_hr_method": "方法說明",
         # --- Chart series labels (JS) ---
         "series_session_count": "對話數",
         "series_good_rate_pct": "好結果率 %",
@@ -699,8 +612,6 @@ STRINGS = {
         # --- Usage rubric (Task 12) ---
         "score_disclaimer": "各面向是彼此獨立的特徵，不是拆分比例，分數不會相加。",
         "score_disclaimer_long": "每個面向都從適用的對話各自計分。",
-        "how_to_read_key_relate": "分數彼此獨立",
-        "how_to_read_val_relate": "每個面向看的是對話的不同切面。",
         "usage_char_header": "使用特徵",
         "usage_char_note_template": "取樣範圍：{since} 至 {until}，共 {n_sessions} 段對話，僅本機。",
         # --- Evidence card labels ---
@@ -730,96 +641,10 @@ STRINGS = {
             "<li><b>付出多少成本</b>換到結果？（字元量 vs 實際產出）</li></ul>"
             "<p>下方的「同行回饋」用故事說明這四件事如何串連；再下方的九個面向給你看背後的證據。</p>"
         ),
-        "plain_zone_when": "什麼時間",
-        "plain_zone_how": "怎麼指揮",
-        "plain_zone_what": "哪裡卡住",
-        "plain_zone_cost": "付出代價",
-        "plain_zone_when_desc": "一天中哪些時段跟 AI 合作效果最好",
-        "plain_zone_how_desc": "委派子任務、提問清晰度、工具廣度",
-        "plain_zone_what_desc": "除錯方式、長對話的脈絡管理、被打斷後的恢復",
-        "plain_zone_cost_desc": "字元量效率、寫作一致性",
-        "plain_zone_when_dims": "D8 時段管理",
-        "plain_zone_how_dims": "D1 委派 · D3 提問品質 · D6 工具廣度",
-        "plain_zone_what_dims": "D2 根因除錯 · D4 對話脈絡管理 · D5 中斷判斷",
-        "plain_zone_cost_dims": "D9 字元量效率 · D7 寫作一致性",
-        "section_relationships": "九個面向怎麼串連",
-        "section_relationships_subtitle": "九個分數分成四個故事區塊：什麼時間、怎麼指揮、哪裡卡住、付出多少代價。",
-        "relationships_flow_caption": (
-            "<b>什麼時間</b>跟<b>怎麼指揮</b>是輸入條件，"
-            "<b>哪裡卡住</b>是過程中跑出來的摩擦，"
-            "<b>付出代價</b>是整個迴圈的價格。"
-            "改善上游區塊，通常會把下游區塊一起拉起來。"
-        ),
-        # --- HR shipped section ---
-        "hr_shipped_outcome_template": "結果：在 {n} 段對話中完全達成。細節未揭露：{label}。",
-        "hr_shipped_proj_sub_template": "{sessions} 段對話，共 {hours} 小時",
-        "hr_shipped_commits_label": "次提交",
-        "hr_shipped_sessions_label": "段對話",
         # --- Preliminary warning ---
         "preliminary_warning": "⚠ 初步報告：已評對話少於 20 筆，分數僅作參考方向。",
         # --- Identity letterhead ---
         "letterhead_contact": "聯絡",
-        # --- HR Shipped section ---
-        "hr_shipped_h": "用 Claude 交付的成果",
-        "hr_shipped_subtitle": "代表性成果：完全達成、被評為「不可或缺」等級的對話，依專案分組。",
-        "hr_shipped_method": (
-            "從對話標籤中篩選 <code>outcome = fully_achieved</code> 且 "
-            "<code>helpfulness</code> 屬於「不可或缺 / 很有用」的對話。每個專案取一段代表，"
-            "依總投入時間排序。"
-        ),
-        "hr_shipped_top_session_tok": "字元（最高單段對話）",
-        "hr_shipped_privacy_note_allowlist": (
-            "公開白名單內的專案顯示原名，其餘以類別標籤代替。"
-        ),
-        "hr_shipped_privacy_note_anonymised": (
-            "所有專案名稱已匿名化；未提供公開白名單。"
-            "傳入 <code>--public-projects</code> 可指定哪些 repo 顯示原名。"
-        ),
-        # --- HR Artifacts section ---
-        "hr_artifacts_h": "公開作品",
-        "hr_artifacts_subtitle": "使用者選擇公開的連結。",
-        "hr_artifacts_method": "由使用者主動指定，並非自動擷取。",
-        # --- How to read (HR) ---
-        "how_to_read_summary": "怎麼讀這份報告（30 秒入門）",
-        "how_to_read_intro": (
-            "這份報告由 <code>cc-user-autopsy</code> 工具自動產出，"
-            "讀取使用者本機的 Claude Code 對話紀錄，"
-            "結合機械式的規則評分與 AI 寫的同行回饋。"
-        ),
-        "how_to_read_dt_session": "對話 (Session)",
-        "how_to_read_dd_session": (
-            "一段連續的 Claude Code 對話，由開啟或 <code>/clear</code> 為界。"
-            "重度使用者一季通常有幾百段。"
-        ),
-        "how_to_read_dt_subagent": "委派 / 子任務 (Task agent / Subagent)",
-        "how_to_read_dd_subagent": (
-            "Claude Code 可以派出獨立的子任務並行處理。"
-            "高採用率代表熟悉「讓 AI 分身做事」的工作流。"
-        ),
-        "how_to_read_dt_mcp": "外部工具 (MCP, Model Context Protocol)",
-        "how_to_read_dd_mcp": (
-            "讓 Claude 連接外部工具的標準介面（Playwright、Supabase、GitHub 等）。"
-            "MCP 採用率與工具廣度相關。"
-        ),
-        "how_to_read_dt_facet": "標籤 (Facet)",
-        "how_to_read_dd_facet": (
-            "由內建 <code>/insights</code> 工具用 AI 為每段對話打上的結果與摩擦標籤。"
-            "覆蓋率小於 100% 是正常的。"
-        ),
-        "how_to_read_dt_interrupt": "中斷後恢復率",
-        "how_to_read_dd_interrupt": (
-            "在使用者中途打斷 Claude 動作的對話中，仍有多少比例最後達成好結果。"
-            "高表示使用者對「何時該打斷」判斷得宜。"
-        ),
-        # --- HR Profile card sub labels ---
-        "hr_profile_scale_label": "規模",
-        "hr_profile_velocity_label": "速度",
-        "hr_profile_parallel_label": "平行工作",
-        "hr_profile_tool_breadth_label": "工具廣度",
-        "hr_profile_self_audit_label": "自評",
-        "hr_profile_focus_label": "焦點",
-        "hr_profile_sessions_unit": "段對話",
-        "hr_profile_top_project_share": "{pct}% 集中於主要專案",
         # --- v3: Benchmark caveat ---
         "benchmark_caveat": (
             "未經 benchmark 的個人資料。下方數字描述的是一位使用者的本機 Claude Code 紀錄，"
@@ -851,12 +676,6 @@ STRINGS = {
         "hr_why_interview_subtitle": (
             "從這份報告可以論證的幾種角色，每條附上對應的具體訊號。"
         ),
-        # --- v3: HR Self-awareness caveat ---
-        # V4: 不再點名 5 個低分面向。
-        "hr_self_awareness_caveat": (
-            "完整的私人審視涵蓋更多自我改善面向；"
-            "這份對外摘要只列出對招募 context 最相關的四個訊號。"
-        ),
         # --- v3: Usage snapshot header (SELF) ---
         "self_snapshot_h": "用量快照",
         "self_snapshot_subtitle": "詮釋之前的原始數字。",
@@ -870,20 +689,6 @@ STRINGS = {
         "claim_interrupt_h": "Claim 4：中斷被當成「重新導向」",
         "claim_interrupt_intro": "你中途切掉 Claude 並修正方向的對話，附上後續結果。下列為樣本：",
         "claim_no_evidence": "目前抽樣中沒有符合這項 claim 的對話。樣本上限 24，這是預期內的。",
-        # --- v4: HR scoring section (4 hiring signals, not 9-dim) ---
-        "hr_section_scoring_h": "招募訊號",
-        "hr_section_scoring_subtitle": "四個對 AI 原生工程招募最相關的面向。",
-        "hr_section_scoring_method": (
-            "從這位使用者的本機 Claude Code 紀錄按明確門檻值計算。分數越高越好。"
-            "下方四項是從完整私人審視中為招募 context 挑出來的。"
-        ),
-        # --- v3: HR Methodology disclosure note ---
-        "hr_method_disclosure_h": "報告產生方式",
-        "hr_method_disclosure_body": (
-            "由 <code>cc-user-autopsy</code> 工具自動從本機 Claude Code 對話紀錄編譯。"
-            "非白名單上的專案名稱已匿名化，對話 ID 不對外揭露。"
-            "請勿據此推論相對於其他使用者的位置：沒有 cohort 比較組。"
-        ),
         # --- V5 ledger ---
         "ledger_exhibit_label": "圖表",
         "ledger_source_prefix": "資料來源:",
@@ -991,6 +796,56 @@ STRINGS = {
         "ledger_secondary_findings": "次要發現",
         "ledger_source_graveyard": "盲點引擎，transcript 活動池",
         "ledger_source_leaks": "盲點引擎，計分池加跨工具 prompt 紀錄",
+        # --- Phase 3: 趨勢帳（SELF 第 4 本帳） ---
+        "ledger_trend_kicker": "趨勢帳",
+        "ledger_trend_title": "關鍵帳面數字，這一次對照你自己的歷史",
+        "ledger_trend_locked_template": "趨勢帳還需要 {n} 次報告執行才會解鎖。每次成功產出自用版報告會在 autopsy-history.jsonl 追加一筆快照，累積三筆之後趨勢才有意義。",
+        "ledger_trend_exhibit_title": "本次、上次、約三個月前的對照",
+        "ledger_source_trend": "autopsy-history.jsonl 快照＋本次 analysis-data.json",
+        "ledger_trend_col_metric": "指標",
+        "ledger_trend_col_this": "本次",
+        "ledger_trend_col_prev_template": "上次（{date}）",
+        "ledger_trend_col_ref_template": "{date}",
+        "ledger_trend_col_spark": "全部快照",
+        "ledger_trend_row_overall": "總分（已評分維度平均）",
+        "ledger_trend_row_commits": "視窗內 git commits",
+        "ledger_trend_row_sessions": "分析的 session 數",
+        "ledger_trend_row_leak_cost": "漏水成本，每週美元（下限值）",
+        "ledger_trend_row_badges": "拿到的徽章數",
+        "ledger_trend_na": "n/a",
+        "blindspot_drift_title": "習慣漂移",
+        "blindspot_drift_template": "在 {weeks} 個可繪週裡，你的首則指令中位長度從 {early} 字元縮到 {late} 字元，良好結果率從 {early_rate}% 變成 {late_rate}%。指令變短並沒有換到等值的結果。",
+        # --- Phase 3: 徽章層（對外版） ---
+        "hr_badges_h": "§ HR-01 · 取得的徽章",
+        "hr_badges_subtitle": "通過公開門檻的主張",
+        "hr_badges_method": "每一枚徽章都是 cc-user-autopsy 標準（references/scoring-rubric.md）裡白紙黑字的絕對門檻。沒過門檻或樣本不足的徽章直接不出現。本報告不做任何百分位或母體比較宣稱。",
+        "badge_evidence_template": "n = {n} · 資料窗 {start} → {end}",
+        "badge_delegation_name": "分派委任",
+        "badge_delegation_criteria": "Task agent 使用率 {ta}%（門檻 ≥ {bar_ta}%）· 委任 session 良好結果率 {good}%（門檻 ≥ {bar_good}%）",
+        "badge_root_cause_name": "根因除錯",
+        "badge_root_cause_criteria": "迭代修補且帶 buggy code 摩擦的 session 佔已評分 {pct}%（門檻 ≤ {bar}%）",
+        "badge_tool_breadth_name": "工具廣度",
+        "badge_tool_breadth_criteria": "{mcp}% 的 session 用了 MCP（門檻 ≥ {bar_mcp}%）· 前三大內建工具佔 {top3}% 呼叫（門檻 ≤ {bar_top3}%）",
+        "badge_token_efficiency_name": "Token 效率",
+        "badge_token_efficiency_criteria": "失敗對良好 token 比 {ratio} 倍（門檻 ≤ {bar_ratio} 倍）· 快取命中 {cache}%（門檻 ≥ {bar_cache}%）",
+        "badge_shipping_cadence_name": "出貨節奏",
+        "badge_shipping_cadence_criteria": "每活躍週 {per_week} 個 git commits（門檻 ≥ {bar}）· {n} 個 session 有 commit",
+        "badge_cross_tool_orchestration_name": "跨工具並行",
+        "badge_cross_tool_orchestration_criteria": "共同資料窗 {days} 天內 {hours} 小時多來源並行（門檻 ≥ {bar} 小時，且 ≥ 2 個完整層級來源）",
+        # --- Phase 3: HR 產出帳＋方法揭露 ---
+        "hr_output_h": "§ HR-02 · 產出帳",
+        "hr_output_subtitle": "有證據支持的交付物，只列允許公開的專案",
+        "hr_output_method": "計數只涵蓋當事人明確允許公開的專案，其餘一律不進這個版本。",
+        "hr_output_commits": "列出專案的 git commits",
+        "hr_output_sessions": "列出專案的 session 數",
+        "hr_output_hours": "列出專案的互動小時數",
+        "hr_output_proj_sub_template": "{sessions} 段對話，共 {hours} 小時",
+        "hr_output_commits_label": "次提交",
+        "hr_output_tok_label": "字元",
+        "toc_hr_badges": "徽章",
+        "toc_hr_output": "產出帳",
+        "hr_scope_h": "方法與範圍",
+        "hr_scope_body_template": "本報告由公開的 cc-user-autopsy 標準（版本 {version}）產出。共評估 {total} 項徽章準則，其中 {earned} 項通過公開門檻並顯示於上方；未顯示的徽章即未通過或樣本不足。準則與最低樣本數公開在同一 repo 的 references/scoring-rubric.md，任何人都能用同一套 skill 對自己的資料重跑驗證。Session 識別碼與未列入允許清單的專案名稱依預設拒絕的隱私模型一律排除。",
     },
 }
 

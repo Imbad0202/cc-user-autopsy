@@ -10,6 +10,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 OUT_DIR = Path("/tmp/cc-autopsy-demo")
 
@@ -137,9 +138,9 @@ def _run_full_pipeline():
 
     Both blind-spot test classes below call this from their own
     setUpClass, so without caching the (expensive) pipeline runs twice per
-    test session. Results are deterministic (seed=42 demo data), so the
-    first result is cached at module level and reused for every subsequent
-    call — the pipeline itself still only runs once."""
+    test session. Results are deterministic (seed=20260715 demo data), so
+    the first result is cached at module level and reused for every
+    subsequent call — the pipeline itself still only runs once."""
     global _full_pipeline_cache
     if _full_pipeline_cache is not None:
         return _full_pipeline_cache
@@ -229,6 +230,47 @@ class BlindSpotDemoGateTests(unittest.TestCase):
                                "BS#1/#2 gates pass")
 
 
+class HistorySnapshotsAndBadgesTests(unittest.TestCase):
+    """Phase 3: the demo must emit a readable trend-snapshot file and the
+    aggregate pipeline must deterministically earn >=1 badge on it, or the
+    trend ledger / badges section never render on demo data (assets/
+    example-output*.html and the smoke test both depend on this)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.analysis = _run_full_pipeline()
+
+    def test_history_snapshots_written_and_readable(self):
+        hist = OUT_DIR / "autopsy-history.jsonl"
+        self.assertTrue(hist.exists())
+        from build_html import read_history_snapshots
+        entries = read_history_snapshots(hist)
+        self.assertEqual(len(entries), 3)
+        self.assertEqual([e["date"] for e in entries], sorted(e["date"] for e in entries))
+
+    def test_badges_block_present_with_six_items(self):
+        badges = self.analysis["badges"]
+        self.assertEqual(len(badges["items"]), 6)
+        self.assertEqual(badges["standard_version"], "v1")
+
+    def test_at_least_one_badge_earned_deterministically(self):
+        # Phase 2 lesson: a badge path nobody reaches is a fake sentinel.
+        # With random.seed frozen this either always passes or always
+        # fails — if it fails, raise the demo's commit density (gen_session)
+        # until shipping_cadence clears its bar, don't loosen the bar.
+        earned = [b["id"] for b in self.analysis["badges"]["items"] if b["earned"]]
+        self.assertTrue(earned, "demo data earns zero badges — engineer the fixture")
+
+    def test_earned_badge_set_is_pinned(self):
+        # Verified empirically across repeated regenerations under
+        # random.seed(20260715) (see generate_demo_data.main): the demo
+        # deterministically earns exactly these three badges. A different
+        # set here means either the seed, the demo fixtures, or a badge
+        # bar changed — investigate before loosening this assertion.
+        earned = sorted(b["id"] for b in self.analysis["badges"]["items"] if b["earned"])
+        self.assertEqual(earned, ["root_cause", "shipping_cadence", "token_efficiency"])
+
+
 class WellFormedBlindSpotBlockTests(unittest.TestCase):
     """#3 (switch tax), #5 (habit drift), #6 (ask-vs-ship), #7 (interrupt
     win-rate) run on the same incidental (non-index-forced) demo data as
@@ -236,7 +278,7 @@ class WellFormedBlindSpotBlockTests(unittest.TestCase):
     are legitimately data-dependent and unseeded by index, so asserting
     gate_passed on them would flake across otherwise-valid regenerations.
     This class only checks the block is well-formed (keys present, no
-    KeyError), which the deterministic seed=42 draw does guarantee."""
+    KeyError), which the deterministic seed=20260715 draw does guarantee."""
 
     @classmethod
     def setUpClass(cls):

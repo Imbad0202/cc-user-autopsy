@@ -18,11 +18,6 @@ BUILD_HTML = REPO_ROOT / "scripts" / "report_render.py"
 # Tasks 5-9 add entries here as each component is cleaned.
 CLEANED_COMPONENTS: list[tuple[str, str, str]] = [
     (
-        ".profile-card",
-        "  .profile-card {",
-        "    margin-top: var(--space-1);\n  }",
-    ),
-    (
         ".metrics",
         "  /* Metric cards grid */\n  .metrics {",
         "    margin-top: var(--space-4);\n  }",
@@ -86,16 +81,13 @@ HARDCODE_WHITELIST_PX = {
     "260px", "340px", "420px",              # .chart-box .short / default / .tall
 
     # --- Border indicator widths (used as visual accents, not spacing) ---
-    "3px", "4px",                            # caveat / profile-card accent border-left
+    "3px",                                   # caveat accent border-left
 
     # --- Responsive breakpoints (shared across components) ---
     "640px",                                 # mobile breakpoint (max-width)
 
-    # --- Component-unique spacing (profile-card + small components) ---
-    "34px",                                  # profile-card horiz padding + evidence-header top margin (coincident value, unrelated intent)
-    "48px",                                  # profile-card bottom margin (not on 2px scale)
-    "22px",                                  # profile-lede font-size (unique hero-ish)
-    "12px",                                  # profile-cell .sub font-size (small-print)
+    # --- Component-unique spacing (small components) ---
+    "34px",                                  # evidence-header top margin
 
     # --- Small component unique values ---
     "10px",                                  # intro-card ::before NOTE badge font-size

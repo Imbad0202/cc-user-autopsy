@@ -12,8 +12,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-random.seed(42)
-
 OUT_DIR = Path("/tmp/cc-autopsy-demo")
 META_DIR = OUT_DIR / "usage-data/session-meta"
 FACETS_DIR = OUT_DIR / "usage-data/facets"
@@ -452,6 +450,37 @@ def gen_transcript(sid, meta, facet):
     for tn in tool_names:
         content.append({"type": "tool_use", "name": tn, "id": f"t_{random.randint(1,99999)}", "input": {}})
     lines.append(asst_record(content, (start + timedelta(seconds=30)).isoformat(), primary_model))
+    # One Bash tool_use record per git_commits, each carrying a real `git
+    # commit` command. scan_transcripts.py derives git_commits/git_pushes
+    # from `git commit`/`git push` substrings inside a Bash tool_use's
+    # input.command — session-meta's git_commits count alone is invisible
+    # to the transcript-scan pool (compute_ledger's source), so without
+    # this the shipping_cadence badge can never earn on demo data
+    # regardless of how high session-meta commit counts go.
+    for c in range(meta.get("git_commits") or 0):
+        commit_content = [
+            {"type": "text", "text": "Committing."},
+            {"type": "tool_use", "name": "Bash",
+             "id": f"t_commit_{random.randint(1,99999)}",
+             "input": {"command": 'git commit -m "demo: follow-up commit"'}},
+        ]
+        lines.append(asst_record(
+            commit_content,
+            (start + timedelta(minutes=1, seconds=30 + c * 20)).isoformat(),
+            primary_model,
+        ))
+    if meta.get("git_pushes"):
+        push_content = [
+            {"type": "text", "text": "Pushing."},
+            {"type": "tool_use", "name": "Bash",
+             "id": f"t_push_{random.randint(1,99999)}",
+             "input": {"command": "git push"}},
+        ]
+        lines.append(asst_record(
+            push_content,
+            (start + timedelta(minutes=2)).isoformat(),
+            primary_model,
+        ))
     # Some back-and-forth
     for i in range(random.randint(2, 8)):
         lines.append({
@@ -862,7 +891,33 @@ def _force_repeated_instruction(sessions_meta, sessions_facets, now):
             facet["underlying_goal"] = DEMO_REPEATED_INSTRUCTION[:120]
 
 
+def gen_history_snapshots(now):
+    """3 synthetic trend snapshots (~90/55/25 days before `now`) so the
+    trend ledger unlocks on demo data. Compact-list leaks shape — the
+    HISTORY shape, not analysis-data.json's dict shape."""
+    entries = []
+    for days_ago, commits, sessions, overall, badges, cost in (
+            (90, 18, 190, 5.4, [], 2.10),
+            (55, 26, 220, 5.8, ["shipping_cadence"], 1.70),
+            (25, 33, 255, 6.1, ["shipping_cadence", "delegation"], 1.40)):
+        d = (now - timedelta(days=days_ago)).date().isoformat()
+        entries.append({
+            "date": d, "schema_version": 1,
+            "scores": {"D1_delegation": 7, "D2_root_cause": 6},
+            "overall_avg": overall, "badges": badges,
+            "ledger": {"git_commits": commits, "sessions": sessions,
+                       "sources_detected": ["claude", "codex"],
+                       "leaks": [{"type": "repeated_instructions",
+                                  "weekly_cost_usd": cost,
+                                  "weekly_tokens": int(cost * 25000),
+                                  "occurrences": 6}]}})
+    path = OUT_DIR / "autopsy-history.jsonl"
+    path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+    return path
+
+
 def main():
+    random.seed(20260715)
     # Generate ~280 sessions over 14 weeks
     now = datetime(2026, 4, 10, tzinfo=timezone.utc)
     sessions_meta = {}
@@ -932,12 +987,13 @@ def main():
     gen_codex_sessions(now)
     gen_grok_sessions(now)
     gen_antigravity_files(now)
+    history_path = gen_history_snapshots(now)
 
     print(f"Generated {len(sessions_meta)} meta, {len(sessions_facets)} facets, "
           f"{len(pick_sids) + engineered_count} transcripts "
           f"({engineered_count} engineered blind-spot fixtures)")
     print(f"Output dirs:\n  {META_DIR}\n  {FACETS_DIR}\n  {PROJECTS_DIR}\n"
-          f"  {CODEX_DIR}\n  {GROK_DIR}\n  {ANTIGRAVITY_DIR}")
+          f"  {CODEX_DIR}\n  {GROK_DIR}\n  {ANTIGRAVITY_DIR}\n  {history_path}")
 
 
 if __name__ == "__main__":
