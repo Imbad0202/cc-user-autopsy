@@ -127,5 +127,139 @@ class CrossLlmDemoDataTests(unittest.TestCase):
         self.assertGreaterEqual(len(pbs), 5)
 
 
+_full_pipeline_cache = None
+
+
+def _run_full_pipeline():
+    """Regenerate the demo tree and run the real pipeline (scan_transcripts +
+    scan_codex + scan_grok + aggregate.py, all via subprocess, same as
+    tests/smoke_test.py) over it. Returns the parsed analysis-data.json.
+
+    Both blind-spot test classes below call this from their own
+    setUpClass, so without caching the (expensive) pipeline runs twice per
+    test session. Results are deterministic (seed=42 demo data), so the
+    first result is cached at module level and reused for every subsequent
+    call — the pipeline itself still only runs once."""
+    global _full_pipeline_cache
+    if _full_pipeline_cache is not None:
+        return _full_pipeline_cache
+
+    _regen_demo()
+    transcript_rows = OUT_DIR / "transcript-rows.jsonl"
+    codex_rows = OUT_DIR / "codex-rows.jsonl"
+    grok_rows = OUT_DIR / "grok-rows.jsonl"
+    analysis_path = OUT_DIR / "analysis-data.json"
+
+    def run(*args):
+        subprocess.run([sys.executable, *args], check=True,
+                       cwd=REPO_ROOT, capture_output=True)
+
+    run(str(REPO_ROOT / "scripts" / "scan_transcripts.py"),
+        "--projects-dir", str(OUT_DIR / "projects"),
+        "--output", str(transcript_rows))
+    run(str(REPO_ROOT / "scripts" / "scan_codex.py"),
+        "--sessions-dir", str(OUT_DIR / "codex-sessions"),
+        "--output", str(codex_rows))
+    run(str(REPO_ROOT / "scripts" / "scan_grok.py"),
+        "--sessions-dir", str(OUT_DIR / "grok-sessions"),
+        "--output", str(grok_rows))
+    run(str(REPO_ROOT / "scripts" / "aggregate.py"),
+        "--transcript-rows", str(transcript_rows),
+        "--data-dir", str(OUT_DIR / "usage-data"),
+        "--cross-llm-rows", str(codex_rows),
+        "--cross-llm-rows", str(grok_rows),
+        "--output", str(analysis_path))
+
+    _full_pipeline_cache = json.loads(analysis_path.read_text())
+    return _full_pipeline_cache
+
+
+class BlindSpotDemoGateTests(unittest.TestCase):
+    """Spec §11's 'hard test on demo fixtures' for the blind-spot engine.
+
+    Runs the real pipeline (scan_transcripts + scan_codex + scan_grok +
+    aggregate.py, all via subprocess, same as tests/smoke_test.py) over the
+    generated demo tree and asserts the three engineered gates (BS#1
+    repeated-instruction tax, BS#2 sunk-cost pairs, BS#4 graveyard) pass
+    deterministically, and that they produce non-empty leak-ledger items.
+
+    #3/#5/#6/#7 are NOT gate-asserted here (see class docstring on
+    WellFormedBlindSpotBlockTests below) — those heuristics run on
+    incidental (unseeded-by-index) demo data and asserting their gates
+    would make this suite flaky.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.analysis = _run_full_pipeline()
+        cls.blind_spots = cls.analysis["blind_spots"]
+
+    def test_repeated_instructions_gate_passes(self):
+        bs1 = self.blind_spots["repeated_instructions"]
+        self.assertTrue(bs1["gate_passed"], bs1.get("reason"))
+
+    def test_engineered_cross_tool_pattern_survives_top5_cap(self):
+        # The injected pattern spans Claude + Codex + Grok and must outrank
+        # the incidental Claude-only patterns from the 12-string random
+        # pool, or the demo report never exercises the cross-tool fix-text
+        # path (top-5 cap would discard it).
+        bs1 = self.blind_spots["repeated_instructions"]
+        multi = [p for p in bs1["metrics"]["patterns"]
+                 if len(p.get("sources", [])) > 1]
+        self.assertTrue(multi, "no cross-tool pattern in the top 5")
+        self.assertIn("codex", multi[0]["sources"])
+        self.assertIn("grok", multi[0]["sources"])
+
+    def test_sunk_cost_gate_passes(self):
+        bs2 = self.blind_spots["sunk_cost"]
+        self.assertTrue(bs2["gate_passed"], bs2.get("reason"))
+        self.assertFalse(bs2["suppressed_by_guard"],
+                         "sunk_cost gate must not be suppressed by the "
+                         "counterexample guard on demo data")
+        self.assertGreaterEqual(bs2["n"], 3)
+
+    def test_graveyard_gate_passes(self):
+        bs4 = self.blind_spots["graveyard"]
+        self.assertTrue(bs4["gate_passed"], bs4.get("reason"))
+        self.assertGreaterEqual(bs4["n"], 2)
+
+    def test_leak_ledger_items_non_empty(self):
+        items = self.analysis["ledger"]["leaks"]["items"]
+        self.assertTrue(items, "ledger.leaks.items must be non-empty when "
+                               "BS#1/#2 gates pass")
+
+
+class WellFormedBlindSpotBlockTests(unittest.TestCase):
+    """#3 (switch tax), #5 (habit drift), #6 (ask-vs-ship), #7 (interrupt
+    win-rate) run on the same incidental (non-index-forced) demo data as
+    every other heuristic that isn't Task 12's fixture target. Their gates
+    are legitimately data-dependent and unseeded by index, so asserting
+    gate_passed on them would flake across otherwise-valid regenerations.
+    This class only checks the block is well-formed (keys present, no
+    KeyError), which the deterministic seed=42 draw does guarantee."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.blind_spots = _run_full_pipeline()["blind_spots"]
+
+    def test_all_seven_heuristics_present_and_well_formed(self):
+        expected_ids = {
+            "repeated_instructions", "sunk_cost", "switch_tax", "graveyard",
+            "habit_drift", "ask_vs_ship", "interrupt_win_rate",
+        }
+        self.assertIn("schema_version", self.blind_spots)
+        heuristic_blocks = {k: v for k, v in self.blind_spots.items()
+                            if k != "schema_version"}
+        self.assertEqual(set(heuristic_blocks.keys()), expected_ids)
+        for bs_id, block in heuristic_blocks.items():
+            self.assertEqual(block["id"], bs_id)
+            self.assertIn("gate_passed", block)
+            self.assertIn("suppressed_by_guard", block)
+            self.assertIn("n", block)
+            self.assertIn("metrics", block)
+            self.assertIn("reason", block)
+            self.assertIsInstance(block["gate_passed"], bool)
+
+
 if __name__ == "__main__":
     unittest.main()

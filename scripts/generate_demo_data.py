@@ -31,6 +31,59 @@ for d in (META_DIR, FACETS_DIR, PROJECTS_DIR, CODEX_DIR, GROK_DIR, ANTIGRAVITY_D
 
 DEMO_PROJECTS_CROSS = ["webapp", "data-pipeline", "infra"]
 
+# --- Phase 2 blind-spot fixtures ---------------------------------------------
+# These constants are injected by INDEX, never by random draw, so the three
+# hard gate assertions in tests/test_demo_data.py never flake across
+# regenerations. The exact gate thresholds live in references/scoring-rubric.md
+# ("Blind-spot heuristics", provisional v1) and are asserted end-to-end by
+# tests/test_demo_data.py.
+
+# BS#1 (repeated-instruction tax): forced verbatim onto 8 Claude sessions
+# spread over >=4 distinct ISO weeks, 3 codex sessions, and 2 grok sessions.
+DEMO_REPEATED_INSTRUCTION = (
+    "Reply in zh-TW, run the full pytest suite before claiming done, "
+    "and never push without asking"
+)
+
+# A CROSS-ONLY qualifying repeat pattern (18 codex + 12 grok sessions, no
+# Claude occurrences) whose text carries the privacy sentinel. It must not
+# just clear the BS#1 gate but survive the top-5 pattern cap (30 forced
+# occurrences: above the random FIRST_PROMPTS pool's ~25-28 incidental
+# repeats, below the 33-occurrence flagship so the opener keeps its
+# Claude exemplar), so smoke_test's "GROK_PRIVATE_MARKER never reaches any
+# output" assertion exercises the real leak path (spec §4: a cross-only
+# pattern's exemplar must be withheld) — a marker that appears once never
+# qualifies and the sentinel would pass vacuously.
+DEMO_CROSS_ONLY_INSTRUCTION = (
+    "fleet audit: rerun the weekly telemetry export and diff it "
+    "against baseline GROK_PRIVATE_MARKER"
+)
+
+# BS#2 (sunk-cost pairs): 3 engineered (failed, retry) pairs. Failed session
+# is not_achieved with an accelerating output-token curve; retry lands 1-2
+# days later, fully_achieved, near-duplicate prompt (Jaccard >= 0.5), at
+# <=50% of the failed session's duration, with a flat token curve. Each
+# pair's prompt is deliberately worded with distinct vocabulary from the
+# other two pairs (not just a swapped noun) so bs_sunk_cost's greedy
+# first-match pairing can't cross-match a failed session in pair A to the
+# retry in pair B — every failed session's best (and only >=0.5) match is
+# its own retry.
+DEMO_SUNK_COST_PAIRS = ["billing", "notifications", "search-index"]
+_SUNK_COST_PROMPTS = {
+    "billing": "refactor the billing export pipeline to stream batches",
+    "notifications": "make the push notification worker retry with backoff "
+                     "instead of dropping failed sends",
+    "search-index": "rebuild the search index incrementally instead of a "
+                    "full nightly reindex job",
+}
+_SUNK_COST_FAILED_DURATION_MIN = 120
+_SUNK_COST_RETRY_DURATION_MIN = 45  # <= 50% of 120
+
+# BS#4 (graveyard): 2 dedicated projects whose only sessions are 25-40 days
+# old, with substantial edits and zero commits, and no newer activity.
+DEMO_GRAVEYARD_PROJECTS = ["legacy-migration", "internal-docs-site"]
+_GRAVEYARD_DAYS_AGO = {"legacy-migration": 28, "internal-docs-site": 36}
+
 PROJECTS = [
     "acme-dashboard",
     "acme-dashboard",
@@ -425,15 +478,262 @@ def gen_transcript(sid, meta, facet):
     return lines
 
 
+def gen_engineered_transcript(meta, output_seq, model):
+    """Build a transcript whose assistant `usage.output_tokens` sequence is
+    exactly `output_seq` (in order) — used by the sunk-cost fixture so
+    `token_accel` (scan_transcripts.py: second-half sum / first-half sum of
+    per-assistant-message output_tokens) is deterministic rather than drawn
+    from `_gen_usage`'s gaussian noise."""
+    lines = []
+    start = datetime.fromisoformat(meta["start_time"].replace("Z", "+00:00"))
+    total_minutes = meta["duration_minutes"]
+    n = len(output_seq)
+    step = max(1, total_minutes // max(1, n))
+
+    lines.append({
+        "type": "user",
+        "message": {"role": "user", "content": meta["first_prompt"]},
+        "timestamp": start.isoformat(),
+    })
+    for i, out_tok in enumerate(output_seq):
+        ts = start + timedelta(minutes=step * i, seconds=30)
+        usage = {
+            "input_tokens": 600,
+            "output_tokens": out_tok,
+            "cache_creation_input_tokens": 8_000,
+            "cache_read_input_tokens": 200_000,
+        }
+        lines.append({
+            "type": "assistant",
+            "message": {"role": "assistant", "model": model,
+                       "content": [{"type": "text", "text": "Working on it."}],
+                       "usage": usage},
+            "timestamp": ts.isoformat(),
+        })
+        if i < n - 1:
+            lines.append({
+                "type": "user",
+                "message": {"role": "user", "content": "continue"},
+                "timestamp": (ts + timedelta(seconds=45)).isoformat(),
+            })
+    return lines
+
+
+def _base_engineered_meta(sid, project, start, duration_minutes, n_msgs,
+                          output_tokens, prompt, **overrides):
+    """Shared session-meta skeleton for the Task 12 engineered fixtures
+    (sunk-cost pairs, graveyard projects) — factored out of gen_session()'s
+    field set because those fixtures need exact/deterministic values
+    (duration, token curve, tool_counts) that gen_session()'s randomized
+    draws can't guarantee, but still share the same ~20 low-signal
+    boilerplate fields (interruption/error/usage-flag defaults, per-message
+    timestamp lists) verbatim. Callers pass the fields that make their
+    fixture what it is (tool_counts, git_commits, cache tokens, ...) as
+    keyword overrides."""
+    start_iso = start.isoformat().replace("+00:00", "Z")
+    meta = {
+        "session_id": sid,
+        "project_path": f"/home/user/projects/{project}",
+        "start_time": start_iso,
+        "duration_minutes": duration_minutes,
+        "user_message_count": n_msgs,
+        "assistant_message_count": n_msgs,
+        "tool_counts": {},
+        "languages": {},
+        "git_commits": 0,
+        "git_pushes": 0,
+        "input_tokens": 0,
+        "output_tokens": output_tokens,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "model_counts": {},
+        "first_prompt": prompt,
+        "user_interruptions": 0,
+        "user_response_times": [50.0] * n_msgs,
+        "tool_errors": 0,
+        "tool_error_categories": {},
+        "uses_task_agent": False,
+        "uses_mcp": False,
+        "uses_web_search": False,
+        "uses_web_fetch": False,
+        "lines_added": 0,
+        "lines_removed": 0,
+        "files_modified": 0,
+        "message_hours": [start.hour] * n_msgs,
+        "user_message_timestamps": [start_iso] * n_msgs,
+    }
+    meta.update(overrides)
+    return meta
+
+
+def gen_sunk_cost_pairs(now):
+    """BS#2 fixture — 3 (failed, retry) pairs. Returns (metas, facets,
+    transcripts) dicts keyed by session_id, ready to be merged into the
+    main pools. Failed sessions accelerate late (token_accel >= 1.5);
+    retries are flat (token_accel < 1.5, well under the guard)."""
+    metas, facets, transcripts = {}, {}, {}
+    # Anchor the pairs comfortably inside the demo's 100-day window, spaced
+    # out so all 3 retries land on distinct calendar days without colliding
+    # with the graveyard/repeated-instruction anchors below.
+    base_days_ago = [50, 55, 60]
+    for name, days_ago in zip(DEMO_SUNK_COST_PAIRS, base_days_ago):
+        project = f"leak-{name}"
+        prompt = _SUNK_COST_PROMPTS[name]
+        fail_sid = mk_sid()
+        fail_start = now - timedelta(days=days_ago, hours=10)
+        # 8 assistant messages: first half small and flat, second half more
+        # than 1.5x the first half's sum -> token_accel >= 1.5.
+        fail_seq = [1200, 1300, 1250, 1300, 4200, 4400, 4300, 4500]
+        fail_meta = _base_engineered_meta(
+            fail_sid, project, fail_start, _SUNK_COST_FAILED_DURATION_MIN,
+            len(fail_seq), sum(fail_seq), prompt,
+            tool_counts={"Bash": 6, "Read": 8, "Edit": 5},
+            languages={"TypeScript": 4, "Python": 2},
+            input_tokens=4800,
+            cache_read_input_tokens=800_000,
+            cache_creation_input_tokens=32_000,
+            model_counts={"claude-opus-4-7": len(fail_seq)},
+            user_response_times=[60.0] * len(fail_seq),
+            lines_added=40, lines_removed=10, files_modified=3,
+        )
+        fail_facet = {
+            "session_id": fail_sid,
+            "underlying_goal": prompt,
+            "goal_categories": {"feature_implementation": 1},
+            "outcome": "not_achieved",
+            "user_satisfaction_counts": {"unsatisfied": 1},
+            "claude_helpfulness": "slightly_helpful",
+            "session_type": "iterative_refinement",
+            "friction_counts": {"wrong_approach": 3},
+            "friction_detail": f"Repeated attempts on the {name} task "
+                               "regressed; session ended without a fix.",
+            "primary_success": "debugging",
+            "brief_summary": f"Claude thrashed on the {name} task; output "
+                             "grew each retry with no fix landed.",
+        }
+        metas[fail_sid] = fail_meta
+        facets[fail_sid] = fail_facet
+        transcripts[fail_sid] = (project, gen_engineered_transcript(
+            fail_meta, fail_seq, "claude-opus-4-7"))
+
+        retry_sid = mk_sid()
+        retry_start = fail_start + timedelta(days=1, hours=3)
+        retry_prompt = prompt + " correctly"  # +1 word, Jaccard >= 0.5
+        # Flat curve: second half is NOT >= 1.5x the first half.
+        retry_seq = [1100, 1150, 1200, 1100, 1150, 1200]
+        retry_meta = _base_engineered_meta(
+            retry_sid, project, retry_start, _SUNK_COST_RETRY_DURATION_MIN,
+            len(retry_seq), sum(retry_seq), retry_prompt,
+            tool_counts={"Bash": 4, "Read": 3, "Edit": 4},
+            languages={"TypeScript": 3, "Python": 1},
+            git_commits=2, git_pushes=1,
+            input_tokens=3200,
+            cache_read_input_tokens=500_000,
+            cache_creation_input_tokens=18_000,
+            model_counts={"claude-opus-4-7": len(retry_seq)},
+            user_response_times=[40.0] * len(retry_seq),
+            lines_added=60, lines_removed=15, files_modified=3,
+        )
+        retry_facet = {
+            "session_id": retry_sid,
+            "underlying_goal": retry_prompt,
+            "goal_categories": {"feature_implementation": 1},
+            "outcome": "fully_achieved",
+            "user_satisfaction_counts": {"satisfied": 1},
+            "claude_helpfulness": "very_helpful",
+            "session_type": "single_task",
+            "friction_counts": {},
+            "friction_detail": "",
+            "primary_success": "code_generation",
+            "brief_summary": f"User retried the {name} task with a tighter "
+                             "prompt; shipped in under half the time of the "
+                             "failed attempt.",
+        }
+        metas[retry_sid] = retry_meta
+        facets[retry_sid] = retry_facet
+        transcripts[retry_sid] = (project, gen_engineered_transcript(
+            retry_meta, retry_seq, "claude-opus-4-7"))
+    return metas, facets, transcripts
+
+
+def gen_graveyard_transcript(meta, edit_count, write_count):
+    """Engineered transcript whose scan_transcripts.py-derived tool_counts
+    has exactly `edit_count` Edit and `write_count` Write tool_use blocks —
+    gen_transcript() only emits one tool_use per distinct tool NAME, which
+    can't reach the BS#4 gate's >=5-write threshold on its own."""
+    start = datetime.fromisoformat(meta["start_time"].replace("Z", "+00:00"))
+    lines = [{
+        "type": "user",
+        "message": {"role": "user", "content": meta["first_prompt"]},
+        "timestamp": start.isoformat(),
+    }]
+    tool_calls = ["Edit"] * edit_count + ["Write"] * write_count + ["Read"] * 12 + ["Bash"] * 4
+    content = [{"type": "text", "text": "Working through the pass now."}]
+    for j, tn in enumerate(tool_calls):
+        content.append({"type": "tool_use", "name": tn,
+                        "id": f"t_{j}_{random.randint(1, 99999)}", "input": {}})
+    lines.append({
+        "type": "assistant",
+        "message": {"role": "assistant", "model": "claude-sonnet-4-6",
+                   "content": content,
+                   "usage": {"input_tokens": 5000, "output_tokens": 22000,
+                             "cache_creation_input_tokens": 30_000,
+                             "cache_read_input_tokens": 700_000}},
+        "timestamp": (start + timedelta(minutes=30)).isoformat(),
+    })
+    return lines
+
+
+def gen_graveyard_projects(now):
+    """BS#4 fixture — 2 dedicated projects whose only (and therefore last)
+    session is 25-40 days old, with >=5 write-tool calls and zero commits."""
+    metas, transcripts = {}, {}
+    for project in DEMO_GRAVEYARD_PROJECTS:
+        sid = mk_sid()
+        days_ago = _GRAVEYARD_DAYS_AGO[project]
+        start = now - timedelta(days=days_ago, hours=14)
+        prompt = f"do a big pass on {project.replace('-', ' ')}, lots of edits needed"
+        meta = _base_engineered_meta(
+            sid, project, start, 70, 9, 22000, prompt,
+            assistant_message_count=14,
+            tool_counts={"Edit": 9, "Write": 3, "Read": 12, "Bash": 4},
+            languages={"Markdown": 6, "TypeScript": 2},
+            input_tokens=5000,
+            cache_read_input_tokens=700_000,
+            cache_creation_input_tokens=30_000,
+            model_counts={"claude-sonnet-4-6": 14},
+            lines_added=150, lines_removed=40, files_modified=6,
+        )
+        metas[sid] = meta
+        transcripts[sid] = (project, gen_graveyard_transcript(meta, 9, 3))
+    return metas, transcripts
+
+
 def _codex_line(ts, type_, payload):
     return json.dumps({"timestamp": ts.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
                        "type": type_, "payload": payload})
 
 
 def gen_codex_sessions(now, n=32):
+    # BS#1 fixture: force the repeated instruction onto 3 codex sessions,
+    # spread over 3 distinct weeks (by index, not random), so the
+    # repeated_instructions gate's "sources" field includes "codex".
+    _REPEAT_INDICES = {2: 8, 10: 22, 18: 36}  # session index -> days_ago
+    # Codex share of DEMO_CROSS_ONLY_INSTRUCTION (see the constant's
+    # comment): 18 sessions, in-window days, >=3 distinct weeks. Index-
+    # forced, never random; avoids 0 (the resumed-session special case)
+    # and the _REPEAT_INDICES slots.
+    _CROSS_ONLY_INDICES = {1: 4, 3: 6, 4: 9, 5: 11, 6: 13, 7: 16, 8: 18,
+                           9: 20, 11: 23, 12: 25, 13: 27, 14: 30, 15: 32,
+                           16: 34, 17: 37, 19: 39, 20: 41, 21: 43}
     for i in range(n):
-        start = now - timedelta(days=int(random.triangular(0, 60, 20)),
-                                hours=random.randint(0, 12))
+        if i in _REPEAT_INDICES:
+            start = now - timedelta(days=_REPEAT_INDICES[i], hours=9)
+        elif i in _CROSS_ONLY_INDICES:
+            start = now - timedelta(days=_CROSS_ONLY_INDICES[i], hours=9)
+        else:
+            start = now - timedelta(days=int(random.triangular(0, 60, 20)),
+                                    hours=random.randint(0, 12))
         sid = mk_sid()
         proj = random.choice(DEMO_PROJECTS_CROSS)
         cwd = f"/home/user/projects/{proj}"
@@ -443,11 +743,18 @@ def gen_codex_sessions(now, n=32):
                         {"model": "gpt-5.4", "effort": "high", "cwd": cwd}),
         ]
         t = start
+        if i in _REPEAT_INDICES:
+            first_msg = DEMO_REPEATED_INSTRUCTION
+        elif i in _CROSS_ONLY_INDICES:
+            first_msg = DEMO_CROSS_ONLY_INSTRUCTION
+        else:
+            first_msg = None
         for turn in range(random.randint(1, 6)):
             t += timedelta(minutes=random.randint(1, 8))
+            msg_text = first_msg if (first_msg and turn == 0) else f"demo codex prompt {turn}"
             lines.append(_codex_line(t, "event_msg",
                                      {"type": "user_message",
-                                      "message": f"demo codex prompt {turn}"}))
+                                      "message": msg_text}))
             t += timedelta(minutes=random.randint(1, 5))
             lines.append(_codex_line(t, "response_item",
                                      {"type": "function_call", "name": "shell"}))
@@ -479,14 +786,34 @@ def gen_grok_sessions(now, n=16):
     for d in dirs.values():
         d.mkdir(parents=True, exist_ok=True)
     marker_written = False
+    # BS#1 fixture: force the repeated instruction onto 2 grok sessions,
+    # on 2 distinct days (by index, not random).
+    _REPEAT_INDICES = {3: 12, 11: 44}  # session index -> days_ago
+    # Grok share of DEMO_CROSS_ONLY_INSTRUCTION (see the constant's
+    # comment): 12 sessions, in-window days across distinct weeks. Index-
+    # forced, never random; avoids index 0 (which carries the one-off
+    # XSS/marker prompt override below) and the _REPEAT_INDICES slots.
+    _CROSS_ONLY_INDICES = {1: 3, 2: 7, 4: 10, 5: 14, 6: 17, 7: 21, 8: 24,
+                           9: 28, 10: 31, 12: 35, 13: 38, 14: 41}
     for i in range(n):
-        start = now - timedelta(days=int(random.triangular(0, 60, 25)))
+        if i in _REPEAT_INDICES:
+            start = now - timedelta(days=_REPEAT_INDICES[i])
+        elif i in _CROSS_ONLY_INDICES:
+            start = now - timedelta(days=_CROSS_ONLY_INDICES[i])
+        else:
+            start = now - timedelta(days=int(random.triangular(0, 60, 25)))
         sid = mk_sid()
         proj = random.choice(list(dirs))
         lines = []
+        forced = i in _REPEAT_INDICES
         for k in range(random.randint(1, 4)):
-            prompt = f"demo grok prompt {k}"
-            if not marker_written:
+            if forced and k == 0:
+                prompt = DEMO_REPEATED_INSTRUCTION
+            elif i in _CROSS_ONLY_INDICES and k == 0:
+                prompt = DEMO_CROSS_ONLY_INSTRUCTION
+            else:
+                prompt = f"demo grok prompt {k}"
+            if not marker_written and i not in _CROSS_ONLY_INDICES and not forced:
                 prompt = '<script>alert("grok")</script> GROK_PRIVATE_MARKER'
                 marker_written = True
             lines.append(json.dumps({
@@ -505,6 +832,34 @@ def gen_antigravity_files(now, n=6):
         p.write_bytes(b"\x0a\x00")
         age = now - timedelta(days=int(random.triangular(0, 60, 15)))
         os.utime(p, (age.timestamp(), age.timestamp()))
+
+
+def _force_repeated_instruction(sessions_meta, sessions_facets, now):
+    """BS#1 fixture: overwrite 28 already-generated Claude sessions' prompts
+    to DEMO_REPEATED_INSTRUCTION, picked by their position in dict insertion
+    order (not random) — a post-pass over the finished random pool, kept
+    separate from gen_session()'s random draw the same way the BS#2/BS#4
+    fixture pools are built and merged in rather than interleaved into the
+    random loop. Each picked session also gets its start_time moved to a
+    fixed days_ago so the picks span many distinct ISO weeks.
+
+    Why 28: the random pool draws from only 12 prompt strings across ~280
+    sessions, so incidental Claude-only patterns reach 24-29 occurrences.
+    The engineered CROSS-TOOL pattern (28 Claude + 3 codex + 2 grok = 33)
+    must beat them or bs_repeated_instructions' top-5 cap discards it and
+    the demo report never exercises the cross-tool fix-text path."""
+    # position-in-pool -> days_ago (28 picks, ~3 days apart, all in-window)
+    picks = {i * 9: 2 + i * 3 for i in range(28)}
+    sids = list(sessions_meta.keys())
+    for pos, days_ago in picks.items():
+        sid = sids[pos]
+        start = (now - timedelta(days=days_ago)).replace(hour=10, minute=0)
+        meta = sessions_meta[sid]
+        meta["first_prompt"] = DEMO_REPEATED_INSTRUCTION
+        meta["start_time"] = start.isoformat().replace("+00:00", "Z")
+        facet = sessions_facets.get(sid)
+        if facet:
+            facet["underlying_goal"] = DEMO_REPEATED_INSTRUCTION[:120]
 
 
 def main():
@@ -529,6 +884,19 @@ def main():
         if facet:
             sessions_facets[sid] = facet
 
+    # BS#1 fixture: force DEMO_REPEATED_INSTRUCTION onto 8 of the sessions
+    # just generated (picked by pool position, not random).
+    _force_repeated_instruction(sessions_meta, sessions_facets, now)
+
+    # BS#2 fixture: 3 engineered sunk-cost pairs.
+    sunk_metas, sunk_facets, sunk_transcripts = gen_sunk_cost_pairs(now)
+    sessions_meta.update(sunk_metas)
+    sessions_facets.update(sunk_facets)
+
+    # BS#4 fixture: 2 graveyard projects (no facets — activity-only, per brief).
+    grave_metas, grave_transcripts = gen_graveyard_projects(now)
+    sessions_meta.update(grave_metas)
+
     # Write meta + facet files
     for sid, m in sessions_meta.items():
         (META_DIR / f"{sid}.json").write_text(json.dumps(m, indent=2))
@@ -536,7 +904,8 @@ def main():
         (FACETS_DIR / f"{sid}.json").write_text(json.dumps(f, indent=2))
 
     # Write transcripts for most sessions so sampling has coverage
-    pick_sids = list(sessions_meta.keys())
+    pick_sids = [sid for sid in sessions_meta.keys()
+                if sid not in sunk_transcripts and sid not in grave_transcripts]
     for sid in pick_sids:
         m = sessions_meta[sid]
         f = sessions_facets.get(sid)
@@ -548,11 +917,25 @@ def main():
             for rec in transcript:
                 fp.write(json.dumps(rec) + "\n")
 
+    # Engineered transcripts (BS#2 sunk-cost pairs, BS#4 graveyard) — written
+    # verbatim, not through gen_transcript, so their token_accel and
+    # tool_counts stay exactly what the gate assertions expect.
+    engineered_count = 0
+    for sid, (proj, transcript) in {**sunk_transcripts, **grave_transcripts}.items():
+        proj_dir = PROJECTS_DIR / f"-home-user-projects-{proj}"
+        proj_dir.mkdir(parents=True, exist_ok=True)
+        with open(proj_dir / f"{sid}.jsonl", "w") as fp:
+            for rec in transcript:
+                fp.write(json.dumps(rec) + "\n")
+        engineered_count += 1
+
     gen_codex_sessions(now)
     gen_grok_sessions(now)
     gen_antigravity_files(now)
 
-    print(f"Generated {len(sessions_meta)} meta, {len(sessions_facets)} facets, {len(pick_sids)} transcripts")
+    print(f"Generated {len(sessions_meta)} meta, {len(sessions_facets)} facets, "
+          f"{len(pick_sids) + engineered_count} transcripts "
+          f"({engineered_count} engineered blind-spot fixtures)")
     print(f"Output dirs:\n  {META_DIR}\n  {FACETS_DIR}\n  {PROJECTS_DIR}\n"
           f"  {CODEX_DIR}\n  {GROK_DIR}\n  {ANTIGRAVITY_DIR}")
 

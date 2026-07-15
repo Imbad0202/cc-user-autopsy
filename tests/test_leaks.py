@@ -1,0 +1,410 @@
+import unittest
+from datetime import datetime, timedelta, timezone
+
+from scripts.aggregate import (
+    bs_repeated_instructions, bs_sunk_cost, compute_api_equivalent_cost,
+    compute_blind_spots, compute_leaks, PRICING, _leak_cost_usd)
+from scripts.cross_llm_common import normalize_prompt
+
+BASE = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
+WINDOW = {"start": "2026-06-01", "end": "2026-07-11", "days": 40}
+
+
+def _sess(sid, days, outcome, tokens=40000, prompt="tune the ingestion retry logic",
+         start=None):
+    return {"sid": sid, "start": (start or BASE + timedelta(days=days)).isoformat(),
+            "outcome": outcome, "first_prompt": prompt,
+            "first_prompt_len": len(prompt), "token_accel": None,
+            "duration_min": 60, "total_tokens": tokens,
+            "input_tokens": tokens - 4000, "output_tokens": 4000,
+            "cache_create_tokens": 0, "cache_read_tokens": 0,
+            "model_counts": {"claude-opus-4-6": 10}, "goal_cats": {},
+            "git_commits": 0, "interrupts": 0, "friction_counts": {}}
+
+
+_SUNK_FAIL_PROMPT = "refactor the payment reconciliation pipeline to stream batches"
+_SUNK_RETRY_PROMPT = ("refactor the payment reconciliation pipeline to stream "
+                      "batches cleanly")
+
+
+def _sunk_sess(sid, days, outcome, prompt=_SUNK_FAIL_PROMPT, accel=None,
+               dur=120, tokens=50000):
+    return {"sid": sid, "start": (BASE + timedelta(days=days)).isoformat(),
+            "outcome": outcome, "first_prompt": prompt, "token_accel": accel,
+            "duration_min": dur, "total_tokens": tokens,
+            "input_tokens": tokens - 5000, "output_tokens": 5000,
+            "cache_create_tokens": 0, "cache_read_tokens": 0,
+            "model_counts": {"claude-opus-4-6": 10}}
+
+
+def _sunk_pair(i, base_days):
+    failed = _sunk_sess(f"f{i}", base_days + 2 * i, "not_achieved", accel=2.0)
+    retry = _sunk_sess(f"r{i}", base_days + 2 * i + 1, "fully_achieved",
+                       prompt=_SUNK_RETRY_PROMPT, accel=1.0, dur=30, tokens=8000)
+    return [failed, retry]
+
+
+class LeakCatalogTests(unittest.TestCase):
+    def test_failed_burn_leak(self):
+        rated = ([_sess(f"f{i}", i, "not_achieved") for i in range(6)]
+                 + [_sess(f"g{i}", 10 + i, "fully_achieved") for i in range(6)])
+        bs = compute_blind_spots(rated, rated, [], [], BASE + timedelta(days=40))
+        leaks = compute_leaks(bs, rated, WINDOW)
+        types = [i["type"] for i in leaks["items"]]
+        self.assertIn("failed_session_burn", types)
+        item = next(i for i in leaks["items"] if i["type"] == "failed_session_burn")
+        self.assertGreater(item["weekly_cost_usd"], 0)
+        self.assertEqual(item["occurrences"], 6)
+        self.assertLessEqual(len(item["evidence"]), 3)
+
+    def test_below_floor_no_failed_burn(self):
+        rated = ([_sess(f"f{i}", i, "not_achieved") for i in range(4)]
+                 + [_sess(f"g{i}", 10 + i, "fully_achieved") for i in range(20)])
+        bs = compute_blind_spots(rated, rated, [], [], BASE + timedelta(days=40))
+        leaks = compute_leaks(bs, rated, WINDOW)
+        self.assertNotIn("failed_session_burn",
+                         [i["type"] for i in leaks["items"]])
+
+    def test_ranked_desc_and_max_three(self):
+        rated = ([_sess(f"f{i}", i, "not_achieved") for i in range(6)]
+                 + [_sess(f"g{i}", 10 + i, "fully_achieved") for i in range(6)])
+        bs = compute_blind_spots(rated, rated, [], [], BASE + timedelta(days=40))
+        leaks = compute_leaks(bs, rated, WINDOW)
+        costs = [i["weekly_cost_usd"] for i in leaks["items"]]
+        self.assertEqual(costs, sorted(costs, reverse=True))
+        self.assertLessEqual(len(leaks["items"]), 3)
+
+    def test_window_weeks_floor(self):
+        leaks = compute_leaks(
+            compute_blind_spots([], [], [], [], BASE), [],
+            {"start": None, "end": None, "days": 3})
+        self.assertEqual(leaks["window_weeks"], 1.0)
+        self.assertEqual(leaks["items"], [])
+
+    def test_no_valid_window_suppresses_weekly_items_even_with_rated_history(self):
+        # Fix 1: session-meta ("rated") can span months of history even when
+        # the transcript-derived window has rotated away (null/zero-day
+        # bounds). Falling back to ALL of rated while weeks floors to 1.0
+        # would misreport months of failures as one week's burn — the fix
+        # must suppress weekly items entirely rather than fabricate a
+        # denominator, even though there are 6 qualifying not_achieved
+        # sessions that would otherwise trip the failed_session_burn gate.
+        rated = [_sess(f"f{i}", i, "not_achieved") for i in range(6)]
+        bs = compute_blind_spots(rated, rated, [], [], BASE + timedelta(days=40))
+        leaks = compute_leaks(bs, rated, {"start": None, "end": None, "days": 0})
+        self.assertEqual(leaks["items"], [])
+
+    def test_same_day_window_is_valid_not_suppressed(self):
+        # days == 0 with equal, parsable bounds is a legitimate first-day
+        # window: the weeks floor (1.0) is the denominator, and the 5+
+        # same-day failures must still produce a failed_session_burn item.
+        day = BASE.date().isoformat()
+        rated = ([_sess(f"f{i}", 0, "not_achieved") for i in range(5)]
+                 + [_sess(f"g{i}", 0, "fully_achieved") for i in range(3)])
+        bs = compute_blind_spots(rated, rated, [], [], BASE + timedelta(hours=8))
+        leaks = compute_leaks(bs, rated, {"start": day, "end": day, "days": 0})
+        types = [i["type"] for i in leaks["items"]]
+        self.assertIn("failed_session_burn", types)
+
+    def test_failed_sessions_before_window_start_excluded_from_weekly_cost(self):
+        # 5 not_achieved sessions inside the window, 5 not_achieved 200 days
+        # earlier (well before window start) — occurrences/weekly_cost must
+        # reflect only the in-window 5.
+        rated = ([_sess(f"old{i}", -200 + i, "not_achieved") for i in range(5)]
+                 + [_sess(f"f{i}", i, "not_achieved") for i in range(5)]
+                 + [_sess(f"g{i}", 10 + i, "fully_achieved") for i in range(6)])
+        bs = compute_blind_spots(rated, rated, [], [], BASE + timedelta(days=40))
+        leaks = compute_leaks(bs, rated, WINDOW)
+        item = next(i for i in leaks["items"] if i["type"] == "failed_session_burn")
+        self.assertEqual(item["occurrences"], 5)
+
+    def test_repeated_instructions_usd_prices_claude_share_only(self):
+        # A pattern dominated by Codex occurrences with only a few Claude
+        # ones: pricing all occurrences at the Claude rate vs. pricing only
+        # the Claude share must produce a distinguishable ($0.01+) gap.
+        INSTR = ("Always reply in zh-TW, run the full pytest suite before "
+                 "you claim done, never skip hooks, and keep commit messages "
+                 "in the conventional-commit format we agreed on earlier") * 3
+
+        def _row(sid, days, source=None, coverage=None):
+            row = {"session_id": sid,
+                  "start_time": (BASE + timedelta(days=days)).isoformat(),
+                  "first_prompt": INSTR}
+            if source:
+                row["source"], row["coverage"] = source, coverage
+            else:
+                row["model_counts"] = {"claude-opus-4-6": 5}
+            return row
+
+        claude_rows = [_row(f"c{i}", i % 50) for i in range(10)]
+        codex_rows = [_row(f"x{i}", i % 50, source="codex", coverage="full")
+                      for i in range(2000)]
+        bs1 = bs_repeated_instructions(claude_rows, codex_rows)
+        self.assertTrue(bs1["gate_passed"])
+        p = bs1["metrics"]["patterns"][0]
+        self.assertEqual(p["occurrences"], 2010)
+        # per-hit token estimates use each occurrence's own NORMALIZED
+        # length (codex round 20), not the display exemplar's
+        tok = len(normalize_prompt(INSTR)) // 4
+        self.assertEqual(p["claude_wasted_tokens"], 9 * tok)
+        self.assertEqual(p["est_wasted_tokens"], 2009 * tok)
+        self.assertGreater(p["claude_wasted_tokens"], 0)
+        self.assertLess(p["claude_wasted_tokens"], p["est_wasted_tokens"])
+
+        bs = {"repeated_instructions": bs1, "sunk_cost": {}}
+        leaks = compute_leaks(bs, [], WINDOW)
+        item = next(i for i in leaks["items"] if i["type"] == "repeated_instructions")
+        weeks = round(max(WINDOW["days"] / 7.0, 1.0), 1)
+        # weekly_tokens uses the all-source est_wasted_tokens (bigger numerator)
+        self.assertEqual(item["weekly_tokens"], int(p["est_wasted_tokens"] / weeks))
+        # weekly_cost_usd is derived from claude_wasted_tokens only, which
+        # is strictly smaller than pricing all occurrences would give.
+        all_source_cost = round(
+            (p["est_wasted_tokens"] / weeks) / 1e6 * 15.0, 2)
+        self.assertLess(item["weekly_cost_usd"], all_source_cost)
+        # The attributed occurrences DID price (>0 before the weekly
+        # round-to-cents, which can floor tiny figures to 0.00).
+        self.assertGreater(p["claude_wasted_usd"], 0)
+
+    def test_sunk_cost_pairs_before_window_produce_no_card(self):
+        # 3 confirmed sunk-cost pairs, all 200 days before WINDOW's start —
+        # the gate passes on these out-of-window pairs, but the windowed
+        # failed list compute_leaks builds is then empty. No sunk_cost item
+        # should be emitted (no $0.00 / 0 occurrences / no-evidence card).
+        base_days = -200
+        rated = [s for i in range(3) for s in _sunk_pair(i, base_days)]
+        # guard needs a fully_achieved population without acceleration,
+        # also placed well before the window so it doesn't interfere.
+        rated += [_sunk_sess(f"g{i}", base_days + 40 + i, "fully_achieved",
+                             prompt=f"unrelated task {i} entirely", accel=1.0)
+                  for i in range(6)]
+        bs = compute_blind_spots(rated, rated, [], [], BASE + timedelta(days=40))
+        self.assertTrue(bs["sunk_cost"]["gate_passed"])
+        leaks = compute_leaks(bs, rated, WINDOW)
+        types = [i["type"] for i in leaks["items"]]
+        self.assertNotIn("sunk_cost", types)
+
+    def test_window_end_date_is_tz_independent(self):
+        # Fix 1: window bounds are calendar dates parsed with
+        # date.fromisoformat(), not _parse_dt(...).date() (which assumes
+        # UTC then converts to local — west of UTC "2026-07-11" would
+        # shift to 2026-07-10 local and wrongly exclude a session whose
+        # local wall-clock start is still on the inclusive end date). The
+        # session's own start is built from the local system tz (via
+        # astimezone(), matching how _parse_dt normalizes real timestamps)
+        # so its calendar date is unambiguously 2026-07-11 local no matter
+        # what timezone runs this test — isolating the assertion to the
+        # window-bound parsing fix, not session-timestamp normalization.
+        window = {"start": "2026-06-01", "end": "2026-07-11", "days": 40}
+        late_on_end_date = datetime(2026, 7, 11, 23, 30).astimezone()
+        rated = [_sess("late", None, "not_achieved", start=late_on_end_date)]
+        rated += [_sess(f"f{i}", i, "not_achieved") for i in range(5)]
+        bs = compute_blind_spots(rated, rated, [], [], BASE + timedelta(days=40))
+        leaks = compute_leaks(bs, rated, window)
+        item = next(i for i in leaks["items"] if i["type"] == "failed_session_burn")
+        self.assertEqual(item["occurrences"], 6)
+
+
+class RepeatedInstructionsAttributionPricingTests(unittest.TestCase):
+    # Codex round 18: repeated-instruction dollars price each Claude
+    # occurrence at its own row's verified input-rate floor (min over the
+    # row's observed models). Occurrences without a verified rate (missing
+    # model_counts, or any model absent from PRICING) contribute $0 — a
+    # cheaper historical model may have processed them — and the one free
+    # "first typing" is discounted at the HIGHEST observed rate so the
+    # remainder stays a floor.
+    INSTR = ("Always reply in zh-TW, run the full pytest suite before "
+             "you claim done, never skip hooks") * 3
+
+    def _rows(self, n, model_counts):
+        return [{"session_id": f"c{i}",
+                 "start_time": (BASE + timedelta(weeks=i % 3, days=i)).isoformat(),
+                 "first_prompt": self.INSTR,
+                 **({"model_counts": model_counts} if model_counts else {})}
+                for i in range(n)]
+
+    def _weekly_usd(self, bs1):
+        bs = {"repeated_instructions": bs1, "sunk_cost": {}}
+        leaks = compute_leaks(bs, [], WINDOW)
+        item = next(i for i in leaks["items"]
+                    if i["type"] == "repeated_instructions")
+        return item
+
+    def test_priced_at_each_rows_own_model_floor(self):
+        bs1 = bs_repeated_instructions(
+            self._rows(5, {"claude-opus-4-6": 3}), [])
+        self.assertTrue(bs1["gate_passed"])
+        p = bs1["metrics"]["patterns"][0]
+        tok = len(normalize_prompt(self.INSTR)) // 4
+        opus_in = PRICING["claude-opus-4-6"]["input"]
+        # 5 occurrences, first typing free: 4 priced at the opus floor.
+        self.assertEqual(p["claude_wasted_usd"],
+                         round(4 * opus_in * tok / 1e6, 6))
+        item = self._weekly_usd(bs1)
+        weeks = round(max(WINDOW["days"] / 7.0, 1.0), 1)
+        self.assertEqual(item["weekly_cost_usd"],
+                         round(p["claude_wasted_usd"] / weeks, 2))
+
+    def test_unattributed_rows_price_zero_but_tokens_still_count(self):
+        bs1 = bs_repeated_instructions(self._rows(5, None), [])
+        self.assertTrue(bs1["gate_passed"])
+        p = bs1["metrics"]["patterns"][0]
+        self.assertEqual(p["claude_wasted_usd"], 0.0)
+        self.assertGreater(p["claude_wasted_tokens"], 0)
+        item = self._weekly_usd(bs1)
+        self.assertEqual(item["weekly_cost_usd"], 0.0)
+        self.assertGreater(item["weekly_tokens"], 0)
+
+    def test_unlisted_historical_model_rows_price_zero(self):
+        bs1 = bs_repeated_instructions(
+            self._rows(5, {"claude-3-haiku-20240307": 4}), [])
+        self.assertTrue(bs1["gate_passed"])
+        self.assertEqual(
+            bs1["metrics"]["patterns"][0]["claude_wasted_usd"], 0.0)
+
+    def test_mixed_attribution_prices_verified_rows_discounting_max(self):
+        # 3 opus-attributed + 2 unattributed occurrences: the free first
+        # typing discounts at the max (opus) rate, leaving 2 opus-priced
+        # occurrences; the unattributed pair contributes $0.
+        rows = (self._rows(3, {"claude-opus-4-6": 3})
+                + [dict(r, session_id=r["session_id"] + "u")
+                   for r in self._rows(2, None)])
+        bs1 = bs_repeated_instructions(rows, [])
+        self.assertTrue(bs1["gate_passed"])
+        p = bs1["metrics"]["patterns"][0]
+        tok = len(normalize_prompt(self.INSTR)) // 4
+        opus_in = PRICING["claude-opus-4-6"]["input"]
+        self.assertEqual(p["claude_wasted_usd"],
+                         round(2 * opus_in * tok / 1e6, 6))
+
+    def test_repeated_instructions_cost_independent_of_rated_models(self):
+        # The rated pool passed to compute_leaks must not affect this
+        # item's pricing — attribution comes from the pattern's own rows.
+        bs1 = bs_repeated_instructions(
+            self._rows(5, {"claude-sonnet-4-6": 2}), [])
+        bs = {"repeated_instructions": bs1, "sunk_cost": {}}
+        opus_rated = [_sess(f"o{i}", i, "fully_achieved") for i in range(10)]
+        leaks_opus = compute_leaks(bs, opus_rated, WINDOW)
+        leaks_empty = compute_leaks(bs, [], WINDOW)
+        item_opus = next(i for i in leaks_opus["items"] if i["type"] == "repeated_instructions")
+        item_empty = next(i for i in leaks_empty["items"] if i["type"] == "repeated_instructions")
+        self.assertEqual(item_opus["weekly_cost_usd"], item_empty["weekly_cost_usd"])
+        # Pattern-level (pre-rounding) figure proves pricing happened.
+        self.assertGreater(
+            bs1["metrics"]["patterns"][0]["claude_wasted_usd"], 0)
+
+
+class LeakCostUsdTests(unittest.TestCase):
+    # _leak_cost_usd is the lower-bound pricing helper used by sunk_cost /
+    # failed_session_burn leak items, priced per session: a session with a
+    # missing/unlisted model contributes ZERO dollars (no rate in the
+    # current table is a verified floor for tokens a cheaper historical
+    # model may have produced), cache_creation tokens price at base input
+    # rate (not the 2x cache_write upper bound), and a mixed-model session
+    # prices ALL its tokens at the cheapest observed model's rate (message
+    # counts carry no per-model token attribution, so any blended weighting
+    # could overprice tokens a cheaper model produced).
+    def test_mixed_model_session_prices_at_cheapest_observed_model(self):
+        # 90% Opus messages / 10% Haiku messages, but token attribution is
+        # unknown — the floor must be the Haiku input rate, NOT a
+        # message-weighted blend (which would overprice Haiku-made tokens).
+        sessions = [{"model_counts": {"claude-opus-4-6": 9,
+                                      "claude-haiku-4-5": 1},
+                     "input_tokens": 1_000_000, "output_tokens": 0,
+                     "cache_create_tokens": 0, "cache_read_tokens": 0}]
+        haiku_in = PRICING["claude-haiku-4-5"]["input"]
+        self.assertEqual(_leak_cost_usd(sessions), round(haiku_in, 2))
+
+    def test_unattributed_session_contributes_zero_known_session_still_priced(self):
+        # A 1M-input-token Opus row plus a 1M-input-token row with NO
+        # model_counts: the unattributed tokens could have come from a
+        # model cheaper than anything in the current table, so they
+        # contribute $0 — while the Opus session still prices at its own
+        # rate (per-session pricing, not pool-wide widening).
+        sessions = [{"model_counts": {"claude-opus-4-6": 5},
+                     "input_tokens": 1_000_000, "output_tokens": 0,
+                     "cache_create_tokens": 0, "cache_read_tokens": 0},
+                    {"model_counts": {},
+                     "input_tokens": 1_000_000, "output_tokens": 0,
+                     "cache_create_tokens": 0, "cache_read_tokens": 0}]
+        opus_in = PRICING["claude-opus-4-6"]["input"]
+        self.assertEqual(_leak_cost_usd(sessions), round(opus_in, 2))
+
+    def test_unlisted_model_contributes_zero_not_cheapest_rate(self):
+        # Codex round 17: substituting the cheapest CURRENT-table rate for
+        # an unlisted model is not a floor — e.g. claude-3-haiku-20240307
+        # stays unlisted after normalization and was cheaper than anything
+        # in the table. Unverifiable tokens must contribute zero.
+        for model in ("unknown-model-x", "claude-3-haiku-20240307"):
+            sessions = [{"model_counts": {model: 1},
+                         "input_tokens": 100_000, "output_tokens": 10_000,
+                         "cache_create_tokens": 0, "cache_read_tokens": 0}]
+            leak_cost = _leak_cost_usd(sessions)
+            self.assertEqual(leak_cost, 0.0)
+            # compute_api_equivalent_cost falls back to Opus pricing for
+            # unknown models — the ceiling stays strictly above the floor.
+            self.assertLess(leak_cost, compute_api_equivalent_cost(sessions))
+
+    def test_unlisted_model_session_does_not_taint_known_sessions(self):
+        # Per-session pricing: one unpriceable session must not zero out or
+        # widen the floor of a cleanly-attributed sibling session.
+        sessions = [{"model_counts": {"claude-sonnet-4-6": 3},
+                     "input_tokens": 1_000_000, "output_tokens": 0,
+                     "cache_create_tokens": 0, "cache_read_tokens": 0},
+                    {"model_counts": {"claude-3-haiku-20240307": 8},
+                     "input_tokens": 5_000_000, "output_tokens": 0,
+                     "cache_create_tokens": 0, "cache_read_tokens": 0}]
+        sonnet_in = PRICING["claude-sonnet-4-6"]["input"]
+        self.assertEqual(_leak_cost_usd(sessions), round(sonnet_in, 2))
+
+    def test_known_model_cache_write_priced_at_base_input_rate(self):
+        # A known model (opus): cache_creation tokens must price at the
+        # model's base INPUT rate, not the 2x cache_write upper-bound rate
+        # compute_api_equivalent_cost uses.
+        sessions = [{"model_counts": {"claude-opus-4-6": 1},
+                     "input_tokens": 0, "output_tokens": 0,
+                     "cache_create_tokens": 100_000, "cache_read_tokens": 0}]
+        leak_cost = _leak_cost_usd(sessions)
+        opus = PRICING["claude-opus-4-6"]
+        expected = round(100_000 / 1e6 * opus["input"], 2)
+        self.assertEqual(leak_cost, expected)
+        # Sanity: strictly cheaper than pricing the same tokens at the
+        # cache_write (2x input) rate compute_api_equivalent_cost would use.
+        cache_write_priced = round(100_000 / 1e6 * opus["cache_write"], 2)
+        self.assertLess(leak_cost, cache_write_priced)
+
+    def test_known_model_cache_read_priced_normally(self):
+        sessions = [{"model_counts": {"claude-sonnet-4-6": 1},
+                     "input_tokens": 0, "output_tokens": 0,
+                     "cache_create_tokens": 0, "cache_read_tokens": 200_000}]
+        leak_cost = _leak_cost_usd(sessions)
+        sonnet = PRICING["claude-sonnet-4-6"]
+        expected = round(200_000 / 1e6 * sonnet["cache_read"], 2)
+        self.assertEqual(leak_cost, expected)
+
+    def test_empty_sessions_is_zero(self):
+        self.assertEqual(_leak_cost_usd([]), 0.0)
+
+    def test_sunk_cost_and_failed_burn_use_leak_cost_usd(self):
+        # End-to-end: sunk_cost / failed_session_burn weekly_cost_usd must
+        # come from _leak_cost_usd, not compute_api_equivalent_cost — verify
+        # by using an unknown model where the two functions diverge.
+        rated = ([_sess(f"f{i}", i, "not_achieved") for i in range(6)]
+                 + [_sess(f"g{i}", 10 + i, "fully_achieved") for i in range(6)])
+        for s in rated:
+            s["model_counts"] = {"unknown-model-y": 10}
+        bs = compute_blind_spots(rated, rated, [], [], BASE + timedelta(days=40))
+        leaks = compute_leaks(bs, rated, WINDOW)
+        item = next(i for i in leaks["items"] if i["type"] == "failed_session_burn")
+        burn = [s for s in rated if s["outcome"] == "not_achieved"]
+        weeks = round(max(WINDOW["days"] / 7.0, 1.0), 1)
+        expected = round(_leak_cost_usd(burn) / weeks, 2)
+        self.assertEqual(item["weekly_cost_usd"], expected)
+        # And it must differ from (be less than) what compute_api_equivalent_cost
+        # would have produced for the same sessions.
+        api_equiv_weekly = round(compute_api_equivalent_cost(burn) / weeks, 2)
+        self.assertLess(item["weekly_cost_usd"], api_equiv_weekly)
+
+
+if __name__ == "__main__":
+    unittest.main()

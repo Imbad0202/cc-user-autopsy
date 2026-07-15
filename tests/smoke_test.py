@@ -12,8 +12,21 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 DEMO_ROOT = Path("/tmp/cc-autopsy-demo")
 
 
-def run(*args: str) -> None:
-    subprocess.run(args, check=True, cwd=REPO_ROOT)
+def run(*args: str, capture: bool = False) -> subprocess.CompletedProcess | None:
+    """Run a subprocess. With capture=True, also captures+returns stdout/
+    stderr (still echoed live) so callers can assert on build-time warnings
+    (e.g. the praise-word lint) without losing the live pass-through a smoke
+    test benefits from when run interactively."""
+    if not capture:
+        subprocess.run(args, check=True, cwd=REPO_ROOT)
+        return None
+    proc = subprocess.run(args, check=True, cwd=REPO_ROOT,
+                          capture_output=True, text=True)
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+    if proc.stdout:
+        sys.stdout.write(proc.stdout)
+    return proc
 
 
 def main() -> None:
@@ -135,14 +148,18 @@ def main() -> None:
     narration_path.write_text(
         "# opening\nDemo opening sentence <script>alert('n')</script>.\n"
         "# output-ledger\nDemo output claim.\n"
-        "# team-ledger\nDemo team claim.\n",
+        "# team-ledger\nDemo team claim, an impressive quarter overall.\n"
+        "# leak-ledger\n"
+        "Biggest leak this period: repeated instructions cost 420 tokens/week"
+        " <script>alert('leak')</script>.\n"
+        "Body prose backing the claim goes here.\n",
         encoding="utf-8",
     )
     history_path = DEMO_ROOT / "history.jsonl"
 
     output_path = DEMO_ROOT / "smoke.html"
-    def run_build(audience, output, extra=()):
-        run(
+    def run_build(audience, output, extra=(), capture=False):
+        return run(
             sys.executable,
             str(SCRIPTS_DIR / "build_html.py"),
             "--input",
@@ -160,12 +177,14 @@ def main() -> None:
             "--output",
             str(output),
             *extra,
+            capture=capture,
         )
 
     # Self audit shows verbatim project labels so XSS escaping is exercised
-    # end-to-end on the hostile payloads injected above.
+    # end-to-end on the hostile payloads injected above. Captured so we can
+    # assert the praise-word lint fired on the "impressive" seeded above.
     self_output = DEMO_ROOT / "smoke-self.html"
-    run_build(
+    self_build = run_build(
         "self",
         self_output,
         extra=(
@@ -174,6 +193,11 @@ def main() -> None:
             "--history-file",
             str(history_path),
         ),
+        capture=True,
+    )
+    assert "praise-word lint" in self_build.stderr, (
+        "SELF build stderr must warn about the seeded praise word "
+        "('impressive' in the team-ledger book)"
     )
     html = self_output.read_text()
     assert "fonts.googleapis.com" not in html
@@ -204,11 +228,45 @@ def main() -> None:
     assert 'id="ledger-' not in hr_html, "HR build must not render ledger sections"
     assert 'class="c-exhibit"' not in hr_html, "HR build must not render ledger exhibits"
 
-    # cross-LLM prompt text must never reach ANY output (spec §4)
+    # --- V5 leak ledger (Task 12): SELF renders it, XSS payload never raw,
+    # HR must not render the section OR the blind-spot callout element ---
+    assert 'id="ledger-leaks"' in self_html, "SELF build missing leak ledger"
+    assert "<script>alert('leak')</script>" not in self_html, (
+        "leak-ledger narration XSS payload must be escaped, not executed"
+    )
+    assert 'id="ledger-leaks"' not in hr_html, "HR build must not render the leak ledger"
+    assert 'class="c-blindspot"' not in hr_html, (
+        "HR build must not render blind-spot callout elements"
+    )
+    assert 'class="c-blindspot"' in self_html, (
+        "SELF build must render blind-spot callout elements"
+    )
+
+    # cross-LLM prompt text must never reach ANY output (spec §4). The demo
+    # data plants GROK_PRIVATE_MARKER both as a one-off prompt AND inside a
+    # cross-only (codex+grok, no Claude) repeat pattern engineered to
+    # survive the top-5 pattern cap (DEMO_CROSS_ONLY_INSTRUCTION) — so
+    # these assertions exercise the real exemplar leak path, not just
+    # prompts that never qualified for storage.
     for name, html_text in (("self", self_html), ("hr", hr_html)):
         assert "GROK_PRIVATE_MARKER" not in html_text, (
             f"{name} build leaked grok prompt text"
         )
+    analysis_text = analysis_path.read_text()
+    assert "GROK_PRIVATE_MARKER" not in analysis_text, (
+        "analysis-data.json leaked grok prompt text (blind-spot exemplar?)"
+    )
+    bs1_patterns = (json.loads(analysis_text).get("blind_spots", {})
+                    .get("repeated_instructions", {})
+                    .get("metrics", {}).get("patterns", []))
+    cross_only = [p for p in bs1_patterns if "claude" not in p["sources"]]
+    assert cross_only, (
+        "expected the engineered cross-only pattern in the stored top 5; "
+        "the privacy sentinel above would otherwise pass vacuously"
+    )
+    assert all(p["exemplar"] == "" for p in cross_only), (
+        "cross-only pattern stored a non-empty exemplar"
+    )
 
     # narration is escaped, not executed
     assert "<script>alert('n')</script>" not in self_html

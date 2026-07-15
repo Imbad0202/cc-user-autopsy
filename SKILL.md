@@ -19,7 +19,7 @@ A self-contained HTML report at `~/.claude/usage-data/cc-user-autopsy.html` (or 
 
 **SELF audit layout** (private diagnostic letter):
 
-0. **AI work ledger** (opening band, output ledger, team ledger) — SELF-only, rendered before everything else including the usage snapshot; see Step 3b.
+0. **AI work ledger** (opening band, output ledger, team ledger, leak ledger) — SELF-only, rendered before everything else including the usage snapshot; see Step 3b.
 1. **Usage snapshot** §01 — activity panel (cache, models, cost, characteristics) + a 4-tile behavior strip (commits / interactive time / Task agent % / MCP %). Replaces the old 8-tile metric grid. Benchmark caveat at the top.
 2. **Reading guide** — short paragraph orienting the four-zone story (when / how / where stuck / cost).
 3. **Peer review** §02 — Claude-written story in 4 sections plus a "connecting it back" paragraph. Comes BEFORE scoring so the grid reads as an index, not a verdict.
@@ -53,7 +53,7 @@ Step 1c  → scripts/scan_codex.py / scan_grok.py / scan_antigravity.py  (option
            re-run aggregate.py with --cross-llm-rows (repeatable)
 Step 2   → scripts/sample_sessions.py      (picks 15-24 representative sessions)
 Step 3   → Claude writes peer-review.{audience}.{locale}.md  (V4 story format)
-Step 3b  → Claude writes ledger-narration.md (SELF only, V5 addition; opening/output/team)
+Step 3b  → Claude writes ledger-narration.md (SELF only, V5 addition; opening/output/team/leak)
 Step 3.5 → Claude writes try-this-week.{locale}.md (SELF only)
            Claude writes case-study.{self|hr}.{locale}.md (BOTH audiences, two files)
 Step 4.5 → (zh_TW only) rewrite the EN peer review natively into zh_TW
@@ -287,7 +287,7 @@ The ledger narration is a **separate file from the peer review**, feeding a **se
 
 Where the peer review (Step 3) is a diagnostic story about the user's own habits, the ledger is an **audit-style record of what the AI team (Claude Code plus any other AI CLIs the user runs) actually delivered**, written under strict audit-discipline rules — a ledger a reader should be able to trust, not a narrative that talks them into a conclusion.
 
-Write to `/tmp/cc-autopsy/ledger-narration.md`. Structure is exactly three `# ` headings (case-insensitive, but write them lowercase to match the source), each parsed as **first line = the opener claim, everything after = body prose**:
+Write to `/tmp/cc-autopsy/ledger-narration.md`. Structure is exactly four `# ` headings (case-insensitive, but write them lowercase to match the source), each parsed as **first line = the opener claim, everything after = body prose**:
 
 ```markdown
 # opening
@@ -309,6 +309,30 @@ evidence-backed per the audit-discipline rules below.>
 81% of active days; Codex covered the other 19%, mostly late-night sessions.").
 Rest: body prose on how work split across sources in `cross_llm.sources` —
 coverage tier caveats apply (see Step 1c): only claim what the tier can prove.>
+
+# leak-ledger
+
+<First line: the opener claim states the single biggest leak with its weekly
+number (e.g. "The repeated-instruction tax cost an estimated 420 tokens/week
+across 8 sessions retyping the same guardrail prompt.") — read it from
+`ledger.leaks.items[0]` (highest `weekly_cost_usd`), not from a guess.
+Rest: body prose on the remaining leak-ledger items in `ledger.leaks.items`
+and any blind-spot findings in `blind_spots` whose `gate_passed` is true.
+The audit-discipline rules above apply here too — numbers before adjectives,
+no cheerleading. The praise-word lint (build-time, see Step 4) will warn on
+cheerleading vocabulary in this book same as any other.
+
+Empty-catalog path: `ledger.leaks.items` can legitimately be empty on a
+valid run. When it is, do NOT invent a leak. Instead:
+  - If `blind_spots.ask_vs_ship.gate_passed` or
+    `blind_spots.interrupt_win_rate.gate_passed` is true, write the opener
+    from whichever of those passed (they are the leak ledger's secondary
+    findings, #6 and #7) — same numbers-before-adjectives rule applies.
+  - If neither passed either, omit the `# leak-ledger` book entirely.
+    The renderer (`_build_leak_ledger` in report_render.py) suppresses the
+    section gracefully when there is nothing to show, and falls back to
+    the locale-default title if the book is missing. Never fabricate a
+    leak or a number to fill the opener.>
 ```
 
 Pass the file to the build with `--ledger-narration /tmp/cc-autopsy/ledger-narration.md` (SELF builds only — HR never sees the ledger; see the audience table below).
@@ -458,6 +482,8 @@ python3 scripts/build_html.py \
 
 `--try-this` and `--case-study` are V4 additions. Both expect markdown files produced in Step 3.5. `--ledger-narration` is a V5 addition (SELF only, Step 3b) — if omitted, the ledger sections simply don't render, the rest of the build is unaffected. On a successful SELF build, `build_html.py` also appends one line to `--history-file` (default `~/.claude/usage-data/autopsy-history.jsonl`) as a trend snapshot; this never fails the build even if the write errors.
 
+**Praise-word lint warnings on stderr are expected output to read and act on, not build errors.** `build_html.py` scans every narrative markdown file (peer-review, ledger-narration, try-this, case-study) against the praise-word list (`scripts/praise_lint.py`) and prints `warning: praise-word lint: <file> contains praise vocabulary (...)` to stderr when it finds cheerleading vocabulary with no number behind it. The build still succeeds — this is a nudge to go back and either cut the adjective or attach the number that justifies it, not a failure to fix and retry.
+
 ### For a hiring-manager / portfolio audience
 
 If the user is producing this report to share with AI-company recruiters, add
@@ -593,6 +619,8 @@ The same `build_html.py` produces both audiences from one analysis-data.json. Ke
 | Opening band | rendered | absent |
 | Output ledger | rendered | absent |
 | Team ledger | rendered | absent |
+| Leak ledger | rendered | absent |
+| Blind-spot openers | rendered | absent |
 | Hero block | Diagnostic letter framing | Practice summary framing |
 | Overview / activity | Merged "usage snapshot" + 4-tile behavior strip | Profile card + activity panel + benchmark caveat |
 | Reading guide vs zone-map | Short reading-guide paragraph | Full visual 4-zone map (first-time reader) |
@@ -630,7 +658,7 @@ When adding a new block, ask: does this block convey diagnostic value (SELF) or 
 - `scripts/aggregate.py` — combines transcript rows + session-meta + facets, writes analysis-data.json (includes cost estimate via `PRICING` table); `--cross-llm-rows` (repeatable) feeds the additive `cross_llm` / `ledger` blocks only
 - `scripts/sample_sessions.py` — picks representative sessions, writes samples.json
 - `scripts/build_html.py` — CLI entry point. Wires `--peer-review`, `--try-this`, `--case-study`, `--ledger-narration`, `--audience`, `--locale`, `--profile`, `--public-projects`, `--artifacts`, `--history-file` into the renderer. Also owns `append_history_snapshot()` — the SELF-only, warn-never-fail trend-snapshot append to `--history-file` (default `~/.claude/usage-data/autopsy-history.jsonl`) that runs after a successful build.
-- `scripts/report_render.py` — all HTML rendering logic. Owns the audience-conditional branches (SELF vs HR), claim-indexed evidence selectors, section ordering, and the SELF-only ledger builders (`_parse_ledger_narration`, `_build_opening_band`, `_build_output_ledger`, `_build_team_ledger`).
+- `scripts/report_render.py` — all HTML rendering logic. Owns the audience-conditional branches (SELF vs HR), claim-indexed evidence selectors, section ordering, and the SELF-only ledger builders (`_parse_ledger_narration`, `_build_opening_band`, `_build_output_ledger`, `_build_team_ledger`, `_build_leak_ledger`).
 - `scripts/locales.py` — single source of truth for every UI chrome string. Both locales must share the same key set (enforced by tests). Two locales: `en` (canonical), `zh_TW`.
 - `scripts/narrative_en.py` / `scripts/narrative_zh.py` — locale-specific narrative helpers (outcome labels, evidence badges, methodology sub-blocks).
 - `tests/test_scan_transcripts.py` — scanner unit tests

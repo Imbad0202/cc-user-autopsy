@@ -18,6 +18,11 @@ try:
 except ImportError:
     import report_render  # type: ignore[no-redef]
 
+try:
+    from scripts.praise_lint import find_praise
+except ImportError:
+    from praise_lint import find_praise  # type: ignore[no-redef]
+
 # Re-export helpers that tests import directly via `build_html.<name>`.
 from report_render import (  # noqa: F401  (re-exported for test compatibility)
     _build_activity_panel,
@@ -63,6 +68,18 @@ def append_history_snapshot(history_path, analysis, audience):
             elif isinstance(val, (int, float)):
                 scores[key] = val
         ledger = analysis.get("ledger") or {}
+        leaks_items = (ledger.get("leaks") or {}).get("items") or []
+        leaks = []
+        if isinstance(leaks_items, list):
+            for item in leaks_items:
+                if not isinstance(item, dict):
+                    continue
+                leaks.append({
+                    "type": item.get("type"),
+                    "weekly_cost_usd": item.get("weekly_cost_usd"),
+                    "weekly_tokens": item.get("weekly_tokens"),
+                    "occurrences": item.get("occurrences"),
+                })
         entry = {
             "date": date.today().isoformat(),
             "schema_version": 1,
@@ -72,6 +89,7 @@ def append_history_snapshot(history_path, analysis, audience):
                 "git_commits": (ledger.get("output") or {}).get("git_commits"),
                 "sessions": (analysis.get("meta") or {}).get("total_sessions"),
                 "sources_detected": ledger.get("sources_detected") or [],
+                "leaks": leaks,
             },
         }
         path = Path(history_path).expanduser()
@@ -183,6 +201,17 @@ def main():
         p = Path(args.ledger_narration).expanduser()
         if p.exists():
             ledger_narration_md = p.read_text()
+
+    for label, md in (("peer-review", pr_md),
+                      ("ledger-narration", ledger_narration_md),
+                      ("try-this", try_this_md),
+                      ("case-study", case_study_md)):
+        hits = find_praise(md)
+        if hits:
+            words = ", ".join(f"{h['word']}×{h['count']}" for h in hits[:5])
+            print(f"warning: praise-word lint: {label} contains praise "
+                  f"vocabulary ({words}) — audit discipline wants numbers "
+                  f"before adjectives", file=sys.stderr)
 
     artifacts_list = load_json_or_warn(args.artifacts, "artifacts", [])
     profile_info = load_json_or_warn(args.profile, "profile", {})

@@ -7,12 +7,53 @@ for sources whose log files span multiple days (observed with resumed
 Codex rollouts) — a `segments` list of activity windows split at idle
 gaps, so parallel detection never counts idle days as active time.
 """
+import hashlib
 import json
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
 SEGMENT_GAP_MINUTES = 30
+
+_NORM_KEEP_RE = re.compile(r"[^\w一-鿿]+")
+_NORM_WS_RE = re.compile(r"\s+")
+
+
+def normalize_prompt(text):
+    """Normalize an instruction for exact-match repetition detection.
+
+    Deliberately exact-match only (v1): lowercased, punctuation folded to
+    spaces, whitespace collapsed. No truncation — identity uses the full
+    normalized string, so two long instructions that only differ after a
+    shared prefix must NOT collapse into one pattern (zero false positives
+    beats higher recall for a tax the user will be told to fix). No fuzzy
+    matching either. Display truncation (the ≤120-char exemplar shown to the
+    user) happens separately in aggregate.bs_repeated_instructions.
+
+    Shared with aggregate.py (which imports this rather than keeping its own
+    copy) and the scan_*.py adapters, which call prompt_identity() below on
+    the FULL prompt text before they truncate first_prompt to 500 chars for
+    display.
+    """
+    if not isinstance(text, str):
+        return ""
+    # \w keeps underscores, but "run_full_tests" and "run full tests" are
+    # the same instruction under punctuation folding — fold "_" explicitly.
+    t = _NORM_KEEP_RE.sub(" ", text.lower().replace("_", " "))
+    return _NORM_WS_RE.sub(" ", t).strip()
+
+
+def prompt_identity(text):
+    """sha1 hexdigest of normalize_prompt(text) over the FULL (untruncated)
+    prompt — an identity key for exact-match repetition grouping that
+    survives adapters truncating first_prompt to 500 chars for display.
+
+    Returns None for empty/falsy normalized text (nothing to key on)."""
+    norm = normalize_prompt(text)
+    if not norm:
+        return None
+    return hashlib.sha1(norm.encode("utf-8")).hexdigest()
 
 
 def parse_ts(s) -> Optional[datetime]:

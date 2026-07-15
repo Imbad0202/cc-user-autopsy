@@ -5,6 +5,7 @@ Outputs analysis-data.json.
 """
 import argparse
 import json
+import re
 import statistics
 import sys
 from collections import Counter, defaultdict
@@ -12,9 +13,9 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 try:
-    from cross_llm_common import parse_jsonl_object
+    from cross_llm_common import normalize_prompt, parse_jsonl_object, prompt_identity
 except ImportError:  # pragma: no cover - exercised when imported as scripts.aggregate
-    from scripts.cross_llm_common import parse_jsonl_object
+    from scripts.cross_llm_common import normalize_prompt, parse_jsonl_object, prompt_identity
 
 DEFAULT_DATA_DIR = Path.home() / ".claude/usage-data"
 META_DIR = DEFAULT_DATA_DIR / "session-meta"
@@ -253,6 +254,54 @@ def bucket_prompt_len(n: int) -> str:
     return ">=300"
 
 
+# --- Phase 2 shared helpers (blind-spot engine) ---
+
+# normalize_prompt / prompt_identity live in cross_llm_common.py (imported
+# above) — shared with scan_transcripts.py / scan_codex.py / scan_grok.py,
+# which call prompt_identity() on the full pre-truncation prompt text to
+# emit the additive first_prompt_hash row field (see bs_repeated_instructions).
+
+_CJK_RE = re.compile(r"[一-鿿]")
+
+
+def prompt_similarity(a_norm, b_norm):
+    """Similarity between two normalize_prompt() outputs.
+
+    Default: token-set Jaccard on whitespace-split words. CJK scripts
+    (Chinese) have no whitespace between words, so a whole zh sentence
+    normalizes to a single "token" and near-identical zh prompts would
+    score 0.0 or 1.0 with nothing in between — breaking sunk-cost pair
+    matching for zh users. When either normalized string contains a CJK
+    character (U+4E00-U+9FFF), fall back to Jaccard over character
+    BIGRAMS of the de-spaced string instead, which degrades gracefully
+    for near-duplicate zh prompts. If a de-spaced string has fewer than 2
+    characters (no bigrams possible), fall back to the word-token path
+    for that comparison. Non-CJK (English etc.) behavior is unchanged.
+    """
+    if _CJK_RE.search(a_norm) or _CJK_RE.search(b_norm):
+        a_flat, b_flat = a_norm.replace(" ", ""), b_norm.replace(" ", "")
+        if len(a_flat) >= 2 and len(b_flat) >= 2:
+            ba = {a_flat[i:i + 2] for i in range(len(a_flat) - 1)}
+            bb = {b_flat[i:i + 2] for i in range(len(b_flat) - 1)}
+            if not ba or not bb:
+                return 0.0
+            return len(ba & bb) / len(ba | bb)
+    ta, tb = set(a_norm.split()), set(b_norm.split())
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def week_key(dt):
+    """ISO week label 'YYYY-Www' — the single week-bucketing helper.
+
+    build_sessions and the cross_llm weekly loop previously inlined this
+    format; a third copy for the blind-spot engine forced the factor-out.
+    """
+    iso = dt.isocalendar()
+    return f"{iso[0]}-W{iso[1]:02d}"
+
+
 def detect_tz() -> timezone:
     """Pick a tz: TPE if system locale is Asia, else UTC. User can override."""
     try:
@@ -302,6 +351,8 @@ _REDACTED_META_KEYS = {
     "cache_creation_input_tokens", "cache_read_input_tokens",
     "model_counts",
     "hit_output_limit",
+    "token_accel",
+    "segments",  # timestamps only, no content — safe to carry through redaction
 }
 _REDACTED_FACETS_KEYS = {
     "session_id", "outcome", "claude_helpfulness", "session_type",
@@ -432,7 +483,7 @@ def build_sessions(metas, facets, tz):
             "project_key": project_path,
             "project_path": project_path,
             "start": m.get("start_time", ""),
-            "week": f"{local.isocalendar().year}-W{local.isocalendar().week:02d}",
+            "week": week_key(local),
             "hour": local.hour,
             "weekday": local.weekday(),
             "duration_min": m.get("duration_minutes", 0),
@@ -462,6 +513,7 @@ def build_sessions(metas, facets, tz):
             "cache_read_tokens": m.get("cache_read_input_tokens", 0),
             "model_counts": m.get("model_counts", {}) or {},
             "hit_output_limit": m.get("hit_output_limit", False),
+            "token_accel": m.get("token_accel"),
             # facet fields
             "outcome": f.get("outcome", ""),
             "helpfulness": f.get("claude_helpfulness", ""),
@@ -1526,13 +1578,17 @@ def compute_aggregates(sessions, rated, facets_coverage):
     return result
 
 
-def _row_windows(row):
+def _row_windows(row, pad=True):
     """Activity windows for a row: explicit segments, else start+duration.
 
-    Zero-length windows (a single-event session's [t, t] segment, or a
-    duration_minutes of 0) are expanded to a minimum of 1 minute — otherwise
-    they contribute 0 minutes to weekly_share and no presence to the
-    parallel-overlap sweep, silently vanishing from both.
+    With pad=True (default), zero-length windows (a single-event session's
+    [t, t] segment, or a duration_minutes of 0) are expanded to a minimum
+    of 1 minute — otherwise they contribute 0 minutes to weekly_share and
+    no presence to the parallel-overlap sweep, silently vanishing from
+    both. Pass pad=False when deriving FACTUAL activity instants (the
+    ledger window's end, graveyard last-touched dates): the padding is an
+    overlap-accounting convention, and a padded end just before local
+    midnight would fabricate an activity date on which nothing happened.
     """
     segs = row.get("segments")
     out = []
@@ -1543,7 +1599,7 @@ def _row_windows(row):
             except (TypeError, IndexError):
                 continue
             if s and e and e >= s:
-                if e == s:
+                if e == s and pad:
                     e = s + timedelta(minutes=1)
                 out.append((s, e))
         if out:
@@ -1552,7 +1608,7 @@ def _row_windows(row):
     if not s:
         return []
     dur = row.get("duration_minutes") or 0
-    return [(s, s + timedelta(minutes=max(dur, 1)))]
+    return [(s, s + timedelta(minutes=max(dur, 1) if pad else dur))]
 
 
 def _split_at_midnight(start, end):
@@ -1599,6 +1655,35 @@ def _hours_touched(day, ss, ee):
 
 def _project_key(path_str):
     return Path(path_str).name if path_str else "(unknown)"
+
+
+def _local_midnight_bounds(start_date, end_date):
+    """[start_date, end_date] (inclusive calendar dates) -> (lo, hi) aware
+    datetimes at local-zone midnights, hi being the EXCLUSIVE midnight
+    starting the day after end_date. Shared by compute_cross_llm (weekly-
+    share / common-window clipping) and bs_switch_tax (multi-source-interval
+    clipping) — both need to clip datetime windows to a common_window
+    expressed as calendar dates.
+
+    Boundaries must be local-zone midnights, matching the tzinfo _parse_dt
+    normalizes every row datetime to (system local, via astimezone() — see
+    _parse_dt's docstring). Building these as UTC midnights instead (the
+    original bug) silently drops activity in positive-UTC-offset zones:
+    local midnight on the window's first day falls BEFORE the wrongly-UTC
+    lo, so real activity between local midnight and that boundary gets
+    clipped away. datetime.min/max().astimezone() has no tz to convert
+    FROM, so we instead combine the naive date/time and attach the local
+    offset directly via .astimezone() on an already-local reference value.
+    """
+    lo = datetime.combine(start_date, time.min).astimezone()
+    hi = datetime.combine(end_date + timedelta(days=1), time.min).astimezone()
+    return lo, hi
+
+
+def _clip_to_bounds(s, e, lo, hi):
+    """Clip window (s, e) to [lo, hi); None if it falls fully outside."""
+    cs, ce = max(s, lo), min(e, hi)
+    return (cs, ce) if ce > cs else None
 
 
 def _merge_intervals(intervals):
@@ -1777,29 +1862,16 @@ def compute_cross_llm(claude_rows, cross_rows):
     # chart anyway), keep the unclipped behavior.
     clip_start = clip_end = None
     if common_window is not None:
-        # Boundaries must be local-zone midnights, matching the tzinfo
-        # _parse_dt normalizes every row datetime to (system local, via
-        # astimezone() — see _parse_dt's docstring). Building these as UTC
-        # midnights instead (the original bug) silently drops activity in
-        # positive-UTC-offset zones: local midnight on the window's first
-        # day falls BEFORE the wrongly-UTC clip_start, so real activity
-        # between local midnight and that boundary gets clipped away.
-        # datetime.min/max().astimezone() has no tz to convert FROM, so we
-        # instead combine the naive date/time and attach the local offset
-        # directly via .astimezone() on an already-local reference value.
-        clip_start = datetime.combine(
-            date.fromisoformat(common_window["start"]), time.min).astimezone()
-        clip_end = datetime.combine(
-            date.fromisoformat(common_window["end"]) + timedelta(days=1),
-            time.min).astimezone()
+        clip_start, clip_end = _local_midnight_bounds(
+            date.fromisoformat(common_window["start"]),
+            date.fromisoformat(common_window["end"]))
 
     def _clip(s, e):
         """Clip window (s, e) to [clip_start, clip_end]; None if it falls
         fully outside. clip_start is None (no common_window) means no clip."""
         if clip_start is None:
             return (s, e)
-        cs, ce = max(s, clip_start), min(e, clip_end)
-        return (cs, ce) if ce > cs else None
+        return _clip_to_bounds(s, e, clip_start, clip_end)
 
     weekly = {}
     for r in comparable:
@@ -1808,7 +1880,7 @@ def compute_cross_llm(claude_rows, cross_rows):
             if clipped is None:
                 continue
             s, e = clipped
-            wk = f"{s.isocalendar()[0]}-W{s.isocalendar()[1]:02d}"
+            wk = week_key(s)
             weekly.setdefault(wk, {}).setdefault(r["source"], 0)
             weekly[wk][r["source"]] += round((e - s).total_seconds() / 60)
     weekly_share = [{"week": wk, "minutes": mins}
@@ -1973,19 +2045,29 @@ def compute_cross_llm(claude_rows, cross_rows):
             "project_matrix": project_matrix, "head_to_head": head_to_head}
 
 
-def compute_ledger(activity_metas, cross_llm):
+def compute_ledger(activity_metas, cross_llm, window_end=None):
+    """window_end (aware datetime, optional): the max activity END across
+    all activity windows (see main()'s shared computation — blind_spots,
+    leaks, and ledger.window share one end-aware window). When omitted,
+    falls back to the max session START date (prior behavior), for callers
+    that don't have the end-aware value on hand.
+    """
     rows = list(activity_metas.values())
     dates = sorted(d for d in (_parse_dt(r.get("start_time") or "")
                                for r in rows) if d)
     commits = sum(r.get("git_commits") or 0 for r in rows)
     pushes = sum(r.get("git_pushes") or 0 for r in rows)
     with_commits = sum(1 for r in rows if (r.get("git_commits") or 0) > 0)
+    start_date = dates[0].date() if dates else None
+    end_date = window_end.date() if window_end else (dates[-1].date() if dates else None)
+    if start_date and end_date and end_date < start_date:
+        end_date = start_date
     return {
         "schema_version": 1,
         "window": {
-            "start": dates[0].date().isoformat() if dates else None,
-            "end": dates[-1].date().isoformat() if dates else None,
-            "days": (dates[-1] - dates[0]).days if len(dates) > 1 else 0,
+            "start": start_date.isoformat() if start_date else None,
+            "end": end_date.isoformat() if end_date else None,
+            "days": (end_date - start_date).days if start_date and end_date else 0,
         },
         "output": {"git_commits": commits, "git_pushes": pushes,
                    "sessions_with_commits": with_commits},
@@ -2000,6 +2082,862 @@ def compute_ledger(activity_metas, cross_llm):
             s["source"] for s in cross_llm["sources"]
             if s.get("detected", True) or (s.get("session_count") or 0) > 0
         ],
+    }
+
+
+# --- Blind-spot engine (Phase 2, spec §5) -----------------------------
+# Gate literals below are heuristic-eligibility thresholds: independent
+# from _PATTERN_MIN_SAMPLE (the pattern-floor constant). Keep separate so
+# future tuning of the pattern floor doesn't silently move these gates.
+_BS_MIN_PATTERN_CHARS = 20
+_BS_REPEAT_MIN_OCC = 5
+_BS_REPEAT_MIN_WEEKS = 3
+_BS_SUNK_MIN_PAIRS = 3
+_BS_ACCEL_FLAG = 1.5
+_BS_SIMILARITY_MIN = 0.5
+_BS_RETRY_MAX_DURATION_SHARE = 0.5
+_BS_GUARD_FACTOR = 1.5
+
+
+def _bs_result(id_, gate, metrics=None, n=0, reason=None, guarded=False):
+    return {"id": id_, "gate_passed": bool(gate),
+            "suppressed_by_guard": bool(guarded), "n": n,
+            "metrics": metrics or {}, "reason": reason}
+
+
+def _row_input_rate_floor(row):
+    """Verified lower-bound input $/1M for one scanner row: the cheapest
+    input rate among the row's observed models, or 0.0 when attribution is
+    missing or names a model absent from PRICING — the same policy as
+    _leak_cost_usd: an unlisted (e.g. historical) model may be cheaper than
+    anything the current table can vouch for, so no table rate is a
+    verified floor for its tokens."""
+    models = {_normalize_model_id(m) for m in (row.get("model_counts") or {})}
+    if not models or any(m not in PRICING for m in models):
+        return 0.0
+    return min(PRICING[m]["input"] for m in models)
+
+
+def bs_repeated_instructions(claude_rows, cross_rows, window_start=None,
+                             window_end=None, tz=None):
+    """Spec §5 #1 — repeated-instruction tax.
+
+    Grouping key is `row["first_prompt_hash"]` when present (sha1 of the
+    FULL, pre-truncation prompt text — Fix 3), else
+    prompt_identity(first_prompt) computed here as a legacy-row fallback
+    (Fix 8: same sha1-of-normalized-text function, so legacy rows land in
+    the SAME hash space as hash-carrying rows instead of a separate
+    plaintext key — mixed-version inputs merge into one pattern instead of
+    splitting across two keys that never individually reach the occurrence
+    gate). The hash is computed by the scanners over the full prompt before
+    they truncate first_prompt to 500 chars for display, so two prompts
+    sharing a 500-char prefix but differing later no longer false-merge,
+    and an identical long Claude prompt still matches its truncated
+    cross-tool copy. Not outcome-guarded by design: a repeated instruction
+    is a tax whether or not the sessions succeed (see rubric). Wasted-token
+    estimate is a lower bound: only the retyped prompt text.
+
+    window_start/window_end (aware datetimes, optional): when BOTH are
+    given, rows whose parsed start_time falls outside [window_start,
+    window_end] are skipped entirely — codex/grok history extending beyond
+    the transcript-derived ledger window must not contribute occurrences,
+    since compute_leaks divides all-time totals by the window's weeks and
+    the render claims "N occurrences in window". Either bound alone (or
+    both None) disables windowing, matching prior behavior. The comparison
+    is by calendar DATE, inclusive at both ends (Fix 6): a cross-source row
+    earlier in the day than window_start (or later than window_end) on the
+    SAME calendar date still counts as in-window, matching the date-range
+    the rendered window note claims to cover.
+
+    tz (datetime.timezone, optional): the CLI-selected --tz. These rows have
+    no precomputed week (unlike build_sessions' s["week"]), so week
+    membership is derived here via week_key(dt) — but _parse_dt normalizes
+    dt to OS-local, not necessarily the requested --tz. When tz is given,
+    the parsed dt is converted into it before week_key, mirroring
+    build_sessions' own `start.astimezone(tz)` conversion, so week
+    boundaries near Sunday/Monday match the timezone the report claims to
+    use. When omitted, behavior is unchanged (OS-local week bucketing).
+    """
+    occ = {}
+    windowed = window_start is not None and window_end is not None
+    win_start_d = window_start.date() if windowed else None
+    win_end_d = window_end.date() if windowed else None
+    for row in list(claude_rows) + list(cross_rows):
+        if row.get("coverage") == "presence_only":
+            continue
+        # The <20-char floor always applies to the normalized (possibly
+        # truncated-display) text — even when a hash key is present, hash
+        # rows carry first_prompt truncated to 500 chars, far above the
+        # floor, so this is a no-op for them in practice.
+        norm = normalize_prompt(row.get("first_prompt"))
+        if len(norm) < _BS_MIN_PATTERN_CHARS:
+            continue
+        dt = _parse_dt(row.get("start_time"))
+        if dt is None:
+            continue
+        if windowed and not (win_start_d <= dt.date() <= win_end_d):
+            continue
+        week_dt = dt.astimezone(tz) if tz is not None else dt
+        key = row.get("first_prompt_hash") or prompt_identity(row.get("first_prompt"))
+        source = row.get("source") or "claude"
+        occ.setdefault(key, []).append({
+            "week": week_key(week_dt),
+            "source": source,
+            "sid": row.get("session_id") or "",
+            "raw": row.get("first_prompt") or "",
+            # This occurrence's own retyped-text token estimate — raw
+            # prompts of different lengths can share one identity after
+            # punctuation/whitespace folding, so each hit carries its own
+            # normalized length instead of inheriting the exemplar's.
+            "tok": len(norm) // 4,
+            # Verified input-rate floor for pricing this occurrence — only
+            # Claude rows can carry one (cross-tool tokens were never
+            # billed at a Claude rate); 0.0 means "no verified rate".
+            "rate": _row_input_rate_floor(row) if source == "claude" else 0.0})
+    patterns = []
+    for hits in occ.values():
+        weeks = {h["week"] for h in hits}
+        if len(hits) < _BS_REPEAT_MIN_OCC or len(weeks) < _BS_REPEAT_MIN_WEEKS:
+            continue
+        raw_counts = {}
+        for h in hits:
+            # Exemplar candidates are CLAUDE hits only (spec §4: cross-LLM
+            # prompt text must never reach any output — the exemplar lands
+            # in analysis-data.json and the SELF HTML). A cross-only
+            # pattern carries no exemplar; its counts/weeks still report,
+            # and the renderer skips the detail line for a falsy one.
+            if h["source"] != "claude":
+                continue
+            raw_counts[h["raw"]] = raw_counts.get(h["raw"], 0) + 1
+        exemplar = (max(raw_counts, key=raw_counts.get)[:120]
+                    if raw_counts else "")
+        # All three waste figures are per-hit floors: each occurrence
+        # counts its OWN normalized length (h["tok"]), not the most-common
+        # exemplar's — mixed-length raws sharing one folded identity must
+        # not all be charged at the longest variant. claude_* fields count
+        # only the Claude share (non-Claude tokens were never billed at a
+        # Claude rate); claude_wasted_usd prices each Claude occurrence at
+        # its own row's verified input-rate floor ($0 when attribution is
+        # missing or names a model absent from PRICING, same policy as
+        # _leak_cost_usd). Each figure discounts one free "first typing"
+        # at the LARGEST per-hit value (tokens or dollars respectively) so
+        # the remainder stays a floor. claude_wasted_usd feeds
+        # compute_leaks' USD figure; est_wasted_tokens (all-source) still
+        # drives the tokens/week display.
+        toks = sorted(h["tok"] for h in hits)
+        claude_toks = sorted(h["tok"] for h in hits if h["source"] == "claude")
+        usd_contrib = sorted(h["rate"] * h["tok"] for h in hits
+                             if h["source"] == "claude")
+        patterns.append({
+            "exemplar": exemplar,
+            "occurrences": len(hits),
+            "weeks": len(weeks),
+            "sources": sorted({h["source"] for h in hits}),
+            "est_wasted_tokens": sum(toks[:-1]),
+            "claude_wasted_tokens": sum(claude_toks[:-1]) if claude_toks else 0,
+            "claude_wasted_usd": (round(sum(usd_contrib[:-1]) / 1e6, 6)
+                                  if usd_contrib else 0.0),
+            "evidence": [h["sid"] for h in hits[:3]]})
+    patterns.sort(key=lambda p: -p["occurrences"])
+    if not patterns:
+        return _bs_result("repeated_instructions", False,
+                          reason="no pattern with >=5 occurrences over >=3 weeks")
+    return _bs_result("repeated_instructions", True,
+                      metrics={"patterns": patterns[:5]}, n=len(patterns))
+
+
+def counterexample_similar(rate_flagged, rate_good):
+    """Spec §5 counterexample guard: True when the flagged behavior occurs
+    at a similar rate in fully_achieved sessions (within _BS_GUARD_FACTOR),
+    i.e. the pattern must NOT be reported as waste."""
+    if rate_flagged <= 0:
+        return True
+    return rate_good * _BS_GUARD_FACTOR >= rate_flagged
+
+
+def bs_sunk_cost(rated):
+    """Spec §5 #2 — sunk-cost sessions.
+
+    A confirmed pair = a not_achieved session with late-session output
+    acceleration, followed by a later good-outcome session on a similar
+    prompt finishing in <= half the minutes. Guard: if acceleration is
+    about as common in fully_achieved sessions, suppress entirely.
+    """
+    def accel_flag(s):
+        a = s.get("token_accel")
+        return a is not None and a >= _BS_ACCEL_FLAG
+
+    failed = [s for s in rated
+              if s["outcome"] == "not_achieved" and accel_flag(s)]
+    good = [s for s in rated if is_good(s["outcome"])]
+    # The pairing loop below is failed x good; dt parsing and prompt
+    # normalization depend only on g, so hoist them out of the inner loop.
+    candidates = []
+    for g in good:
+        g_dt = _parse_dt(g.get("start"))
+        if g_dt is None:
+            continue
+        candidates.append((g, g_dt, normalize_prompt(g.get("first_prompt"))))
+    pairs = []
+    for f in failed:
+        fn = normalize_prompt(f.get("first_prompt"))
+        if len(fn) < _BS_MIN_PATTERN_CHARS:
+            continue
+        f_dt = _parse_dt(f.get("start"))
+        f_dur = f.get("duration_min") or 0
+        if f_dt is None or f_dur <= 0:
+            continue
+        for g, g_dt, g_norm in candidates:
+            if g_dt <= f_dt:
+                continue
+            sim = prompt_similarity(fn, g_norm)
+            if sim < _BS_SIMILARITY_MIN:
+                continue
+            if (g.get("duration_min") or 0) > _BS_RETRY_MAX_DURATION_SHARE * f_dur:
+                continue
+            pairs.append({"failed_sid": f["sid"], "retry_sid": g["sid"],
+                          "failed_tokens": f.get("total_tokens") or 0,
+                          "failed_minutes": f_dur,
+                          "retry_minutes": g.get("duration_min") or 0,
+                          "similarity": round(sim, 2)})
+            break
+    fa = [s for s in rated if s["outcome"] == "fully_achieved"
+          and s.get("token_accel") is not None]
+    na = [s for s in rated if s["outcome"] == "not_achieved"
+          and s.get("token_accel") is not None]
+    rate_good = (sum(accel_flag(s) for s in fa) / len(fa)) if fa else 0.0
+    rate_bad = (sum(accel_flag(s) for s in na) / len(na)) if na else 0.0
+    metrics = {"pairs": pairs,
+               "accel_rate_not_achieved": round(rate_bad, 2),
+               "accel_rate_fully_achieved": round(rate_good, 2)}
+    if pairs and counterexample_similar(rate_bad, rate_good):
+        return _bs_result("sunk_cost", False, metrics=metrics, n=len(pairs),
+                          reason="acceleration equally common in successful sessions",
+                          guarded=True)
+    if len(pairs) < _BS_SUNK_MIN_PAIRS:
+        return _bs_result("sunk_cost", False, metrics=metrics, n=len(pairs),
+                          reason="fewer than 3 confirmed pairs")
+    return _bs_result("sunk_cost", True, metrics=metrics, n=len(pairs))
+
+
+_BS_SWITCH_MIN_PER_BUCKET = 20
+
+
+def _tag_claude_and_filter_cross(activity_rows, cross_rows):
+    """Tag activity_rows with source="claude" (default) and append cross_rows
+    with presence_only rows excluded. Shared row-prep step for
+    _multi_source_intervals and bs_switch_tax's common-window computation —
+    both need the same "claude rows + comparable cross rows" pool, just for
+    different downstream purposes (interval sweep vs. per-source date
+    ranges)."""
+    rows = []
+    for r in activity_rows:
+        rr = dict(r)
+        rr.setdefault("source", "claude")
+        rows.append(rr)
+    rows += [r for r in cross_rows if r.get("coverage") != "presence_only"]
+    return rows
+
+
+def _multi_source_intervals(activity_rows, cross_rows):
+    """Merged wall-clock intervals where >=2 sources were active.
+    Reuses the cross_llm sweep helpers; presence-only rows excluded."""
+    rows = _tag_claude_and_filter_cross(activity_rows, cross_rows)
+    windows = {id(r): _row_windows(r) for r in rows}
+    concurrent = _sweep_concurrent_intervals(rows, windows)
+    return _merge_intervals([(s, e) for s, e, n in concurrent if n >= 2])
+
+
+def _common_window_dates(rows):
+    """Per-source [min start, max end] -> common window, mirroring
+    compute_cross_llm's common_window derivation (spec §13): the window a
+    reader is told cross-source comparisons cover is the overlap of every
+    source's own coverage span, not each source's full history. `rows` must
+    already be source-tagged (each row carries a "source" key) and exclude
+    presence_only rows. Returns (start_date, end_date) as `date` objects, or
+    None if fewer than 2 sources have any resolvable window.
+
+    Boundaries are calendar dates (inclusive) per spec: callers compare
+    `dt.date()` against these bounds rather than exact timestamps, so a
+    cross-source occurrence earlier in the day than the Claude minimum
+    start (or later than its maximum end) on the SAME calendar date still
+    counts as in-window (Fix 6)."""
+    per_source = {}
+    for r in rows:
+        windows = _row_windows(r)
+        if not windows:
+            continue
+        src = r.get("source") or "claude"
+        starts = [s for s, _ in windows]
+        ends = [e for _, e in windows]
+        lo, hi = min(starts), max(ends)
+        if src not in per_source:
+            per_source[src] = [lo, hi]
+        else:
+            per_source[src][0] = min(per_source[src][0], lo)
+            per_source[src][1] = max(per_source[src][1], hi)
+    if len(per_source) < 2:
+        return None
+    start = max(lo for lo, _ in per_source.values())
+    end = min(hi for _, hi in per_source.values())
+    if end < start:
+        return None
+    return start.date(), end.date()
+
+
+def bs_switch_tax(rated, activity_rows, cross_rows):
+    """Spec §5 #3 — switch tax. Outcome labels exist only for Claude, so
+    both buckets are Claude sessions; concurrency is measured against all
+    full/partial sources. Symmetric comparison — no counterexample guard.
+
+    Comparison runs over the cross-source common window only (spec: cross-
+    source comparisons render only over the common time window). Claude
+    history predating Codex/Grok adoption would otherwise flood the
+    single-tool bucket — those pre-overlap sessions could never have been
+    multi-tool, biasing the comparison — so BOTH buckets are restricted to
+    rated sessions whose start date falls inside the common window
+    (calendar-date comparison, inclusive at both ends per Fix 6)."""
+    # Meta-only rated sessions (transcript rotated away) still exist in the
+    # scoring pool but may be missing from activity_rows entirely — without
+    # synthesizing minimal Claude activity for them, their Claude-side
+    # presence never reaches _multi_source_intervals, so real overlaps with
+    # Codex/Grok go undetected and those sessions are mis-bucketed
+    # single-tool. _row_windows' missing-segments fallback (start+duration)
+    # and 1-minute minimum handle these synthesized rows the same as any
+    # other activity row.
+    activity_sids = {r.get("session_id") for r in activity_rows}
+    extra = [{"session_id": s["sid"], "start_time": s["start"],
+              "duration_minutes": s.get("duration_min") or 0}
+             for s in rated if s["sid"] not in activity_sids]
+    comparable_pool = list(activity_rows) + extra
+
+    # The common window must match the one the team ledger displays
+    # (compute_cross_llm's common_window, spec §13) — that block derives its
+    # window from claude_rows + cross_rows only, never from meta-only rated
+    # sessions whose transcript rotated away. Rotated-away sessions can be
+    # months older than the real activity/cross overlap; including them here
+    # would stretch win_start_d/win_end_d far past what the ledger claims,
+    # so the displayed window and this gate's window would silently
+    # diverge. `extra` (the synthesized meta-only rows) is therefore used
+    # ONLY below, in the pool handed to _multi_source_intervals and the
+    # sid->row probe map — never in the window computation.
+    real_tagged_pool = _tag_claude_and_filter_cross(activity_rows, cross_rows)
+
+    window = _common_window_dates(real_tagged_pool)
+    if window is None:
+        return _bs_result("switch_tax", False, reason="no multi-source windows")
+    win_start_d, win_end_d = window
+
+    multi_iv = _multi_source_intervals(comparable_pool, cross_rows)
+    # Clip each multi-source interval to the common window: with 3+
+    # unevenly-covered sources, an overlap can occur entirely AFTER (or
+    # before) the window that _common_window_dates just computed — e.g. two
+    # sources overlap only once a third source's coverage has already
+    # ended, which is outside the common window by definition. Probing
+    # in-window rated sessions against an unclipped interval could then
+    # mis-bucket them multi-tool from an overlap that never coincided with
+    # the displayed window. Drop intervals entirely outside; truncate ones
+    # straddling a boundary. Same local-midnight boundary construction and
+    # clip-or-drop logic compute_cross_llm uses for its own common-window
+    # clipping (_local_midnight_bounds / _clip_to_bounds) — shared so a fix
+    # to one doesn't silently drift from the other.
+    win_start_dt, win_end_dt = _local_midnight_bounds(win_start_d, win_end_d)
+    multi_iv = [c for iv_start, iv_end in multi_iv
+                if (c := _clip_to_bounds(iv_start, iv_end, win_start_dt, win_end_dt))
+                is not None]
+    if not multi_iv:
+        return _bs_result("switch_tax", False, reason="no multi-source windows")
+    # sid -> row map over the Claude comparable pool (activity rows plus the
+    # synthesized meta-only `extra` rows above) so each rated session can be
+    # probed with ITS OWN segments via _row_windows, instead of one
+    # contiguous [start, start+duration] span that treats idle gaps inside a
+    # resumed session as active — a cross-tool row landing in that idle gap
+    # would otherwise falsely overlap and mis-bucket the session multi-tool.
+    row_by_sid = {r.get("session_id"): r for r in comparable_pool}
+    multi, single = [], []
+    for s in rated:
+        st = _parse_dt(s.get("start"))
+        if st is None:
+            continue
+        if not (win_start_d <= st.date() <= win_end_d):
+            continue
+        matching_row = row_by_sid.get(s.get("sid"))
+        if matching_row is None:
+            # No matching row (shouldn't normally happen — every rated
+            # session either has a real activity row or a synthesized one —
+            # kept as a defensive fallback): synthesize a start+duration row
+            # and reuse _row_windows so the 1-minute-minimum expansion for
+            # 0-minute sessions lives in exactly one place.
+            matching_row = {"start_time": s.get("start"),
+                            "duration_minutes": s.get("duration_min") or 0}
+        # Segment-aware probe: respects the row's real activity windows
+        # (idle gaps excluded). Meta-only synthesized rows have no segments,
+        # so _row_windows falls back to their own [start, start+max(dur,1)]
+        # span — same result as before for them.
+        probe_windows = _row_windows(matching_row)
+        # Overlap = any probe window intersects any multi-source interval.
+        hit = any(pw_start < iv_end and iv_start < pw_end
+                  for pw_start, pw_end in probe_windows
+                  for iv_start, iv_end in multi_iv)
+        (multi if hit else single).append(s)
+    if len(multi) < _BS_SWITCH_MIN_PER_BUCKET or len(single) < _BS_SWITCH_MIN_PER_BUCKET:
+        return _bs_result("switch_tax", False,
+                          n=min(len(multi), len(single)),
+                          reason="fewer than 20 scored sessions in a bucket")
+
+    def side(sessions):
+        n = len(sessions)
+        return {"n": n,
+                "good_rate": round(100 * sum(is_good(s["outcome"]) for s in sessions) / n, 1),
+                "friction_per_session": round(
+                    sum(sum((s.get("friction_counts") or {}).values())
+                        for s in sessions) / n, 2),
+                "interrupts_per_session": round(
+                    sum(s.get("interrupts") or 0 for s in sessions) / n, 2)}
+
+    return _bs_result("switch_tax", True, n=len(multi) + len(single),
+                      metrics={"multi": side(multi), "single": side(single)})
+
+
+def bs_interrupt_win_rate(rated):
+    """Spec §5 #7 — interrupt win-rate, the D5 upgrade: same buckets as
+    score_d5_interrupt but symmetric (both rates + delta). Gate mirrors
+    D5's literal 5 plus a baseline floor of the same size."""
+    interrupted = [s for s in rated if (s.get("interrupts") or 0) > 0]
+    baseline = [s for s in rated if not (s.get("interrupts") or 0)]
+    if len(interrupted) < 5 or len(baseline) < 5:
+        return _bs_result("interrupt_win_rate", False,
+                          n=len(interrupted),
+                          reason="fewer than 5 sessions in a bucket")
+
+    def rate(ss):
+        return round(100 * sum(is_good(s["outcome"]) for s in ss) / len(ss), 1)
+
+    ri, rb = rate(interrupted), rate(baseline)
+    return _bs_result("interrupt_win_rate", True, n=len(interrupted),
+                      metrics={"interrupted": {"n": len(interrupted), "good_rate": ri},
+                               "baseline": {"n": len(baseline), "good_rate": rb},
+                               "delta_pp": round(ri - rb, 1)})
+
+
+_BS_GRAVEYARD_MIN_WRITES = 5
+_BS_GRAVEYARD_HORIZON_DAYS = 14   # spec §13
+_BS_GRAVEYARD_MIN_ITEMS = 2
+# Scratch exclusions (spec §5 #4): roots match the whole path or a
+# path-root prefix; component names match a complete path component only
+# ("/home/u/scratchpad" yes, "/home/u/scratchpad-tools" no).
+_SCRATCH_ROOTS = ("/tmp", "/private/tmp")
+_SCRATCH_COMPONENTS = ("scratchpad",)
+
+
+def _is_scratch_path(path_lower):
+    if any(path_lower == r or path_lower.startswith(r + "/")
+           for r in _SCRATCH_ROOTS):
+        return True
+    return any(c in _SCRATCH_COMPONENTS
+               for c in path_lower.split("/") if c)
+_WRITE_TOOLS = ("Edit", "Write", "NotebookEdit")
+_BS_ASKSHIP_MIN_RATED = 20
+_BS_ASKSHIP_MIN_SHIPPED = 5
+_BS_NONSHIP_GOALS = {"information_query", "exploration", "quick_question"}
+_BS_ASKSHIP_MIN_GAP_PP = 10  # provisional v1: below this, "gap" is noise
+
+
+def bs_graveyard(activity_rows, window_end):
+    """Spec §5 #4 — the graveyard: substantive writes, no commit, project
+    untouched >= 14 days after. Structural guards (scratch paths, unknown
+    project) replace the outcome guard: achieved-but-never-shipped is
+    precisely the finding, not a counterexample.
+
+    Staleness is measured from each row's activity END, not its session
+    START: a resumed multi-day session that started 20 days ago but has a
+    segment active as recently as yesterday is not stale, even though its
+    start_time is old. `_row_windows(row, pad=False)` resolves explicit
+    segments (else start+duration) per row without the 1-minute overlap
+    padding (which could fabricate a next-day date), so per-project "last
+    touched" is the max END across every row's windows, and the qualifying-session
+    fields (writes, commits, evidence, last_active_date) come from the row
+    that owns that latest end.
+    """
+    by_project = {}
+    for r in activity_rows:
+        key = normalize_project_path(r.get("project_path") or "")
+        if not is_shippable_project_key(key):
+            continue
+        if _is_scratch_path(key.lower()):
+            continue
+        # pad=False: last-touched must be a factual instant — a padded end
+        # crossing local midnight would report a last_active_date on which
+        # nothing actually happened (and shift days_untouched by one).
+        windows = _row_windows(r, pad=False)
+        if not windows:
+            continue
+        row_end = max(e for _, e in windows)
+        by_project.setdefault(key, []).append((row_end, r))
+    items = []
+    for key, entries in by_project.items():
+        entries.sort(key=lambda e: e[0])
+        last_end, last_row = entries[-1]
+        days_untouched = (window_end - last_end).days
+        if days_untouched < _BS_GRAVEYARD_HORIZON_DAYS:
+            continue
+        tc = last_row.get("tool_counts") or {}
+        writes = sum(tc.get(t, 0) for t in _WRITE_TOOLS)
+        if writes < _BS_GRAVEYARD_MIN_WRITES:
+            continue
+        if (last_row.get("git_commits") or 0) > 0:
+            continue
+        items.append({"project_key": project_name(key),
+                      "last_active_date": last_end.date().isoformat(),
+                      "days_untouched": days_untouched,
+                      "writes": writes,
+                      "evidence": [last_row.get("session_id") or ""]})
+    items.sort(key=lambda i: -i["days_untouched"])
+    if len(items) < _BS_GRAVEYARD_MIN_ITEMS:
+        return _bs_result("graveyard", False, n=len(items),
+                          reason="fewer than 2 qualifying items")
+    return _bs_result("graveyard", True, metrics={"items": items[:8]},
+                      n=len(items))
+
+
+def bs_ask_vs_ship(rated):
+    """Spec §5 #6 — goal-category share of asks vs share of sessions that
+    shipped (git_commits > 0). Non-shipping categories are excluded from
+    flagging: asking questions is not a leak (structural guard).
+
+    Shares are SESSION-MEMBERSHIP shares, not goal-tag-count shares: for
+    each category, ask_share_pct = 100 * (# rated sessions whose goal_cats
+    contains the category) / len(rated); ship_share_pct = 100 * (# shipped
+    sessions containing it) / shipped_sessions. A session with multiple
+    categories counts once per category it contains — this matches what the
+    rendered locale text claims ("% of asks / % of shipped sessions"),
+    whereas counting goal-tag occurrences would let a category present in
+    every shipped session display as an arbitrary percentage unrelated to
+    session counts.
+    """
+    if len(rated) < _BS_ASKSHIP_MIN_RATED:
+        return _bs_result("ask_vs_ship", False, n=len(rated),
+                          reason="fewer than 20 scored sessions")
+    ask, ship = {}, {}
+    shipped_sessions = 0
+    for s in rated:
+        cats = set((s.get("goal_cats") or {}).keys())
+        shipped = (s.get("git_commits") or 0) > 0
+        if shipped:
+            shipped_sessions += 1
+        for c in cats:
+            ask[c] = ask.get(c, 0) + 1
+            if shipped:
+                ship[c] = ship.get(c, 0) + 1
+    if not ask or shipped_sessions < _BS_ASKSHIP_MIN_SHIPPED:
+        return _bs_result("ask_vs_ship", False, n=len(rated),
+                          reason="facets or shipped sessions below floor")
+    gaps = []
+    for c, n in ask.items():
+        if c in _BS_NONSHIP_GOALS:
+            continue
+        a = 100 * n / len(rated)
+        p = 100 * ship.get(c, 0) / shipped_sessions if shipped_sessions else 0.0
+        gaps.append((a - p, c, a, p))
+    if not gaps:
+        return _bs_result("ask_vs_ship", False, n=len(rated),
+                          reason="no shippable goal categories present")
+    gap_pp, cat, a, p = max(gaps)
+    if gap_pp < _BS_ASKSHIP_MIN_GAP_PP:
+        return _bs_result("ask_vs_ship", False, n=len(rated),
+                          metrics={"top_gap": {"category": cat,
+                                               "ask_share_pct": round(a, 1),
+                                               "ship_share_pct": round(p, 1),
+                                               "gap_pp": round(gap_pp, 1)},
+                                   "shipped_sessions": shipped_sessions},
+                          reason="no category gap >= 10pp")
+    return _bs_result("ask_vs_ship", True, n=len(rated),
+                      metrics={"top_gap": {"category": cat,
+                                           "ask_share_pct": round(a, 1),
+                                           "ship_share_pct": round(p, 1),
+                                           "gap_pp": round(gap_pp, 1)},
+                               "shipped_sessions": shipped_sessions})
+
+
+_BS_DRIFT_MIN_WEEKS = 8
+_BS_DRIFT_LEN_DROP = 0.75
+_BS_DRIFT_GOOD_TOL_PP = 5
+
+
+def bs_habit_drift(rated):
+    """Spec §5 #5 — habit drift: prompt length falling while outcomes are
+    not improving. Guard: shorter prompts WITH better outcomes = skill
+    gained, suppress (the counterexample guard for this heuristic).
+
+    Weeks are split early/late at the midpoint; a week only counts if it
+    has >= GROWTH_MIN_RATED_PER_WEEK rated sessions (same floor the growth
+    panel uses, so "8 weeks" means 8 *plottable* weeks, not calendar weeks).
+
+    Week bucketing uses the session's own precomputed `s["week"]`
+    (build_sessions already converts each start time into the requested
+    --tz before deriving this) when present, so week membership near
+    Sunday/Monday boundaries matches the CLI-selected timezone rather than
+    OS-local. Falls back to _parse_dt + week_key (OS-local) only when a row
+    lacks "week" — some test fixtures build rated-session dicts directly
+    without going through build_sessions.
+    """
+    weeks = {}
+    for s in rated:
+        wk = s.get("week")
+        if wk is None:
+            dt = _parse_dt(s.get("start"))
+            if dt is None:
+                continue
+            wk = week_key(dt)
+        weeks.setdefault(wk, []).append(s)
+    eligible = {w: ss for w, ss in weeks.items()
+                if len(ss) >= GROWTH_MIN_RATED_PER_WEEK}
+    if len(eligible) < _BS_DRIFT_MIN_WEEKS:
+        return _bs_result("habit_drift", False, n=len(eligible),
+                          reason="fewer than 8 weeks with enough rated sessions")
+    ordered = [eligible[w] for w in sorted(eligible)]
+    half = len(ordered) // 2
+    early = [s for wk in ordered[:half] for s in wk]
+    late = [s for wk in ordered[-half:] for s in wk]
+
+    def med_len(ss):
+        # early/late are non-empty by construction (>= 4 eligible weeks each,
+        # every eligible week has >= GROWTH_MIN_RATED_PER_WEEK sessions).
+        return statistics.median([s.get("first_prompt_len") or
+                                  len(s.get("first_prompt") or "")
+                                  for s in ss])
+
+    def good_rate(ss):
+        return 100 * sum(is_good(s["outcome"]) for s in ss) / len(ss)
+
+    el, ll = med_len(early), med_len(late)
+    eg, lg = good_rate(early), good_rate(late)
+    metrics = {"weeks": len(eligible),
+               "early_median_len": round(el), "late_median_len": round(ll),
+               "early_good_rate": round(eg, 1), "late_good_rate": round(lg, 1)}
+
+    shortening = el > 0 and ll <= _BS_DRIFT_LEN_DROP * el
+    if not shortening:
+        return _bs_result("habit_drift", False, metrics=metrics,
+                          n=len(eligible), reason="no shortening trend")
+
+    improved = lg > eg + _BS_DRIFT_GOOD_TOL_PP
+    if improved:
+        return _bs_result("habit_drift", False, metrics=metrics,
+                          n=len(eligible), guarded=True,
+                          reason="outcomes improved while prompts shortened")
+
+    # shortening AND good rate flat-or-worse (within tolerance or down) = drift
+    return _bs_result("habit_drift", True, metrics=metrics, n=len(eligible))
+
+
+_BS_FAILED_BURN_MIN_SESSIONS = 5
+
+def _charged_tokens(sessions):
+    """All token categories _leak_cost_usd charges for — input, output,
+    cache writes, cache reads — so a cache-heavy session never shows a
+    large cost beside a small token count. Tokens are a factual count over
+    ALL the item's sessions; the USD beside them is a floor and may price
+    only a subset (sessions without a verified model rate contribute $0
+    to cost but still count their tokens)."""
+    return sum((s.get("total_tokens") or 0)
+               + (s.get("cache_create_tokens") or 0)
+               + (s.get("cache_read_tokens") or 0)
+               for s in sessions)
+
+
+def _leak_cost_usd(sessions):
+    """Lower-bound USD estimate for leak-ledger items (sunk_cost,
+    failed_session_burn). Priced per session, with the OPPOSITE policy to
+    compute_api_equivalent_cost: this function is a floor, that one is a
+    ceiling.
+
+    compute_api_equivalent_cost (the cost panel) deliberately over-reports:
+    an unknown/missing model prices at Opus (_FALLBACK_PRICING), and
+    cache_creation tokens price at the 2x-input cache_write rate (the 1h
+    ephemeral-tier upper bound) — appropriate for a panel whose job is "this
+    is at most roughly what these sessions would cost." The leak ledger's
+    job is the opposite: every dollar it shows must be a floor the reader
+    can trust is not inflated. So here:
+      (a) a session whose model_counts is missing, empty, or names any
+          model absent from PRICING contributes ZERO dollars — its tokens
+          may have been produced by a cheaper model the current table
+          doesn't list (e.g. a historical Claude 3 tier), so no rate the
+          table can offer is a verified floor for them. The tokens still
+          appear in the item's weekly_tokens (a factual count); only the
+          USD claim is withheld.
+      (b) cache_creation tokens price at the model's base INPUT rate, not
+          cache_write — a cache write costs AT LEAST the base input rate,
+          so pricing it there is still a valid lower bound without assuming
+          which TTL tier (5m/1h) was actually used;
+      (c) cache_read tokens price at the model's own cache_read rate, same
+          as the cost panel — cache reads are cheap and well-defined
+          regardless of tier, no lower-bound ambiguity to resolve.
+      (d) a mixed-model session prices ALL its tokens at the CHEAPEST rate
+          among the models it actually saw — model_counts holds message
+          counts, not per-model token totals, so any blended weighting can
+          overprice tokens that a cheaper model actually produced. The min
+          over that session's observed models is the attribution-free floor.
+    """
+    total = 0.0
+    for s in sessions:
+        models = {_normalize_model_id(m) for m in (s.get("model_counts") or {})}
+        if not models or any(m not in PRICING for m in models):
+            continue  # (a) no verified rate — withhold the USD claim
+        rates = [PRICING[m] for m in models]
+        in_rate = min(p["input"] for p in rates)
+        out_rate = min(p["output"] for p in rates)
+        cr_rate = min(p["cache_read"] for p in rates)
+        total += (
+            ((s.get("input_tokens", 0) or 0) / 1e6) * in_rate +
+            ((s.get("output_tokens", 0) or 0) / 1e6) * out_rate +
+            # (b) cache_creation at the base INPUT floor
+            ((s.get("cache_create_tokens", 0) or 0) / 1e6) * in_rate +
+            ((s.get("cache_read_tokens", 0) or 0) / 1e6) * cr_rate)
+    return round(total, 2)
+
+
+def compute_leaks(blind_spots, rated, window):
+    """Leak catalog v1 (spec §3 book 3). Lower-bound accounting only:
+    every dollar traces to tokens the evidence actually shows (audit
+    discipline rule 4). Items are independently gated; 'top 3' is all
+    passers ranked by weekly cost.
+
+    Invariant: every USD/token number in leaks is summed over the same
+    date window its per-week denominator describes. `rated` spans the
+    session-meta pool (longer history than the transcript-derived
+    `window`), so costs must be restricted to sessions whose start date
+    falls inside `window` before dividing by `weeks` — otherwise the
+    numerator sums a longer history than the denominator describes,
+    inflating the weekly figure.
+    """
+    weeks = round(max((window.get("days") or 0) / 7.0, 1.0), 1)
+    items = []
+
+    # ledger window bounds are calendar dates, not instants — parse them
+    # with date.fromisoformat() directly rather than _parse_dt(...).date().
+    # _parse_dt assumes UTC for naive input then converts to local time, so
+    # west of UTC "2026-07-11" would shift to 2026-07-10 local and silently
+    # exclude sessions that started on the inclusive end date.
+    def _safe_date(s):
+        try:
+            return date.fromisoformat(s) if s else None
+        except (TypeError, ValueError):
+            return None
+    win_start_d = _safe_date(window.get("start"))
+    win_end_d = _safe_date(window.get("end"))
+    # No valid transcript-derived window (missing/unparsable bounds, or
+    # reversed bounds) means there is no trustworthy denominator to divide
+    # by. Falling back to ALL of `rated` (session-meta pool, which spans
+    # much longer history than the transcript pool `window` describes)
+    # while `weeks` still floors to 1.0 would report months of failures as
+    # one week's burn. Suppression beats a fabricated denominator (spec
+    # §10) — return no weekly items rather than a misleading figure.
+    # days == 0 with equal, valid bounds is a LEGITIMATE same-day window
+    # (first day of use); the weeks floor of 1.0 handles it.
+    if win_start_d is None or win_end_d is None or win_start_d > win_end_d:
+        return {"window_weeks": weeks, "items": []}
+
+    in_window = []
+    for s in rated:
+        dt = _parse_dt(s.get("start"))
+        if dt is None:
+            continue
+        if win_start_d <= dt.date() <= win_end_d:
+            in_window.append(s)
+
+    bs1 = blind_spots.get("repeated_instructions") or {}
+    if bs1.get("gate_passed"):
+        pats = bs1["metrics"]["patterns"]
+        tokens_week = int(sum(p["est_wasted_tokens"] for p in pats) / weeks)
+        # USD comes from claude_wasted_usd — each Claude occurrence priced
+        # at its own row's verified input-rate floor (zero when the model
+        # is unlisted/unattributed), computed in bs_repeated_instructions.
+        # Cross-tool (Codex/Grok) tokens show up in weekly_tokens (the
+        # all-source display figure) but are never priced at a Claude rate,
+        # since they weren't billed there.
+        usd_week = sum(p.get("claude_wasted_usd", 0.0) for p in pats) / weeks
+        # Additive field: sorted union of sources across the qualifying
+        # patterns, so the renderer can tell whether any occurrences came
+        # from a tool that doesn't read CLAUDE.md (Fix 5) and pick the
+        # right fix text.
+        sources = sorted({src for p in pats for src in (p.get("sources") or [])})
+        items.append({"type": "repeated_instructions",
+                      "weekly_cost_usd": round(usd_week, 2),
+                      "weekly_tokens": tokens_week,
+                      "occurrences": sum(p["occurrences"] for p in pats),
+                      "evidence": pats[0]["evidence"],
+                      "sources": sources})
+
+    sunk_sids = set()
+    bs2 = blind_spots.get("sunk_cost") or {}
+    if bs2.get("gate_passed"):
+        pair_sids = [p["failed_sid"] for p in bs2["metrics"]["pairs"]]
+        sunk_sids = set(pair_sids)
+        # Costed list is windowed; occurrences reflects only the costed
+        # (in-window) failed sessions, not the full sunk_cost pair count.
+        failed = [s for s in in_window if s["sid"] in sunk_sids]
+        # The gate may have passed entirely on out-of-window pairs — only
+        # emit the card when at least one failed session actually falls
+        # inside the window, otherwise a $0.00 / 0 occurrences / no-evidence
+        # card would render for a finding with no in-window support.
+        if failed:
+            items.append({"type": "sunk_cost",
+                          "weekly_cost_usd": round(
+                              _leak_cost_usd(failed) / weeks, 2),
+                          "weekly_tokens": int(_charged_tokens(failed) / weeks),
+                          "occurrences": len(failed),
+                          "evidence": [s["sid"] for s in failed[:3]]})
+
+    burn = [s for s in in_window
+            if s["outcome"] == "not_achieved" and s["sid"] not in sunk_sids]
+    if len(burn) >= _BS_FAILED_BURN_MIN_SESSIONS:
+        items.append({"type": "failed_session_burn",
+                      "weekly_cost_usd": round(
+                          _leak_cost_usd(burn) / weeks, 2),
+                      "weekly_tokens": int(_charged_tokens(burn) / weeks),
+                      "occurrences": len(burn),
+                      "evidence": [s["sid"] for s in burn[:3]]})
+
+    items.sort(key=lambda i: -(i["weekly_cost_usd"] or 0))
+    return {"window_weeks": weeks, "items": items[:3]}
+
+
+def compute_blind_spots(sessions, rated, activity_rows, cross_rows, window_end,
+                        window_start=None, tz=None):
+    """Phase 2 blind-spot engine (spec §5). Additive analysis-data block;
+    every heuristic self-gates and the whole entry ships regardless so the
+    renderer (and later phases) can see WHY something was suppressed.
+
+    tz (optional): the CLI-resolved --tz, threaded to bs_repeated_instructions
+    so week-bucketed occurrences honor the requested timezone rather than
+    OS-local (bs_habit_drift gets this for free via rated sessions' own
+    precomputed s["week"], already tz-converted by build_sessions)."""
+    # Repeated instructions is the one heuristic whose occurrences can come
+    # from cross-tool history of unbounded length: without BOTH window
+    # bounds it would scan that history unwindowed, and the renderer (which
+    # trusts bs1.gate_passed as "in-window support exists") could show an
+    # unscoped finding even while compute_leaks suppresses its weekly items
+    # for the same invalid window. Suppression beats an unscoped finding
+    # (spec §10) — gate it off explicitly. window_start is None exactly
+    # when no activity row had a parsable start (the same condition that
+    # invalidates the ledger window), so no windowed occurrence is lost.
+    if window_start is None or window_end is None:
+        bs1 = _bs_result("repeated_instructions", False,
+                         reason="no valid ledger window to scope occurrences")
+    else:
+        bs1 = bs_repeated_instructions(
+            activity_rows, cross_rows,
+            window_start=window_start, window_end=window_end, tz=tz)
+    return {
+        "schema_version": 1,
+        "repeated_instructions": bs1,
+        "sunk_cost": bs_sunk_cost(rated),
+        "switch_tax": bs_switch_tax(rated, activity_rows, cross_rows),
+        "graveyard": bs_graveyard(activity_rows, window_end),
+        "habit_drift": bs_habit_drift(rated),
+        "ask_vs_ship": bs_ask_vs_ship(rated),
+        "interrupt_win_rate": bs_interrupt_win_rate(rated),
     }
 
 
@@ -2198,7 +3136,45 @@ def main():
     # consumers that don't check this key unaffected.
     cross_llm["unattributed_parse_errors"] = cross_errors.get("(unknown)", 0)
     final["cross_llm"] = cross_llm
-    final["ledger"] = compute_ledger(activity_rows, cross_llm)
+
+    # window_end anchors both blind_spots (graveyard staleness) and
+    # ledger.window.end to the newest activity seen — that must be the max
+    # END across all activity windows (not max START): a resumed multi-day
+    # session's newest activity can land days after its start, and
+    # anchoring on start alone would (a) understate days_untouched for
+    # every OTHER project in the graveyard check and (b) leave
+    # ledger.window.end stale relative to the numerators compute_leaks
+    # divides by that same window. blind_spots, leaks, and ledger.window
+    # share one end-aware window — compute it once here. window_start
+    # stays min start (unaffected).
+    all_starts, all_ends = [], []
+    for r in activity_rows.values():
+        d = _parse_dt(r.get("start_time"))
+        if d:
+            all_starts.append(d)
+        # pad=False: window_end must be a factual activity instant — the
+        # 1-minute overlap padding could push a just-before-midnight end
+        # onto a date with no real activity (codex round 20).
+        all_ends.extend(e for _, e in _row_windows(r, pad=False))
+    if all_ends:
+        window_end = max(all_ends)
+    elif all_starts:
+        window_end = max(all_starts)
+    else:
+        window_end = datetime.now().astimezone()
+    window_start = min(all_starts) if all_starts else None
+
+    final["ledger"] = compute_ledger(activity_rows, cross_llm, window_end=window_end)
+
+    # blind_spots: additive top-level block (Phase 2, spec §5/§7). Threads
+    # the same resolved `tz` used for build_sessions above, so
+    # repeated-instructions week bucketing honors --tz rather than OS-local
+    # (Fix 3).
+    final["blind_spots"] = compute_blind_spots(
+        sessions, rated, list(activity_rows.values()), cross_rows, window_end,
+        window_start=window_start, tz=tz)
+    final["ledger"]["leaks"] = compute_leaks(
+        final["blind_spots"], rated, final["ledger"]["window"])
 
     out.write_text(json.dumps(final, ensure_ascii=False, indent=2))
     print(f"wrote {out} ({out.stat().st_size} bytes)", file=sys.stderr)

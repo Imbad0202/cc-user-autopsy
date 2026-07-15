@@ -439,6 +439,92 @@ STRINGS = {
         "ledger_unknown_parse_errors_template": (
             "{n} lines from unrecognized sources skipped"
         ),
+        # --- Phase 2: leak ledger + blind spots ---
+        "ledger_leaks_title": "Leak ledger",
+        "ledger_leaks_kicker": "Where tokens and hours leak",
+        "ledger_blindspot_label": "Blind spot",
+        "blindspot_repeated_title": "Repeated-instruction tax",
+        "blindspot_repeated_template": (
+            "The same instruction was retyped {n} times across {weeks} "
+            "weeks ({sources})"
+        ),
+        "blindspot_sunk_title": "Sunk-cost sessions",
+        "blindspot_sunk_template": (
+            "{n} failed sessions were later redone from scratch in under "
+            "half the time"
+        ),
+        "blindspot_switch_title": "Switch tax",
+        "blindspot_switch_template": (
+            "Good-outcome rate is {multi}% in multi-tool windows vs "
+            "{single}% single-tool"
+        ),
+        "blindspot_graveyard_title": "The graveyard",
+        "blindspot_graveyard_template": (
+            "{n} projects received substantive writes, no commit, then "
+            "went quiet"
+        ),
+        "blindspot_askship_title": "Ask vs ship mismatch",
+        "blindspot_askship_template": (
+            "{cat} is {ask}% of asks but {ship}% of shipped sessions"
+        ),
+        "blindspot_interrupt_title": "Interrupt win rate",
+        "blindspot_interrupt_template": (
+            "Interrupted sessions succeed {i}% of the time vs {b}% baseline"
+        ),
+        # --- Goal-category display labels (open vocabulary; unknown keys
+        # fall back to de-underscored text in report_render) ---
+        "goal_cat_bug_fix": "bug fixes",
+        "goal_cat_debugging": "debugging",
+        "goal_cat_feature_implementation": "feature implementation",
+        "goal_cat_feature_addition": "feature additions",
+        "goal_cat_deployment": "deployment",
+        "goal_cat_documentation_update": "documentation updates",
+        "goal_cat_documentation": "documentation",
+        "goal_cat_content_writing": "content writing",
+        "goal_cat_writing_refinement": "writing refinement",
+        "goal_cat_writing": "writing",
+        "goal_cat_copy_editing": "copy editing",
+        "goal_cat_memory_update": "memory updates",
+        "goal_cat_git_operations": "git operations",
+        "goal_cat_code_review": "code review",
+        "goal_cat_ui_refinement": "UI refinement",
+        "goal_cat_information_query": "information queries",
+        "goal_cat_exploration": "exploration",
+        "goal_cat_quick_question": "quick questions",
+        "goal_cat_refactoring": "refactoring",
+        "ledger_leak_weekly_cost_template": "≈ ${cost}/week",
+        "ledger_leak_tokens_template": "{tokens} tokens/week (lower bound)",
+        "ledger_leak_occurrences_template": "{n} occurrences in window",
+        "ledger_leak_fix_label": "Fix",
+        "leak_type_repeated_instructions": "Repeated instructions",
+        "leak_type_sunk_cost": "Sunk-cost sessions",
+        "leak_type_failed_session_burn": "Failed-session burn",
+        "leak_fix_repeated_instructions": (
+            "Move this instruction into CLAUDE.md or memory so every "
+            "session inherits it."
+        ),
+        "leak_fix_repeated_instructions_cross": (
+            "Put this instruction in each tool's shared config (CLAUDE.md "
+            "for Claude Code, AGENTS.md or the equivalent for other tools) "
+            "so every session inherits it."
+        ),
+        "leak_fix_sunk_cost": (
+            "Set a bail-out rule: when a session stalls, restart with a "
+            "tighter brief instead of pushing on."
+        ),
+        "leak_fix_failed_session_burn": (
+            "Write the acceptance check into the first prompt so failure "
+            "surfaces early, not after the burn."
+        ),
+        "ledger_graveyard_exhibit_title": "Graveyard: written, never shipped",
+        "ledger_graveyard_untouched_template": "untouched for {days} days",
+        "ledger_graveyard_writes_template": (
+            "{writes} file edits in final session"
+        ),
+        "ledger_leaks_exhibit_title": "Top leaks by estimated weekly cost",
+        "ledger_secondary_findings": "Secondary findings",
+        "ledger_source_graveyard": "blind-spot engine, transcript activity pool",
+        "ledger_source_leaks": "blind-spot engine, scoring pool + cross-LLM prompt history",
     },
     "zh_TW": {
         # --- Document chrome ---
@@ -827,6 +913,84 @@ STRINGS = {
         "ledger_output_sessions_with_commits": "有 commit 產出的 session 數",
         "ledger_parse_errors_template": "略過 {n} 行無法解析",
         "ledger_unknown_parse_errors_template": "另有 {n} 行來源無法辨識, 已略過",
+        # --- Phase 2: leak ledger + blind spots ---
+        "ledger_leaks_title": "漏水帳",
+        "ledger_leaks_kicker": "token 與時間漏在哪",
+        "ledger_blindspot_label": "盲點",
+        "blindspot_repeated_title": "重複指令稅",
+        "blindspot_repeated_template": (
+            "同一條指令在 {weeks} 週內重打了 {n} 次（{sources}）"
+        ),
+        "blindspot_sunk_title": "沉沒成本 session",
+        "blindspot_sunk_template": (
+            "{n} 個失敗 session 後來重開新局，用不到一半時間就完成"
+        ),
+        "blindspot_switch_title": "切換稅",
+        "blindspot_switch_template": (
+            "多工具並行時的良好結果率 {multi}%，單工具時 {single}%"
+        ),
+        "blindspot_graveyard_title": "墳場",
+        "blindspot_graveyard_template": (
+            "{n} 個專案寫了大量內容、沒有 commit，之後就沒再動過"
+        ),
+        "blindspot_askship_title": "想做與做成的落差",
+        "blindspot_askship_template": (
+            "{cat} 佔提問 {ask}%，但只佔有產出 session 的 {ship}%"
+        ),
+        "blindspot_interrupt_title": "中斷勝率",
+        "blindspot_interrupt_template": (
+            "被中斷的 session 成功率 {i}%，未中斷基準 {b}%"
+        ),
+        # --- Goal-category 顯示名（開放詞彙；未知 key 由 report_render
+        # fallback 成去底線文字） ---
+        "goal_cat_bug_fix": "修 bug",
+        "goal_cat_debugging": "除錯",
+        "goal_cat_feature_implementation": "功能實作",
+        "goal_cat_feature_addition": "新增功能",
+        "goal_cat_deployment": "部署",
+        "goal_cat_documentation_update": "文件更新",
+        "goal_cat_documentation": "文件",
+        "goal_cat_content_writing": "內容撰寫",
+        "goal_cat_writing_refinement": "文字修訂",
+        "goal_cat_writing": "寫作",
+        "goal_cat_copy_editing": "文字編修",
+        "goal_cat_memory_update": "記憶維護",
+        "goal_cat_git_operations": "git 操作",
+        "goal_cat_code_review": "code review",
+        "goal_cat_ui_refinement": "UI 調整",
+        "goal_cat_information_query": "資訊查詢",
+        "goal_cat_exploration": "探索",
+        "goal_cat_quick_question": "快速提問",
+        "goal_cat_refactoring": "重構",
+        "ledger_leak_weekly_cost_template": "每週約 ${cost}",
+        "ledger_leak_tokens_template": "每週 {tokens} tokens（下限值）",
+        "ledger_leak_occurrences_template": "期間內 {n} 次",
+        "ledger_leak_fix_label": "修法",
+        "leak_type_repeated_instructions": "重複指令",
+        "leak_type_sunk_cost": "沉沒成本 session",
+        "leak_type_failed_session_burn": "失敗 session 燒掉的量",
+        "leak_fix_repeated_instructions": (
+            "把這條指令搬進 CLAUDE.md 或 memory，讓每個 session 自動繼承。"
+        ),
+        "leak_fix_repeated_instructions_cross": (
+            "把這條指令放進各工具的共用設定，Claude Code 用 CLAUDE.md，"
+            "其他工具用 AGENTS.md 或對應檔案，讓每個 session 自動繼承。"
+        ),
+        "leak_fix_sunk_cost": (
+            "訂一條停損規則：session 卡住就開新的，附上更明確的任務描述，"
+            "不要硬撐。"
+        ),
+        "leak_fix_failed_session_burn": (
+            "把驗收條件寫進第一句 prompt，讓失敗早點浮出來，"
+            "而不是燒完才發現。"
+        ),
+        "ledger_graveyard_exhibit_title": "墳場：寫了，沒出貨",
+        "ledger_graveyard_untouched_template": "已 {days} 天沒動",
+        "ledger_graveyard_writes_template": "最後一個 session 改了 {writes} 次檔案",
+        "ledger_leaks_exhibit_title": "每週估計成本最高的漏水",
+        "ledger_secondary_findings": "次要發現",
+        "ledger_source_graveyard": "盲點引擎，transcript 活動池",
+        "ledger_source_leaks": "盲點引擎，計分池加跨工具 prompt 紀錄",
     },
 }
 

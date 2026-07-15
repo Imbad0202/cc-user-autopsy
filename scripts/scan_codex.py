@@ -12,10 +12,12 @@ from pathlib import Path
 
 try:
     from cross_llm_common import (
-        parse_jsonl_object, parse_ts, segments_and_duration, to_local_iso, write_rows)
+        parse_jsonl_object, parse_ts, prompt_identity, segments_and_duration,
+        to_local_iso, write_rows)
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_codex
     from scripts.cross_llm_common import (
-        parse_jsonl_object, parse_ts, segments_and_duration, to_local_iso, write_rows)
+        parse_jsonl_object, parse_ts, prompt_identity, segments_and_duration,
+        to_local_iso, write_rows)
 
 DEFAULT_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
@@ -28,6 +30,7 @@ def scan_one(path: Path):
     asst_msgs = 0
     tool_counts = {}
     first_prompt = None
+    first_prompt_hash = None
     usage = None
     timestamps = []
     parse_errors = 0
@@ -63,7 +66,12 @@ def scan_one(path: Path):
                     if first_prompt is None:
                         text = payload.get("message")
                         if isinstance(text, str) and text.strip():
-                            first_prompt = text.strip()[:500]
+                            stripped = text.strip()
+                            # Hash the FULL prompt before truncating for
+                            # display (Fix 3) — identity must survive the
+                            # 500-char display cap below.
+                            first_prompt_hash = prompt_identity(stripped)
+                            first_prompt = stripped[:500]
                 elif ptype == "agent_message":
                     asst_msgs += 1
                     # Attribute to whichever model is currently active (the
@@ -100,6 +108,7 @@ def scan_one(path: Path):
         "reasoning_output_tokens": usage.get("reasoning_output_tokens") if usage else None,
         "model_counts": model_counts or None,
         "first_prompt": first_prompt,
+        "first_prompt_hash": first_prompt_hash,
         "source": "codex",
         "coverage": "full",
     }
