@@ -583,6 +583,24 @@ class SwitchTaxOpenerTests(unittest.TestCase):
         self.assertIn("55.0", html)
         self.assertIn("78.0", html)
 
+    def test_negative_highlight_wraps_exact_multi_value_in_both_locales(self):
+        # Codex round 19: the highlight markup is injected at the
+        # template's {multi} placeholder rather than substring-searched in
+        # the localized sentence, so it survives digit-suffix collisions
+        # (5.0 inside 15.0) and localized percent-sign variants in either
+        # locale. Exactly one red token, and it is the multi rate.
+        from itertools import count
+        bs = dict(BS_ALL_PASSED, switch_tax=dict(
+            BS_ALL_PASSED["switch_tax"],
+            metrics={"multi": {"n": 25, "good_rate": 5.0},
+                     "single": {"n": 35, "good_rate": 15.0}}))
+        for locale in ("en", "zh_TW"):
+            html = _build_team_ledger(CROSS, NARR, locale, count(2), bs)
+            self.assertIn('<span class="c-neg-num">5.0%</span>', html,
+                          f"locale={locale}")
+            self.assertEqual(html.count("c-neg-num"), 1, f"locale={locale}")
+            self.assertIn("15.0%", html, f"locale={locale}")
+
     def test_gate_failed_no_callout(self):
         from itertools import count
         html = _build_team_ledger(CROSS, NARR, "en", count(2), BS_ALL_FAILED)

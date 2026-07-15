@@ -566,15 +566,24 @@ def _build_team_ledger(cross_llm, narration, locale="en", exhibit_no=None,
             multi=multi_rate, single=single_rate)
         if multi_rate is not None and single_rate is not None and multi_rate < single_rate:
             # Wrap only the worse (multi-tool) rate — negative-red is for
-            # bad numbers, not the whole sentence. .replace(..., 1) takes
-            # the FIRST match, which relies on both locales' templates
-            # rendering {multi} before {single} (true today in both en and
-            # zh_TW `blindspot_switch_template`); if a future template
-            # reorders them, or if single_rate happens to equal multi_rate
-            # numerically, this would paint the wrong number red.
-            needle = f"{multi_rate}%"
-            sentence_html = esc(sentence).replace(
-                esc(needle), f'<span class="c-neg-num">{esc(needle)}</span>', 1)
+            # bad numbers, not the whole sentence. The markup is built by
+            # splitting the TEMPLATE on its {multi} placeholder and
+            # injecting the highlighted value directly — not by substring-
+            # searching the formatted sentence, which mis-highlighted
+            # whenever a template reordered the numbers, used a localized
+            # percent sign, or one rate was a digit-suffix of the other.
+            tmpl = t(locale, "blindspot_switch_template")
+            pre, _, post = tmpl.partition("{multi}")
+            val = str(multi_rate)
+            # Absorb a percent sign (ASCII or full-width) that immediately
+            # follows the placeholder, so "35%" reads as one red token.
+            if post[:1] in ("%", "％"):
+                val += post[0]
+                post = post[1:]
+            sentence_html = (
+                esc(pre.format(single=single_rate))
+                + f'<span class="c-neg-num">{esc(val)}</span>'
+                + esc(post.format(single=single_rate)))
             cards += _blindspot_callout(locale, "blindspot_switch_title",
                                         sentence, sentence_html=sentence_html)
         else:
