@@ -71,8 +71,9 @@ def append_history_snapshot(history_path, analysis, audience):
         try:
             is_default = (Path(history_path).expanduser().resolve()
                           == DEFAULT_HISTORY_FILE.resolve())
-        except (OSError, RuntimeError) as exc:
-            # Unresolvable path (e.g. symlink loop). Can't prove it isn't
+        except Exception as exc:
+            # Unresolvable path (symlink loop → OSError/RuntimeError,
+            # embedded null byte → ValueError, ...). Can't prove it isn't
             # the default file, so fail closed: skip, never fail the build.
             print("warning: skipped history snapshot append under pytest "
                   f"(could not resolve path: {exc})", file=sys.stderr)

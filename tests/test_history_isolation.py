@@ -132,6 +132,13 @@ class HistoryBackstopRuntimeTests(unittest.TestCase):
             err = self._append(str(target))  # must not raise
             self.assertIn("skipped history snapshot", err)
 
+    def test_null_byte_path_never_raises(self):
+        # Path("...\0...").expanduser()/resolve() raises ValueError
+        # ("embedded null byte") — a different exception family than the
+        # symlink loop, so the guard must catch broadly, not just OSError.
+        err = self._append("bad\0path/history.jsonl")  # must not raise
+        self.assertIn("skipped history snapshot", err)
+
 
 if __name__ == "__main__":
     unittest.main()
