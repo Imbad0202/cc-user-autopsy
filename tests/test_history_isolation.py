@@ -8,9 +8,10 @@ therefore pollutes the user's actual snapshot history with fixture
 junk — silently, across every pytest run.
 
 This is a source-level lint (same style as the praise-word lint and
-the locales key-parity tests): every subprocess invocation of
-build_html.py in tests/ must pass --history-file at least as many
-times as it references the script.
+the locales key-parity tests): between one build_html.py invocation and
+the next (comment lines excluded), a --history-file flag must appear,
+so every call site is individually isolated — one flagged invocation
+cannot compensate for an unflagged one elsewhere in the file.
 """
 import unittest
 from pathlib import Path
@@ -23,21 +24,33 @@ TESTS_DIR = Path(__file__).resolve().parent
 _INVOCATION = '/ "build_html.py"'
 
 
+def _strip_comment_lines(src):
+    return "\n".join(
+        line for line in src.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+
+
 class HistoryIsolationLintTests(unittest.TestCase):
     def test_every_build_html_subprocess_passes_history_file(self):
         offenders = []
         for path in sorted(TESTS_DIR.glob("*.py")):
             if path.name == Path(__file__).name:
                 continue
-            src = path.read_text()
-            invocations = src.count(_INVOCATION)
-            if not invocations:
+            src = _strip_comment_lines(path.read_text())
+            if _INVOCATION not in src:
                 continue
-            isolated = src.count("--history-file")
-            if isolated < invocations:
+            # Segment i spans from invocation i to invocation i+1 (or EOF).
+            # Each segment must carry its own --history-file, so the check
+            # is per call site, not a file-wide count. A helper that takes
+            # the flag via *extra (smoke_test.py) still passes: its single
+            # invocation's segment runs to EOF and contains the call sites.
+            segments = src.split(_INVOCATION)[1:]
+            missing = sum(1 for seg in segments if "--history-file" not in seg)
+            if missing:
                 offenders.append(
-                    f"{path.name}: {invocations} build_html.py invocation(s), "
-                    f"only {isolated} --history-file flag(s)"
+                    f"{path.name}: {missing} of {len(segments)} build_html.py "
+                    "invocation(s) not followed by --history-file"
                 )
         self.assertEqual(
             offenders, [],

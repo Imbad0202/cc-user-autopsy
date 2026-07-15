@@ -68,7 +68,8 @@ def append_history_snapshot(history_path, analysis, audience):
     # tests/test_history_isolation.py lints the call sites, this guards
     # everything the lint can't see.
     if ("PYTEST_CURRENT_TEST" in os.environ
-            and Path(history_path).expanduser() == DEFAULT_HISTORY_FILE):
+            and Path(history_path).expanduser().resolve()
+            == DEFAULT_HISTORY_FILE.resolve()):
         print("warning: skipped history snapshot append to the default "
               "path under pytest", file=sys.stderr)
         return
