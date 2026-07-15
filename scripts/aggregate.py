@@ -2683,18 +2683,19 @@ def bs_habit_drift(rated):
 
 _BS_FAILED_BURN_MIN_SESSIONS = 5
 
-# Cheapest known input $/1M across PRICING — the unambiguous lower-bound
-# input rate shared by _leak_cost_usd (unknown-model fallback) and the
-# repeated-instructions leak item (no per-occurrence model attribution to
-# price against, see below).
+# Cheapest known input $/1M across PRICING — the lower-bound input rate
+# used by the repeated-instructions leak item (no per-occurrence model
+# attribution to price against, see below).
 _CHEAPEST_INPUT_RATE = min(p["input"] for p in PRICING.values())
 
 
 def _charged_tokens(sessions):
     """All token categories _leak_cost_usd charges for — input, output,
-    cache writes, cache reads. The displayed tokens/week must describe the
-    same quantity the displayed cost was computed from (a cache-heavy
-    session must not show a large cost beside a small token count)."""
+    cache writes, cache reads — so a cache-heavy session never shows a
+    large cost beside a small token count. Tokens are a factual count over
+    ALL the item's sessions; the USD beside them is a floor and may price
+    only a subset (sessions without a verified model rate contribute $0
+    to cost but still count their tokens)."""
     return sum((s.get("total_tokens") or 0)
                + (s.get("cache_create_tokens") or 0)
                + (s.get("cache_read_tokens") or 0)
@@ -2703,9 +2704,9 @@ def _charged_tokens(sessions):
 
 def _leak_cost_usd(sessions):
     """Lower-bound USD estimate for leak-ledger items (sunk_cost,
-    failed_session_burn). Same blended-by-assistant-message-share-across-
-    models shape as compute_api_equivalent_cost, but with the OPPOSITE
-    pricing policy: this function is a floor, that one is a ceiling.
+    failed_session_burn). Priced per session, with the OPPOSITE policy to
+    compute_api_equivalent_cost: this function is a floor, that one is a
+    ceiling.
 
     compute_api_equivalent_cost (the cost panel) deliberately over-reports:
     an unknown/missing model prices at Opus (_FALLBACK_PRICING), and
@@ -2714,8 +2715,13 @@ def _leak_cost_usd(sessions):
     is at most roughly what these sessions would cost." The leak ledger's
     job is the opposite: every dollar it shows must be a floor the reader
     can trust is not inflated. So here:
-      (a) unknown/missing models price at the CHEAPEST known rate per token
-          type (min over PRICING), not Opus;
+      (a) a session whose model_counts is missing, empty, or names any
+          model absent from PRICING contributes ZERO dollars — its tokens
+          may have been produced by a cheaper model the current table
+          doesn't list (e.g. a historical Claude 3 tier), so no rate the
+          table can offer is a verified floor for them. The tokens still
+          appear in the item's weekly_tokens (a factual count); only the
+          USD claim is withheld.
       (b) cache_creation tokens price at the model's base INPUT rate, not
           cache_write — a cache write costs AT LEAST the base input rate,
           so pricing it there is still a valid lower bound without assuming
@@ -2723,52 +2729,28 @@ def _leak_cost_usd(sessions):
       (c) cache_read tokens price at the model's own cache_read rate, same
           as the cost panel — cache reads are cheap and well-defined
           regardless of tier, no lower-bound ambiguity to resolve.
-      (d) mixed-model sessions price ALL pooled tokens at the CHEAPEST rate
-          among the models actually seen — model_counts holds message
+      (d) a mixed-model session prices ALL its tokens at the CHEAPEST rate
+          among the models it actually saw — model_counts holds message
           counts, not per-model token totals, so any blended weighting can
           overprice tokens that a cheaper model actually produced. The min
-          over observed models is the only attribution-free floor.
+          over that session's observed models is the attribution-free floor.
     """
-    if not sessions:
-        return 0.0
-
-    models = {_normalize_model_id(m)
-              for s in sessions
-              for m in (s.get("model_counts") or {})}
-    known = [PRICING[m] for m in models if m in PRICING]
-    # A session with no model_counts contributes tokens with NO attribution
-    # at all — its tokens could have come from any model, so the floor must
-    # widen to the overall cheapest even when other sessions name models.
-    any_unattributed = any(not s.get("model_counts") for s in sessions)
-
-    def floor_rate(token_type, overall_cheapest):
-        # Cheapest rate among the models observed in these sessions;
-        # unknown or missing attribution widens the floor to the overall
-        # cheapest.
-        if not known or len(known) < len(models) or any_unattributed:
-            return overall_cheapest
-        return min(p[token_type] for p in known)
-
-    in_rate = floor_rate("input", _CHEAPEST_INPUT_RATE)
-    out_rate = floor_rate("output", min(p["output"] for p in PRICING.values()))
-    # cache_creation prices at the base INPUT floor (a cache write costs at
-    # least the base input rate, regardless of TTL tier).
-    cw_rate = in_rate
-    cr_rate = floor_rate("cache_read",
-                         min(p["cache_read"] for p in PRICING.values()))
-
-    total_in = sum(s.get("input_tokens", 0) or 0 for s in sessions)
-    total_out = sum(s.get("output_tokens", 0) or 0 for s in sessions)
-    total_cw = sum(s.get("cache_create_tokens", 0) or 0 for s in sessions)
-    total_cr = sum(s.get("cache_read_tokens", 0) or 0 for s in sessions)
-
-    return round(
-        (total_in / 1e6) * in_rate +
-        (total_out / 1e6) * out_rate +
-        (total_cw / 1e6) * cw_rate +
-        (total_cr / 1e6) * cr_rate,
-        2,
-    )
+    total = 0.0
+    for s in sessions:
+        models = {_normalize_model_id(m) for m in (s.get("model_counts") or {})}
+        if not models or any(m not in PRICING for m in models):
+            continue  # (a) no verified rate — withhold the USD claim
+        rates = [PRICING[m] for m in models]
+        in_rate = min(p["input"] for p in rates)
+        out_rate = min(p["output"] for p in rates)
+        cr_rate = min(p["cache_read"] for p in rates)
+        total += (
+            ((s.get("input_tokens", 0) or 0) / 1e6) * in_rate +
+            ((s.get("output_tokens", 0) or 0) / 1e6) * out_rate +
+            # (b) cache_creation at the base INPUT floor
+            ((s.get("cache_create_tokens", 0) or 0) / 1e6) * in_rate +
+            ((s.get("cache_read_tokens", 0) or 0) / 1e6) * cr_rate)
+    return round(total, 2)
 
 
 def compute_leaks(blind_spots, rated, window):

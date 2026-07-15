@@ -242,12 +242,14 @@ class RepeatedInstructionsCheapestRateTests(unittest.TestCase):
 
 class LeakCostUsdTests(unittest.TestCase):
     # _leak_cost_usd is the lower-bound pricing helper used by sunk_cost /
-    # failed_session_burn leak items: unknown models price at the CHEAPEST
-    # known rates (not the Opus fallback), cache_creation tokens price at
-    # base input rate (not the 2x cache_write upper bound), and mixed-model
-    # sessions price ALL pooled tokens at the cheapest observed model's
-    # rate (message counts carry no per-model token attribution, so any
-    # blended weighting could overprice tokens a cheaper model produced).
+    # failed_session_burn leak items, priced per session: a session with a
+    # missing/unlisted model contributes ZERO dollars (no rate in the
+    # current table is a verified floor for tokens a cheaper historical
+    # model may have produced), cache_creation tokens price at base input
+    # rate (not the 2x cache_write upper bound), and a mixed-model session
+    # prices ALL its tokens at the cheapest observed model's rate (message
+    # counts carry no per-model token attribution, so any blended weighting
+    # could overprice tokens a cheaper model produced).
     def test_mixed_model_session_prices_at_cheapest_observed_model(self):
         # 90% Opus messages / 10% Haiku messages, but token attribution is
         # unknown — the floor must be the Haiku input rate, NOT a
@@ -259,32 +261,47 @@ class LeakCostUsdTests(unittest.TestCase):
         haiku_in = PRICING["claude-haiku-4-5"]["input"]
         self.assertEqual(_leak_cost_usd(sessions), round(haiku_in, 2))
 
-    def test_unattributed_session_mixed_with_known_widens_to_overall_floor(self):
-        # A zero-token Opus row plus a 1M-input-token row with NO
-        # model_counts: the unattributed tokens could be any model's, so
-        # the floor is the overall cheapest input rate, not Opus's.
+    def test_unattributed_session_contributes_zero_known_session_still_priced(self):
+        # A 1M-input-token Opus row plus a 1M-input-token row with NO
+        # model_counts: the unattributed tokens could have come from a
+        # model cheaper than anything in the current table, so they
+        # contribute $0 — while the Opus session still prices at its own
+        # rate (per-session pricing, not pool-wide widening).
         sessions = [{"model_counts": {"claude-opus-4-6": 5},
-                     "input_tokens": 0, "output_tokens": 0,
+                     "input_tokens": 1_000_000, "output_tokens": 0,
                      "cache_create_tokens": 0, "cache_read_tokens": 0},
                     {"model_counts": {},
                      "input_tokens": 1_000_000, "output_tokens": 0,
                      "cache_create_tokens": 0, "cache_read_tokens": 0}]
-        cheapest_in = min(p["input"] for p in PRICING.values())
-        self.assertEqual(_leak_cost_usd(sessions), round(cheapest_in, 2))
+        opus_in = PRICING["claude-opus-4-6"]["input"]
+        self.assertEqual(_leak_cost_usd(sessions), round(opus_in, 2))
 
-    def test_unknown_model_prices_at_cheapest_rates_not_opus(self):
-        sessions = [{"model_counts": {"unknown-model-x": 1},
-                     "input_tokens": 100_000, "output_tokens": 10_000,
+    def test_unlisted_model_contributes_zero_not_cheapest_rate(self):
+        # Codex round 17: substituting the cheapest CURRENT-table rate for
+        # an unlisted model is not a floor — e.g. claude-3-haiku-20240307
+        # stays unlisted after normalization and was cheaper than anything
+        # in the table. Unverifiable tokens must contribute zero.
+        for model in ("unknown-model-x", "claude-3-haiku-20240307"):
+            sessions = [{"model_counts": {model: 1},
+                         "input_tokens": 100_000, "output_tokens": 10_000,
+                         "cache_create_tokens": 0, "cache_read_tokens": 0}]
+            leak_cost = _leak_cost_usd(sessions)
+            self.assertEqual(leak_cost, 0.0)
+            # compute_api_equivalent_cost falls back to Opus pricing for
+            # unknown models — the ceiling stays strictly above the floor.
+            self.assertLess(leak_cost, compute_api_equivalent_cost(sessions))
+
+    def test_unlisted_model_session_does_not_taint_known_sessions(self):
+        # Per-session pricing: one unpriceable session must not zero out or
+        # widen the floor of a cleanly-attributed sibling session.
+        sessions = [{"model_counts": {"claude-sonnet-4-6": 3},
+                     "input_tokens": 1_000_000, "output_tokens": 0,
+                     "cache_create_tokens": 0, "cache_read_tokens": 0},
+                    {"model_counts": {"claude-3-haiku-20240307": 8},
+                     "input_tokens": 5_000_000, "output_tokens": 0,
                      "cache_create_tokens": 0, "cache_read_tokens": 0}]
-        leak_cost = _leak_cost_usd(sessions)
-        api_equiv_cost = compute_api_equivalent_cost(sessions)
-        # compute_api_equivalent_cost falls back to Opus pricing for unknown
-        # models — strictly more expensive than the cheapest-rate floor.
-        self.assertLess(leak_cost, api_equiv_cost)
-        cheapest_in = min(p["input"] for p in PRICING.values())
-        cheapest_out = min(p["output"] for p in PRICING.values())
-        expected = round(100_000 / 1e6 * cheapest_in + 10_000 / 1e6 * cheapest_out, 2)
-        self.assertEqual(leak_cost, expected)
+        sonnet_in = PRICING["claude-sonnet-4-6"]["input"]
+        self.assertEqual(_leak_cost_usd(sessions), round(sonnet_in, 2))
 
     def test_known_model_cache_write_priced_at_base_input_rate(self):
         # A known model (opus): cache_creation tokens must price at the
