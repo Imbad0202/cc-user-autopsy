@@ -126,6 +126,7 @@ class HRLayoutTests(unittest.TestCase):
                 "--samples", str(tmp / "s.json"),
                 "--profile", str(tmp / "p.json"),
                 "--audience", "hr",
+                "--history-file", str(tmp / "history.jsonl"),
                 "--output", str(out),
             ], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -197,6 +198,7 @@ class HRLayoutTests(unittest.TestCase):
                 "--input", str(tmp / "a.json"),
                 "--samples", str(tmp / "s.json"),
                 "--audience", "self",
+                "--history-file", str(tmp / "history.jsonl"),
                 "--output", str(out),
             ], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -258,6 +260,7 @@ class ChartLayoutInjectionTests(unittest.TestCase):
                 "--input", str(tmp / "a.json"),
                 "--samples", str(tmp / "s.json"),
                 "--audience", "self",
+                "--history-file", str(tmp / "history.jsonl"),
                 "--output", str(out),
             ], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -376,6 +379,7 @@ def _run_build(audience="self", locale=None, analysis=None):
             "--input", str(tmp / "a.json"),
             "--samples", str(tmp / "s.json"),
             "--audience", audience,
+            "--history-file", str(tmp / "history.jsonl"),
             "--output", str(out),
         ]
         if locale is not None:
@@ -463,6 +467,7 @@ class LocaleTests(unittest.TestCase):
                 "--samples", str(tmp / "s.json"),
                 "--audience", "self",
                 "--locale", "ja",
+                "--history-file", str(tmp / "history.jsonl"),
                 "--output", str(tmp / "x.html"),
             ], capture_output=True, text=True)
             self.assertNotEqual(r.returncode, 0,
@@ -547,6 +552,7 @@ class PatternRenderTests(unittest.TestCase):
                 "--input", str(tmp / "a.json"),
                 "--samples", str(tmp / "s.json"),
                 "--audience", "self",
+                "--history-file", str(tmp / "history.jsonl"),
                 "--output", str(out),
             ], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -598,6 +604,7 @@ class PatternRenderTests(unittest.TestCase):
                 "--input", str(tmp / "a.json"),
                 "--samples", str(tmp / "s.json"),
                 "--audience", "self",
+                "--history-file", str(tmp / "history.jsonl"),
                 "--output", str(out),
             ], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
