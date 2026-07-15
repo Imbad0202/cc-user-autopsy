@@ -2111,6 +2111,7 @@ _BADGE_SHIPPING_COMMITS_PER_WEEK = 5.0
 _BADGE_SHIPPING_MIN_SESSIONS_WITH_COMMITS = 10
 _BADGE_ORCH_MIN_WINDOW_DAYS = 14
 _BADGE_ORCH_MIN_MULTI_HOURS = 10
+_BADGE_ORCH_MIN_FULL_TIER = 2
 
 
 def _badge(id_, earned, n, metrics, thresholds, reason=None):
@@ -2245,13 +2246,13 @@ def compute_badges(scores, ledger, cross_llm, sessions, rated):
     cwin = (cross_llm or {}).get("common_window")
     multi_hours = (((cross_llm or {}).get("parallel") or {})
                    .get("hours_multi_source") or 0)
-    thr = {"min_full_tier_sources": 2,
+    thr = {"min_full_tier_sources": _BADGE_ORCH_MIN_FULL_TIER,
            "min_window_days": _BADGE_ORCH_MIN_WINDOW_DAYS,
            "min_multi_hours": _BADGE_ORCH_MIN_MULTI_HOURS}
     met = {"full_tier_sources": sorted(full_tier),
            "hours_multi_source": multi_hours,
            "common_window_days": (cwin or {}).get("days")}
-    if len(full_tier) < 2:
+    if len(full_tier) < _BADGE_ORCH_MIN_FULL_TIER:
         items.append(_badge("cross_tool_orchestration", False, multi_hours,
                             met, thr, reason="fewer than 2 full-tier sources"))
     elif not cwin or cwin.get("degraded") or (cwin.get("days") or 0) < _BADGE_ORCH_MIN_WINDOW_DAYS:

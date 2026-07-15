@@ -12,8 +12,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-random.seed(42)
-
 OUT_DIR = Path("/tmp/cc-autopsy-demo")
 META_DIR = OUT_DIR / "usage-data/session-meta"
 FACETS_DIR = OUT_DIR / "usage-data/facets"

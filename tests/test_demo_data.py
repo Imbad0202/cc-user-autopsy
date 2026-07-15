@@ -138,9 +138,9 @@ def _run_full_pipeline():
 
     Both blind-spot test classes below call this from their own
     setUpClass, so without caching the (expensive) pipeline runs twice per
-    test session. Results are deterministic (seed=42 demo data), so the
-    first result is cached at module level and reused for every subsequent
-    call — the pipeline itself still only runs once."""
+    test session. Results are deterministic (seed=20260715 demo data), so
+    the first result is cached at module level and reused for every
+    subsequent call — the pipeline itself still only runs once."""
     global _full_pipeline_cache
     if _full_pipeline_cache is not None:
         return _full_pipeline_cache
@@ -278,7 +278,7 @@ class WellFormedBlindSpotBlockTests(unittest.TestCase):
     are legitimately data-dependent and unseeded by index, so asserting
     gate_passed on them would flake across otherwise-valid regenerations.
     This class only checks the block is well-formed (keys present, no
-    KeyError), which the deterministic seed=42 draw does guarantee."""
+    KeyError), which the deterministic seed=20260715 draw does guarantee."""
 
     @classmethod
     def setUpClass(cls):
