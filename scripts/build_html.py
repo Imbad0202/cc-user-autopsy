@@ -7,6 +7,7 @@ This file is the CLI entry point.  All rendering logic lives in report_render.py
 """
 import argparse
 import json
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -59,6 +60,17 @@ def append_history_snapshot(history_path, analysis, audience):
     history starts accumulating immediately. Never fails the build.
     """
     if audience != "self":
+        return
+    # Writer-side backstop: a build running under pytest (including
+    # subprocess-spawned ones, which inherit PYTEST_CURRENT_TEST) must never
+    # append to the real per-user snapshot file. Tests that exercise the
+    # append pass an explicit temp --history-file, which stays writable;
+    # tests/test_history_isolation.py lints the call sites, this guards
+    # everything the lint can't see.
+    if ("PYTEST_CURRENT_TEST" in os.environ
+            and Path(history_path).expanduser() == DEFAULT_HISTORY_FILE):
+        print("warning: skipped history snapshot append to the default "
+              "path under pytest", file=sys.stderr)
         return
     try:
         # Field extraction lives in report_render.snapshot_entry — the SAME
