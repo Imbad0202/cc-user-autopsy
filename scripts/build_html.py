@@ -67,12 +67,21 @@ def append_history_snapshot(history_path, analysis, audience):
     # append pass an explicit temp --history-file, which stays writable;
     # tests/test_history_isolation.py lints the call sites, this guards
     # everything the lint can't see.
-    if ("PYTEST_CURRENT_TEST" in os.environ
-            and Path(history_path).expanduser().resolve()
-            == DEFAULT_HISTORY_FILE.resolve()):
-        print("warning: skipped history snapshot append to the default "
-              "path under pytest", file=sys.stderr)
-        return
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        try:
+            is_default = (Path(history_path).expanduser().resolve()
+                          == DEFAULT_HISTORY_FILE.resolve())
+        except Exception as exc:
+            # Unresolvable path (symlink loop → OSError/RuntimeError,
+            # embedded null byte → ValueError, ...). Can't prove it isn't
+            # the default file, so fail closed: skip, never fail the build.
+            print("warning: skipped history snapshot append under pytest "
+                  f"(could not resolve path: {exc})", file=sys.stderr)
+            return
+        if is_default:
+            print("warning: skipped history snapshot append to the default "
+                  "path under pytest", file=sys.stderr)
+            return
     try:
         # Field extraction lives in report_render.snapshot_entry — the SAME
         # mapping the trend ledger's "This run" column reads — so the

@@ -176,6 +176,11 @@ def main() -> None:
             str(artifacts_path),
             "--output",
             str(output),
+            # History isolation lives in the helper, not the callers, so a
+            # future call site can't forget it (argparse last-wins, so a
+            # caller may still override via extra).
+            "--history-file",
+            str(history_path),
             *extra,
             capture=capture,
         )
@@ -195,8 +200,6 @@ def main() -> None:
         extra=(
             "--ledger-narration",
             str(narration_path),
-            "--history-file",
-            str(history_path),
         ),
         capture=True,
     )
@@ -216,7 +219,7 @@ def main() -> None:
     # HR build without an allowlist must redact hostile project labels to
     # the generic placeholder — verify the raw payload doesn't reach HTML,
     # while artifact sanitisation (javascript: URLs → #) still runs.
-    run_build("hr", output_path, extra=("--history-file", str(history_path)))
+    run_build("hr", output_path)
     hr_html = output_path.read_text()
     assert "<img src=x onerror=alert(1)>" not in hr_html
     assert "\\u003cimg src=x onerror=alert(1)" not in hr_html
