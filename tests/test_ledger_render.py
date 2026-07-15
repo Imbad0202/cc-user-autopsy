@@ -475,6 +475,20 @@ class LeakLedgerRenderTests(unittest.TestCase):
         self.assertNotIn("c-blindspot", html)
         self.assertNotIn("c-leak-cards", html)
 
+    def test_empty_exemplar_renders_callout_without_detail_line(self):
+        # Codex round 21 (P1): a cross-only pattern carries no exemplar
+        # (cross-LLM prompt text never reaches output); the opener callout
+        # must render its counts without an empty detail div.
+        from itertools import count
+        bs1 = BS_ALL_PASSED["repeated_instructions"]
+        pat = dict(bs1["metrics"]["patterns"][0],
+                   exemplar="", sources=["codex", "grok"])
+        bs = dict(BS_ALL_FAILED, repeated_instructions=dict(
+            bs1, metrics={"patterns": [pat]}))
+        html = _build_leak_ledger(LEDGER_NO_LEAKS, bs, NARR, "en", count(1))
+        self.assertIn("c-blindspot", html)
+        self.assertNotIn("c-blindspot-detail", html)
+
     def test_ask_ship_known_category_localizes_in_zh_tw(self):
         # Codex round 16: raw facet keys (snake_case identifiers) must not
         # leak into the report — known categories map to locale labels.

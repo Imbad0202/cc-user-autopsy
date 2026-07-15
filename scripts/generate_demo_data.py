@@ -45,6 +45,20 @@ DEMO_REPEATED_INSTRUCTION = (
     "and never push without asking"
 )
 
+# A CROSS-ONLY qualifying repeat pattern (18 codex + 12 grok sessions, no
+# Claude occurrences) whose text carries the privacy sentinel. It must not
+# just clear the BS#1 gate but survive the top-5 pattern cap (30 forced
+# occurrences: above the random FIRST_PROMPTS pool's ~25-28 incidental
+# repeats, below the 33-occurrence flagship so the opener keeps its
+# Claude exemplar), so smoke_test's "GROK_PRIVATE_MARKER never reaches any
+# output" assertion exercises the real leak path (spec §4: a cross-only
+# pattern's exemplar must be withheld) — a marker that appears once never
+# qualifies and the sentinel would pass vacuously.
+DEMO_CROSS_ONLY_INSTRUCTION = (
+    "fleet audit: rerun the weekly telemetry export and diff it "
+    "against baseline GROK_PRIVATE_MARKER"
+)
+
 # BS#2 (sunk-cost pairs): 3 engineered (failed, retry) pairs. Failed session
 # is not_achieved with an accelerating output-token curve; retry lands 1-2
 # days later, fully_achieved, near-duplicate prompt (Jaccard >= 0.5), at
@@ -705,9 +719,18 @@ def gen_codex_sessions(now, n=32):
     # spread over 3 distinct weeks (by index, not random), so the
     # repeated_instructions gate's "sources" field includes "codex".
     _REPEAT_INDICES = {2: 8, 10: 22, 18: 36}  # session index -> days_ago
+    # Codex share of DEMO_CROSS_ONLY_INSTRUCTION (see the constant's
+    # comment): 18 sessions, in-window days, >=3 distinct weeks. Index-
+    # forced, never random; avoids 0 (the resumed-session special case)
+    # and the _REPEAT_INDICES slots.
+    _CROSS_ONLY_INDICES = {1: 4, 3: 6, 4: 9, 5: 11, 6: 13, 7: 16, 8: 18,
+                           9: 20, 11: 23, 12: 25, 13: 27, 14: 30, 15: 32,
+                           16: 34, 17: 37, 19: 39, 20: 41, 21: 43}
     for i in range(n):
         if i in _REPEAT_INDICES:
             start = now - timedelta(days=_REPEAT_INDICES[i], hours=9)
+        elif i in _CROSS_ONLY_INDICES:
+            start = now - timedelta(days=_CROSS_ONLY_INDICES[i], hours=9)
         else:
             start = now - timedelta(days=int(random.triangular(0, 60, 20)),
                                     hours=random.randint(0, 12))
@@ -720,7 +743,12 @@ def gen_codex_sessions(now, n=32):
                         {"model": "gpt-5.4", "effort": "high", "cwd": cwd}),
         ]
         t = start
-        first_msg = DEMO_REPEATED_INSTRUCTION if i in _REPEAT_INDICES else None
+        if i in _REPEAT_INDICES:
+            first_msg = DEMO_REPEATED_INSTRUCTION
+        elif i in _CROSS_ONLY_INDICES:
+            first_msg = DEMO_CROSS_ONLY_INSTRUCTION
+        else:
+            first_msg = None
         for turn in range(random.randint(1, 6)):
             t += timedelta(minutes=random.randint(1, 8))
             msg_text = first_msg if (first_msg and turn == 0) else f"demo codex prompt {turn}"
@@ -761,9 +789,17 @@ def gen_grok_sessions(now, n=16):
     # BS#1 fixture: force the repeated instruction onto 2 grok sessions,
     # on 2 distinct days (by index, not random).
     _REPEAT_INDICES = {3: 12, 11: 44}  # session index -> days_ago
+    # Grok share of DEMO_CROSS_ONLY_INSTRUCTION (see the constant's
+    # comment): 12 sessions, in-window days across distinct weeks. Index-
+    # forced, never random; avoids index 0 (which carries the one-off
+    # XSS/marker prompt override below) and the _REPEAT_INDICES slots.
+    _CROSS_ONLY_INDICES = {1: 3, 2: 7, 4: 10, 5: 14, 6: 17, 7: 21, 8: 24,
+                           9: 28, 10: 31, 12: 35, 13: 38, 14: 41}
     for i in range(n):
         if i in _REPEAT_INDICES:
             start = now - timedelta(days=_REPEAT_INDICES[i])
+        elif i in _CROSS_ONLY_INDICES:
+            start = now - timedelta(days=_CROSS_ONLY_INDICES[i])
         else:
             start = now - timedelta(days=int(random.triangular(0, 60, 25)))
         sid = mk_sid()
@@ -773,9 +809,11 @@ def gen_grok_sessions(now, n=16):
         for k in range(random.randint(1, 4)):
             if forced and k == 0:
                 prompt = DEMO_REPEATED_INSTRUCTION
+            elif i in _CROSS_ONLY_INDICES and k == 0:
+                prompt = DEMO_CROSS_ONLY_INSTRUCTION
             else:
                 prompt = f"demo grok prompt {k}"
-            if not marker_written:
+            if not marker_written and i not in _CROSS_ONLY_INDICES and not forced:
                 prompt = '<script>alert("grok")</script> GROK_PRIVATE_MARKER'
                 marker_written = True
             lines.append(json.dumps({

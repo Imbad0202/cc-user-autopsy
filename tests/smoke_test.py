@@ -242,11 +242,31 @@ def main() -> None:
         "SELF build must render blind-spot callout elements"
     )
 
-    # cross-LLM prompt text must never reach ANY output (spec §4)
+    # cross-LLM prompt text must never reach ANY output (spec §4). The demo
+    # data plants GROK_PRIVATE_MARKER both as a one-off prompt AND inside a
+    # cross-only (codex+grok, no Claude) repeat pattern engineered to
+    # survive the top-5 pattern cap (DEMO_CROSS_ONLY_INSTRUCTION) — so
+    # these assertions exercise the real exemplar leak path, not just
+    # prompts that never qualified for storage.
     for name, html_text in (("self", self_html), ("hr", hr_html)):
         assert "GROK_PRIVATE_MARKER" not in html_text, (
             f"{name} build leaked grok prompt text"
         )
+    analysis_text = analysis_path.read_text()
+    assert "GROK_PRIVATE_MARKER" not in analysis_text, (
+        "analysis-data.json leaked grok prompt text (blind-spot exemplar?)"
+    )
+    bs1_patterns = (json.loads(analysis_text).get("blind_spots", {})
+                    .get("repeated_instructions", {})
+                    .get("metrics", {}).get("patterns", []))
+    cross_only = [p for p in bs1_patterns if "claude" not in p["sources"]]
+    assert cross_only, (
+        "expected the engineered cross-only pattern in the stored top 5; "
+        "the privacy sentinel above would otherwise pass vacuously"
+    )
+    assert all(p["exemplar"] == "" for p in cross_only), (
+        "cross-only pattern stored a non-empty exemplar"
+    )
 
     # narration is escaped, not executed
     assert "<script>alert('n')</script>" not in self_html

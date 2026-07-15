@@ -211,7 +211,10 @@ across Claude rows and full/partial-coverage cross-LLM rows (`coverage ==
 | Minimum distinct weeks | `_BS_REPEAT_MIN_WEEKS = 3` |
 
 `metrics.patterns` reports the top 5 patterns by occurrence count; each
-carries the most-common raw exemplar (≤120 chars, display only), a
+carries the most-common raw exemplar (≤120 chars, display only, chosen
+among CLAUDE hits only — spec §4 forbids cross-LLM prompt text in any
+output, so a pattern with no Claude occurrence stores an empty exemplar
+and the renderer omits its detail line), a
 lower-bound `est_wasted_tokens` (each occurrence charged at its own
 NORMALIZED length in tokens, `len(normalized) // 4`, summed with the
 single largest occurrence dropped as the free "first typing" — only the

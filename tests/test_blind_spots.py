@@ -145,6 +145,41 @@ class RepeatedInstructionTests(unittest.TestCase):
         # claude_wasted_tokens uses (3-1) — claude occurrences only
         self.assertEqual(p["claude_wasted_tokens"], 2 * (len(p["exemplar"]) // 4))
 
+    def test_cross_only_pattern_withholds_exemplar(self):
+        # Codex round 21 (P1): spec §4 — cross-LLM prompt text must never
+        # reach any output. A qualifying pattern with no Claude occurrence
+        # must not carry its (private) raw text as the exemplar.
+        import json as _j
+        cross = [_prompt_row(f"x{i}", BASE + timedelta(weeks=i % 3, days=i),
+                             "grok fleet audit CROSS_PRIVATE_TOKEN retype",
+                             source="grok", coverage="partial")
+                 for i in range(6)]
+        out = bs_repeated_instructions([], cross)
+        self.assertTrue(out["gate_passed"])
+        p = out["metrics"]["patterns"][0]
+        self.assertEqual(p["exemplar"], "")
+        self.assertNotIn("CROSS_PRIVATE_TOKEN", _j.dumps(p))
+        # counts/weeks still report normally
+        self.assertEqual(p["occurrences"], 6)
+        self.assertGreater(p["est_wasted_tokens"], 0)
+
+    def test_exemplar_chosen_from_claude_hits_even_when_cross_variant_dominates(self):
+        from scripts.cross_llm_common import normalize_prompt
+        claude_raw = "run the full integration suite before shipping now"
+        cross_raw = "RUN, the FULL integration suite... before SHIPPING now!!!"
+        self.assertEqual(normalize_prompt(claude_raw),
+                         normalize_prompt(cross_raw))
+        rows = [_prompt_row(f"c{i}", BASE + timedelta(weeks=i % 3, days=i),
+                            claude_raw) for i in range(2)]
+        cross = [_prompt_row(f"x{i}", BASE + timedelta(weeks=i % 3, days=3 + i),
+                             cross_raw, source="codex", coverage="full")
+                 for i in range(4)]
+        out = bs_repeated_instructions(rows, cross)
+        self.assertTrue(out["gate_passed"])
+        # the codex variant is the most common raw overall, but the
+        # exemplar must come from the Claude hits
+        self.assertEqual(out["metrics"]["patterns"][0]["exemplar"], claude_raw)
+
     def test_mixed_length_raws_charged_at_normalized_length(self):
         # Codex round 20: punctuation-heavy raw variants share one folded
         # identity with a plain variant; every occurrence must be charged

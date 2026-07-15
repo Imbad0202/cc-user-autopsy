@@ -2201,8 +2201,16 @@ def bs_repeated_instructions(claude_rows, cross_rows, window_start=None,
             continue
         raw_counts = {}
         for h in hits:
+            # Exemplar candidates are CLAUDE hits only (spec §4: cross-LLM
+            # prompt text must never reach any output — the exemplar lands
+            # in analysis-data.json and the SELF HTML). A cross-only
+            # pattern carries no exemplar; its counts/weeks still report,
+            # and the renderer skips the detail line for a falsy one.
+            if h["source"] != "claude":
+                continue
             raw_counts[h["raw"]] = raw_counts.get(h["raw"], 0) + 1
-        exemplar = max(raw_counts, key=raw_counts.get)[:120]
+        exemplar = (max(raw_counts, key=raw_counts.get)[:120]
+                    if raw_counts else "")
         # All three waste figures are per-hit floors: each occurrence
         # counts its OWN normalized length (h["tok"]), not the most-common
         # exemplar's — mixed-length raws sharing one folded identity must
