@@ -3,8 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from scripts.aggregate import (
     bs_repeated_instructions, bs_sunk_cost, compute_api_equivalent_cost,
-    compute_blind_spots, compute_leaks, PRICING, _CHEAPEST_INPUT_RATE,
-    _leak_cost_usd)
+    compute_blind_spots, compute_leaks, PRICING, _leak_cost_usd)
 
 BASE = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
 WINDOW = {"start": "2026-06-01", "end": "2026-07-11", "days": 40}
@@ -132,6 +131,8 @@ class LeakCatalogTests(unittest.TestCase):
                   "first_prompt": INSTR}
             if source:
                 row["source"], row["coverage"] = source, coverage
+            else:
+                row["model_counts"] = {"claude-opus-4-6": 5}
             return row
 
         claude_rows = [_row(f"c{i}", i % 50) for i in range(10)]
@@ -157,6 +158,9 @@ class LeakCatalogTests(unittest.TestCase):
         all_source_cost = round(
             (p["est_wasted_tokens"] / weeks) / 1e6 * 15.0, 2)
         self.assertLess(item["weekly_cost_usd"], all_source_cost)
+        # The attributed occurrences DID price (>0 before the weekly
+        # round-to-cents, which can floor tiny figures to 0.00).
+        self.assertGreater(p["claude_wasted_usd"], 0)
 
     def test_sunk_cost_pairs_before_window_produce_no_card(self):
         # 3 confirmed sunk-cost pairs, all 200 days before WINDOW's start —
@@ -197,40 +201,83 @@ class LeakCatalogTests(unittest.TestCase):
         self.assertEqual(item["occurrences"], 6)
 
 
-class RepeatedInstructionsCheapestRateTests(unittest.TestCase):
-    # Fix 4: repeated-instruction dollars price at the single cheapest known
-    # input rate — no per-session/dominant-model attribution, since a
-    # repeated prompt isn't tracked back to which session/model retyped it.
-    def test_leak_usd_uses_cheapest_input_rate_formula(self):
-        INSTR = ("Always reply in zh-TW, run the full pytest suite before "
-                 "you claim done, never skip hooks") * 3
-        rows = [{"session_id": f"c{i}",
+class RepeatedInstructionsAttributionPricingTests(unittest.TestCase):
+    # Codex round 18: repeated-instruction dollars price each Claude
+    # occurrence at its own row's verified input-rate floor (min over the
+    # row's observed models). Occurrences without a verified rate (missing
+    # model_counts, or any model absent from PRICING) contribute $0 — a
+    # cheaper historical model may have processed them — and the one free
+    # "first typing" is discounted at the HIGHEST observed rate so the
+    # remainder stays a floor.
+    INSTR = ("Always reply in zh-TW, run the full pytest suite before "
+             "you claim done, never skip hooks") * 3
+
+    def _rows(self, n, model_counts):
+        return [{"session_id": f"c{i}",
                  "start_time": (BASE + timedelta(weeks=i % 3, days=i)).isoformat(),
-                 "first_prompt": INSTR} for i in range(5)]
+                 "first_prompt": self.INSTR,
+                 **({"model_counts": model_counts} if model_counts else {})}
+                for i in range(n)]
+
+    def _weekly_usd(self, bs1):
+        bs = {"repeated_instructions": bs1, "sunk_cost": {}}
+        leaks = compute_leaks(bs, [], WINDOW)
+        item = next(i for i in leaks["items"]
+                    if i["type"] == "repeated_instructions")
+        return item
+
+    def test_priced_at_each_rows_own_model_floor(self):
+        bs1 = bs_repeated_instructions(
+            self._rows(5, {"claude-opus-4-6": 3}), [])
+        self.assertTrue(bs1["gate_passed"])
+        p = bs1["metrics"]["patterns"][0]
+        tok = len(p["exemplar"]) // 4
+        opus_in = PRICING["claude-opus-4-6"]["input"]
+        # 5 occurrences, first typing free: 4 priced at the opus floor.
+        self.assertEqual(p["claude_wasted_usd"],
+                         round(4 * opus_in * tok / 1e6, 6))
+        item = self._weekly_usd(bs1)
+        weeks = round(max(WINDOW["days"] / 7.0, 1.0), 1)
+        self.assertEqual(item["weekly_cost_usd"],
+                         round(p["claude_wasted_usd"] / weeks, 2))
+
+    def test_unattributed_rows_price_zero_but_tokens_still_count(self):
+        bs1 = bs_repeated_instructions(self._rows(5, None), [])
+        self.assertTrue(bs1["gate_passed"])
+        p = bs1["metrics"]["patterns"][0]
+        self.assertEqual(p["claude_wasted_usd"], 0.0)
+        self.assertGreater(p["claude_wasted_tokens"], 0)
+        item = self._weekly_usd(bs1)
+        self.assertEqual(item["weekly_cost_usd"], 0.0)
+        self.assertGreater(item["weekly_tokens"], 0)
+
+    def test_unlisted_historical_model_rows_price_zero(self):
+        bs1 = bs_repeated_instructions(
+            self._rows(5, {"claude-3-haiku-20240307": 4}), [])
+        self.assertTrue(bs1["gate_passed"])
+        self.assertEqual(
+            bs1["metrics"]["patterns"][0]["claude_wasted_usd"], 0.0)
+
+    def test_mixed_attribution_prices_verified_rows_discounting_max(self):
+        # 3 opus-attributed + 2 unattributed occurrences: the free first
+        # typing discounts at the max (opus) rate, leaving 2 opus-priced
+        # occurrences; the unattributed pair contributes $0.
+        rows = (self._rows(3, {"claude-opus-4-6": 3})
+                + [dict(r, session_id=r["session_id"] + "u")
+                   for r in self._rows(2, None)])
         bs1 = bs_repeated_instructions(rows, [])
         self.assertTrue(bs1["gate_passed"])
         p = bs1["metrics"]["patterns"][0]
-        bs = {"repeated_instructions": bs1, "sunk_cost": {}}
-        leaks = compute_leaks(bs, [], WINDOW)
-        item = next(i for i in leaks["items"] if i["type"] == "repeated_instructions")
-        weeks = round(max(WINDOW["days"] / 7.0, 1.0), 1)
-        claude_tokens_week = p["claude_wasted_tokens"] / weeks
-        expected = round(claude_tokens_week / 1e6 * _CHEAPEST_INPUT_RATE, 2)
-        self.assertEqual(item["weekly_cost_usd"], expected)
-
-    def test_cheapest_rate_is_the_min_across_pricing_table(self):
-        self.assertEqual(_CHEAPEST_INPUT_RATE, min(p["input"] for p in PRICING.values()))
+        tok = len(p["exemplar"]) // 4
+        opus_in = PRICING["claude-opus-4-6"]["input"]
+        self.assertEqual(p["claude_wasted_usd"],
+                         round(2 * opus_in * tok / 1e6, 6))
 
     def test_repeated_instructions_cost_independent_of_rated_models(self):
-        # An all-Opus rated pool must NOT push the repeated-instructions
-        # price above the cheapest known rate — there is no dominant-model
-        # lookup anymore; the pool argument to compute_leaks doesn't affect
-        # this item's pricing at all.
-        INSTR = "tune the ingestion retry pipeline please and keep it tidy" * 3
-        rows = [{"session_id": f"c{i}",
-                 "start_time": (BASE + timedelta(weeks=i % 3, days=i)).isoformat(),
-                 "first_prompt": INSTR} for i in range(5)]
-        bs1 = bs_repeated_instructions(rows, [])
+        # The rated pool passed to compute_leaks must not affect this
+        # item's pricing — attribution comes from the pattern's own rows.
+        bs1 = bs_repeated_instructions(
+            self._rows(5, {"claude-sonnet-4-6": 2}), [])
         bs = {"repeated_instructions": bs1, "sunk_cost": {}}
         opus_rated = [_sess(f"o{i}", i, "fully_achieved") for i in range(10)]
         leaks_opus = compute_leaks(bs, opus_rated, WINDOW)
@@ -238,6 +285,9 @@ class RepeatedInstructionsCheapestRateTests(unittest.TestCase):
         item_opus = next(i for i in leaks_opus["items"] if i["type"] == "repeated_instructions")
         item_empty = next(i for i in leaks_empty["items"] if i["type"] == "repeated_instructions")
         self.assertEqual(item_opus["weekly_cost_usd"], item_empty["weekly_cost_usd"])
+        # Pattern-level (pre-rounding) figure proves pricing happened.
+        self.assertGreater(
+            bs1["metrics"]["patterns"][0]["claude_wasted_usd"], 0)
 
 
 class LeakCostUsdTests(unittest.TestCase):

@@ -1048,6 +1048,24 @@ class ComputeBlindSpotsTests(unittest.TestCase):
             self.assertIn(k, out)
             self.assertFalse(out[k]["gate_passed"])   # empty inputs: all gated
 
+    def test_repeated_instructions_gated_off_without_valid_window(self):
+        # Codex round 18: cross-tool rows with no transcript-derived window
+        # (window_start=None — e.g. only Codex/Grok rows were supplied)
+        # must not produce an unscoped repeat finding: compute_leaks would
+        # suppress the weekly item for the same invalid window, but the
+        # renderer trusts gate_passed as "in-window support exists".
+        cross = [_prompt_row(f"x{i}", BASE + timedelta(weeks=i % 3, days=i),
+                             INSTR, source="codex", coverage="full")
+                 for i in range(6)]
+        out = compute_blind_spots([], [], [], cross, WINDOW_END,
+                                  window_start=None)
+        bs1 = out["repeated_instructions"]
+        self.assertFalse(bs1["gate_passed"])
+        self.assertIn("window", bs1["reason"])
+        # The same rows DO pass when called unwindowed directly — the
+        # wiring layer is what refuses to scan unbounded cross history.
+        self.assertTrue(bs_repeated_instructions([], cross)["gate_passed"])
+
 
 class BlindSpotsWiringTests(unittest.TestCase):
     """Mirrors tests/test_cross_llm_aggregate.py::MainWiringTests: build a

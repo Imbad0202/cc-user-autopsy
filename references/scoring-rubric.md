@@ -217,15 +217,25 @@ retyped text — thinking/re-reading time not counted), and up to 3 evidence
 session IDs.
 
 If no pattern reaches 5 occurrences across ≥3 distinct weeks, `gate_passed`
-is `False` and `reason` explains which floor wasn't met.
+is `False` and `reason` explains which floor wasn't met. The heuristic is
+also gated off entirely (reason: no valid ledger window) when no
+transcript-derived window exists to scope occurrences against — otherwise
+cross-tool history of unbounded length would be scanned unwindowed while
+the weekly leak items are suppressed for the same invalid window.
 
 Pricing rule: `compute_leaks` prices the repeated-instruction leak's dollar
-figure from `claude_wasted_tokens` (`max(claude_occurrences - 1, 0) *
-(len(exemplar) // 4)`) only — a defensible lower bound — while
+figure from `claude_wasted_usd`, which prices each Claude occurrence at its
+own row's verified input-rate floor (the cheapest input rate among the
+row's observed models). An occurrence with no verified rate — missing model
+attribution, or any model absent from the pricing table (a cheaper
+historical model may have processed it) — contributes $0, and the one free
+"first typing" is discounted at the highest observed rate, so the total
+stays a floor. `claude_wasted_tokens` (`max(claude_occurrences - 1, 0) *
+(len(exemplar) // 4)`) remains as the Claude-share token count, and
 `weekly_tokens` in the leak-catalog item still reports the all-source
 `est_wasted_tokens` total, so cross-tool (Codex/Grok) repetition is visible
-in the token count without being priced at the Claude input rate it was
-never billed at.
+in the token count without being priced at a Claude rate it was never
+billed at.
 
 ### #2 — Sunk-cost sessions
 

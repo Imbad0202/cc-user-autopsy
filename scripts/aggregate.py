@@ -2101,6 +2101,19 @@ def _bs_result(id_, gate, metrics=None, n=0, reason=None, guarded=False):
             "metrics": metrics or {}, "reason": reason}
 
 
+def _row_input_rate_floor(row):
+    """Verified lower-bound input $/1M for one scanner row: the cheapest
+    input rate among the row's observed models, or 0.0 when attribution is
+    missing or names a model absent from PRICING — the same policy as
+    _leak_cost_usd: an unlisted (e.g. historical) model may be cheaper than
+    anything the current table can vouch for, so no table rate is a
+    verified floor for its tokens."""
+    models = {_normalize_model_id(m) for m in (row.get("model_counts") or {})}
+    if not models or any(m not in PRICING for m in models):
+        return 0.0
+    return min(PRICING[m]["input"] for m in models)
+
+
 def bs_repeated_instructions(claude_rows, cross_rows, window_start=None,
                              window_end=None, tz=None):
     """Spec §5 #1 — repeated-instruction tax.
@@ -2162,11 +2175,16 @@ def bs_repeated_instructions(claude_rows, cross_rows, window_start=None,
             continue
         week_dt = dt.astimezone(tz) if tz is not None else dt
         key = row.get("first_prompt_hash") or prompt_identity(row.get("first_prompt"))
+        source = row.get("source") or "claude"
         occ.setdefault(key, []).append({
             "week": week_key(week_dt),
-            "source": row.get("source") or "claude",
+            "source": source,
             "sid": row.get("session_id") or "",
-            "raw": row.get("first_prompt") or ""})
+            "raw": row.get("first_prompt") or "",
+            # Verified input-rate floor for pricing this occurrence — only
+            # Claude rows can carry one (cross-tool tokens were never
+            # billed at a Claude rate); 0.0 means "no verified rate".
+            "rate": _row_input_rate_floor(row) if source == "claude" else 0.0})
     patterns = []
     for hits in occ.values():
         weeks = {h["week"] for h in hits}
@@ -2176,14 +2194,22 @@ def bs_repeated_instructions(claude_rows, cross_rows, window_start=None,
         for h in hits:
             raw_counts[h["raw"]] = raw_counts.get(h["raw"], 0) + 1
         exemplar = max(raw_counts, key=raw_counts.get)[:120]
-        # claude_wasted_tokens prices only the Claude share as a defensible
+        # claude_wasted_tokens counts only the Claude share as a defensible
         # lower bound: est_wasted_tokens counts occurrences across
-        # Claude+Codex+Grok, but non-Claude tokens have no Claude rate to
-        # honestly price at. This additive field feeds compute_leaks' USD
-        # figure; est_wasted_tokens (all-source) still drives the
-        # tokens/week display.
+        # Claude+Codex+Grok, but non-Claude tokens were never billed at a
+        # Claude rate. claude_wasted_usd (additive) prices each Claude
+        # occurrence at ITS OWN row's verified input-rate floor —
+        # occurrences without a verified rate (missing attribution, or a
+        # model absent from PRICING) contribute $0, same policy as
+        # _leak_cost_usd — and discounts the one free "first typing" at the
+        # HIGHEST observed rate so the remainder stays a floor. This field
+        # feeds compute_leaks' USD figure; est_wasted_tokens (all-source)
+        # still drives the tokens/week display.
         claude_occurrences = sum(1 for h in hits if h["source"] == "claude")
         claude_wasted_tokens = max(claude_occurrences - 1, 0) * (len(exemplar) // 4)
+        claude_rates = sorted(h["rate"] for h in hits if h["source"] == "claude")
+        claude_wasted_usd = round(
+            sum(claude_rates[:-1]) * (len(exemplar) // 4) / 1e6, 6)
         patterns.append({
             "exemplar": exemplar,
             "occurrences": len(hits),
@@ -2191,6 +2217,7 @@ def bs_repeated_instructions(claude_rows, cross_rows, window_start=None,
             "sources": sorted({h["source"] for h in hits}),
             "est_wasted_tokens": (len(hits) - 1) * (len(exemplar) // 4),
             "claude_wasted_tokens": claude_wasted_tokens,
+            "claude_wasted_usd": claude_wasted_usd,
             "evidence": [h["sid"] for h in hits[:3]]})
     patterns.sort(key=lambda p: -p["occurrences"])
     if not patterns:
@@ -2683,12 +2710,6 @@ def bs_habit_drift(rated):
 
 _BS_FAILED_BURN_MIN_SESSIONS = 5
 
-# Cheapest known input $/1M across PRICING — the lower-bound input rate
-# used by the repeated-instructions leak item (no per-occurrence model
-# attribution to price against, see below).
-_CHEAPEST_INPUT_RATE = min(p["input"] for p in PRICING.values())
-
-
 def _charged_tokens(sessions):
     """All token categories _leak_cost_usd charges for — input, output,
     cache writes, cache reads — so a cache-heavy session never shows a
@@ -2806,20 +2827,20 @@ def compute_leaks(blind_spots, rated, window):
     if bs1.get("gate_passed"):
         pats = bs1["metrics"]["patterns"]
         tokens_week = int(sum(p["est_wasted_tokens"] for p in pats) / weeks)
-        # USD is priced from the Claude share only (claude_wasted_tokens) —
-        # a defensible lower bound. Cross-tool (Codex/Grok) tokens show up
-        # in weekly_tokens (the all-source display figure) but are never
-        # priced at the Claude input rate, since they weren't billed there.
-        claude_tokens_week = sum(
-            p.get("claude_wasted_tokens", 0) for p in pats) / weeks
+        # USD comes from claude_wasted_usd — each Claude occurrence priced
+        # at its own row's verified input-rate floor (zero when the model
+        # is unlisted/unattributed), computed in bs_repeated_instructions.
+        # Cross-tool (Codex/Grok) tokens show up in weekly_tokens (the
+        # all-source display figure) but are never priced at a Claude rate,
+        # since they weren't billed there.
+        usd_week = sum(p.get("claude_wasted_usd", 0.0) for p in pats) / weeks
         # Additive field: sorted union of sources across the qualifying
         # patterns, so the renderer can tell whether any occurrences came
         # from a tool that doesn't read CLAUDE.md (Fix 5) and pick the
         # right fix text.
         sources = sorted({src for p in pats for src in (p.get("sources") or [])})
         items.append({"type": "repeated_instructions",
-                      "weekly_cost_usd": round(
-                          claude_tokens_week / 1e6 * _CHEAPEST_INPUT_RATE, 2),
+                      "weekly_cost_usd": round(usd_week, 2),
                       "weekly_tokens": tokens_week,
                       "occurrences": sum(p["occurrences"] for p in pats),
                       "evidence": pats[0]["evidence"],
@@ -2869,11 +2890,25 @@ def compute_blind_spots(sessions, rated, activity_rows, cross_rows, window_end,
     so week-bucketed occurrences honor the requested timezone rather than
     OS-local (bs_habit_drift gets this for free via rated sessions' own
     precomputed s["week"], already tz-converted by build_sessions)."""
+    # Repeated instructions is the one heuristic whose occurrences can come
+    # from cross-tool history of unbounded length: without BOTH window
+    # bounds it would scan that history unwindowed, and the renderer (which
+    # trusts bs1.gate_passed as "in-window support exists") could show an
+    # unscoped finding even while compute_leaks suppresses its weekly items
+    # for the same invalid window. Suppression beats an unscoped finding
+    # (spec §10) — gate it off explicitly. window_start is None exactly
+    # when no activity row had a parsable start (the same condition that
+    # invalidates the ledger window), so no windowed occurrence is lost.
+    if window_start is None or window_end is None:
+        bs1 = _bs_result("repeated_instructions", False,
+                         reason="no valid ledger window to scope occurrences")
+    else:
+        bs1 = bs_repeated_instructions(
+            activity_rows, cross_rows,
+            window_start=window_start, window_end=window_end, tz=tz)
     return {
         "schema_version": 1,
-        "repeated_instructions": bs_repeated_instructions(
-            activity_rows, cross_rows,
-            window_start=window_start, window_end=window_end, tz=tz),
+        "repeated_instructions": bs1,
         "sunk_cost": bs_sunk_cost(rated),
         "switch_tax": bs_switch_tax(rated, activity_rows, cross_rows),
         "graveyard": bs_graveyard(activity_rows, window_end),

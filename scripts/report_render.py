@@ -683,10 +683,10 @@ def _leak_section_available(blind_spots, ledger):
     instead of bs2.gate_passed is both correct and sufficient.
 
     bs1 (repeated_instructions) stays gate-based: its occurrences are
-    window-scoped inside the heuristic itself (bs_repeated_instructions
-    only counts in-window occurrences when a window is passed), so
-    gate_passed already implies in-window support without needing an items
-    check.
+    window-scoped inside the heuristic itself, and compute_blind_spots
+    gates the heuristic off entirely when no valid window exists to scope
+    against — so gate_passed already implies in-window support without
+    needing an items check.
     """
     bs = blind_spots or {}
     items = ((ledger or {}).get("leaks") or {}).get("items") or []
