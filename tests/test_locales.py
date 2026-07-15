@@ -64,8 +64,6 @@ class UsageRubricKeysTests(unittest.TestCase):
     REQUIRED_KEYS = {
         "score_disclaimer",
         "score_disclaimer_long",
-        "how_to_read_key_relate",
-        "how_to_read_val_relate",
         "usage_char_header",
         "usage_char_note_template",
     }

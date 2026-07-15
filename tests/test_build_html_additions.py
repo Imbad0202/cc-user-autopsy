@@ -662,19 +662,6 @@ class PatternRenderTests(unittest.TestCase):
         )
 
 
-class HowScoresRelateTests(unittest.TestCase):
-    def test_how_to_read_relate_keys_still_in_catalog(self):
-        """The recruiter v1 rebuild (spec §4) removed the HR how-to-read
-        dt/dd block entirely, so these two keys are no longer referenced by
-        any renderer code. They are kept in the locale catalog anyway as a
-        standing usage-rubric contract (see tests/test_locales.py
-        UsageRubricKeysTests) — this test just guards that the keys were
-        not deleted outright."""
-        from locales import STRINGS
-        self.assertIn('how_to_read_key_relate', STRINGS["en"])
-        self.assertIn('how_to_read_val_relate', STRINGS["en"])
-
-
 class ScoreDisclaimerTests(unittest.TestCase):
     def test_disclaimer_placeholder_in_template(self):
         """Template source must contain both the $score_disclaimer placeholder

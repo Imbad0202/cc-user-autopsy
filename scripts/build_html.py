@@ -61,43 +61,13 @@ def append_history_snapshot(history_path, analysis, audience):
     if audience != "self":
         return
     try:
-        scores = {}
-        for key, val in (analysis.get("scores") or {}).items():
-            if isinstance(val, dict) and "score" in val:
-                scores[key] = val["score"]
-            elif isinstance(val, (int, float)):
-                scores[key] = val
-        ledger = analysis.get("ledger") or {}
-        leaks_items = (ledger.get("leaks") or {}).get("items") or []
-        leaks = []
-        if isinstance(leaks_items, list):
-            for item in leaks_items:
-                if not isinstance(item, dict):
-                    continue
-                leaks.append({
-                    "type": item.get("type"),
-                    "weekly_cost_usd": item.get("weekly_cost_usd"),
-                    "weekly_tokens": item.get("weekly_tokens"),
-                    "occurrences": item.get("occurrences"),
-                })
-        badges_block = analysis.get("badges") or {}
-        earned = [b.get("id") for b in (badges_block.get("items") or [])
-                  if isinstance(b, dict) and b.get("earned") and b.get("id")]
-        overall_avg = ((analysis.get("scores") or {}).get("_overall") or {}).get("avg")
+        # Field extraction lives in report_render.snapshot_entry — the SAME
+        # mapping the trend ledger's "This run" column reads — so the
+        # recorded snapshot and the rendered current values cannot drift.
         entry = {
             "date": date.today().isoformat(),
             "schema_version": 1,
-            "scores": scores,
-            # additive since Phase 3: mean of scored dims at snapshot time —
-            # older lines lack it; readers fall back to mean(scores.values()).
-            "overall_avg": overall_avg,
-            "badges": earned,
-            "ledger": {
-                "git_commits": (ledger.get("output") or {}).get("git_commits"),
-                "sessions": (analysis.get("meta") or {}).get("total_sessions"),
-                "sources_detected": ledger.get("sources_detected") or [],
-                "leaks": leaks,
-            },
+            **report_render.snapshot_entry(analysis),
         }
         path = Path(history_path).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)

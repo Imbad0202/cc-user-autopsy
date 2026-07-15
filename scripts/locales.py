@@ -194,16 +194,6 @@ STRINGS = {
             "contribute to multiple dimensions, so the nine scores describe independent "
             "slices, not shares of a whole."
         ),
-        # how_to_read_key_relate/val_relate: kept as a usage-rubric contract
-        # (tests/test_locales.py UsageRubricKeysTests) even though the HR
-        # how-to-read dt/dd block that displayed them was removed in the
-        # recruiter v1 rebuild (spec §4) — no renderer references either key.
-        "how_to_read_key_relate": "HOW SCORES RELATE",
-        "how_to_read_val_relate": (
-            "Each dimension scores a different aspect of sessions. A session can score "
-            "high on Delegation but low on Time-of-day; they are independent "
-            "characteristics, not shares of a total."
-        ),
         "usage_char_header": "Usage characteristics",
         "usage_char_note_template": (
             "Across {n_sessions} sessions from {since} to {until}, local only."
@@ -622,8 +612,6 @@ STRINGS = {
         # --- Usage rubric (Task 12) ---
         "score_disclaimer": "各面向是彼此獨立的特徵，不是拆分比例，分數不會相加。",
         "score_disclaimer_long": "每個面向都從適用的對話各自計分。",
-        "how_to_read_key_relate": "分數彼此獨立",
-        "how_to_read_val_relate": "每個面向看的是對話的不同切面。",
         "usage_char_header": "使用特徵",
         "usage_char_note_template": "取樣範圍：{since} 至 {until}，共 {n_sessions} 段對話，僅本機。",
         # --- Evidence card labels ---

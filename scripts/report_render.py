@@ -853,24 +853,57 @@ def _entry_leak_cost(entry):
     return round(sum(vals), 2) if vals else None
 
 
-def _current_trend_values(analysis):
-    """The same five metrics the snapshot records, taken from THIS run's
-    analysis dict (the snapshot for this run is appended after render)."""
+def snapshot_entry(analysis):
+    """Single source of truth for the trend-snapshot entry SHAPE, mapped
+    from a live analysis dict. build_html.append_history_snapshot writes
+    exactly this dict (plus date/schema_version) to autopsy-history.jsonl,
+    and the trend ledger's "This run" column reads it via
+    _entry_trend_values — so what this run RECORDS and what it SHOWS are
+    the same code by construction and cannot drift. ledger.leaks here is
+    the compact HISTORY shape (no evidence sids — see SCHEMA-CHANGES.md)."""
+    scores = {}
+    for key, val in (analysis.get("scores") or {}).items():
+        if isinstance(val, dict) and "score" in val:
+            scores[key] = val["score"]
+        elif isinstance(val, (int, float)):
+            scores[key] = val
     ledger = analysis.get("ledger") or {}
-    items = ((ledger.get("leaks") or {}).get("items")) or []
-    cost_vals = [it.get("weekly_cost_usd") for it in items
-                 if isinstance(it, dict)
-                 and isinstance(it.get("weekly_cost_usd"), (int, float))]
-    badges = analysis.get("badges") or {}
-    earned = sum(1 for b in (badges.get("items") or [])
-                 if isinstance(b, dict) and b.get("earned"))
+    leaks_items = (ledger.get("leaks") or {}).get("items") or []
+    leaks = []
+    if isinstance(leaks_items, list):
+        for item in leaks_items:
+            if not isinstance(item, dict):
+                continue
+            leaks.append({
+                "type": item.get("type"),
+                "weekly_cost_usd": item.get("weekly_cost_usd"),
+                "weekly_tokens": item.get("weekly_tokens"),
+                "occurrences": item.get("occurrences"),
+            })
+    badges_block = analysis.get("badges") or {}
+    earned = [b.get("id") for b in (badges_block.get("items") or [])
+              if isinstance(b, dict) and b.get("earned") and b.get("id")]
+    overall_avg = ((analysis.get("scores") or {}).get("_overall") or {}).get("avg")
     return {
-        "overall": ((analysis.get("scores") or {}).get("_overall") or {}).get("avg"),
-        "commits": (ledger.get("output") or {}).get("git_commits"),
-        "sessions": (analysis.get("meta") or {}).get("total_sessions"),
-        "leak_cost": round(sum(cost_vals), 2) if cost_vals else None,
+        "scores": scores,
+        # additive since Phase 3: mean of scored dims at snapshot time —
+        # older lines lack it; readers fall back to mean(scores.values()).
+        "overall_avg": overall_avg,
         "badges": earned,
+        "ledger": {
+            "git_commits": (ledger.get("output") or {}).get("git_commits"),
+            "sessions": (analysis.get("meta") or {}).get("total_sessions"),
+            "sources_detected": ledger.get("sources_detected") or [],
+            "leaks": leaks,
+        },
     }
+
+
+def _current_trend_values(analysis):
+    """The trend metrics for THIS run: build the snapshot entry this run
+    will append (same mapping, by construction) and read it back exactly
+    like a history entry."""
+    return _entry_trend_values(snapshot_entry(analysis))
 
 
 def _entry_trend_values(entry):

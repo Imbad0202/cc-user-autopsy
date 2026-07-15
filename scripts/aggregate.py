@@ -2045,6 +2045,16 @@ def compute_cross_llm(claude_rows, cross_rows):
             "project_matrix": project_matrix, "head_to_head": head_to_head}
 
 
+def _source_detected(card):
+    """A cross_llm source card counts as detected when it produced rows
+    this run. `.get("detected", True)` plus the session_count fallback
+    keep this correct for pre-"detected"-field JSON, where every listed
+    source was, by construction, one that had rows. Shared by
+    compute_ledger (sources_detected) and compute_badges (full-tier
+    filter) so the two can't drift."""
+    return card.get("detected", True) or (card.get("session_count") or 0) > 0
+
+
 def compute_ledger(activity_metas, cross_llm, window_end=None):
     """window_end (aware datetime, optional): the max activity END across
     all activity windows (see main()'s shared computation — blind_spots,
@@ -2074,13 +2084,9 @@ def compute_ledger(activity_metas, cross_llm, window_end=None):
         # cross_llm.sources always has one card per known source, including
         # undetected ones (detected: false, session_count 0) — see the
         # "detected" field added in the codex-fix-wave. Filter to sources
-        # that actually produced rows this run; `.get("detected", True)` and
-        # the session_count fallback keep this correct for pre-"detected"-
-        # field JSON where every listed source was, by construction, one
-        # that had rows.
+        # that actually produced rows this run (see _source_detected).
         "sources_detected": [
-            s["source"] for s in cross_llm["sources"]
-            if s.get("detected", True) or (s.get("session_count") or 0) > 0
+            s["source"] for s in cross_llm["sources"] if _source_detected(s)
         ],
     }
 
@@ -2236,12 +2242,9 @@ def compute_badges(scores, ledger, cross_llm, sessions, rated):
             with_commits, met, thr))
 
     # 6. cross_tool_orchestration — sustained multi-source parallel work.
-    # "detected" fallback mirrors compute_ledger's sources_detected logic
-    # for pre-"detected"-field JSON.
     full_tier = [
         s["source"] for s in (cross_llm or {}).get("sources") or []
-        if s.get("coverage") == "full"
-        and (s.get("detected", True) or (s.get("session_count") or 0) > 0)
+        if s.get("coverage") == "full" and _source_detected(s)
     ]
     cwin = (cross_llm or {}).get("common_window")
     multi_hours = (((cross_llm or {}).get("parallel") or {})
