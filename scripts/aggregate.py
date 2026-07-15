@@ -2224,7 +2224,12 @@ def compute_badges(scores, ledger, cross_llm, sessions, rated):
     commits = out.get("git_commits") or 0
     with_commits = out.get("sessions_with_commits") or 0
     weeks = days / 7 if days else 0
-    per_week = round(commits / weeks, 1) if weeks else None
+    # raw_per_week (unrounded) is what the earned comparison uses; the
+    # rounded value is display-only. Comparing the ROUNDED rate against the
+    # bar let e.g. 71 commits / (100/7) weeks = 4.9699.. round to 5.0 and
+    # wrongly earn against a >=5 bar it never actually cleared.
+    raw_per_week = commits / weeks if weeks else None
+    per_week = round(raw_per_week, 1) if raw_per_week is not None else None
     thr = {"min_window_days": _BADGE_SHIPPING_MIN_WINDOW_DAYS,
            "commits_per_week": _BADGE_SHIPPING_COMMITS_PER_WEEK,
            "min_sessions_with_commits": _BADGE_SHIPPING_MIN_SESSIONS_WITH_COMMITS}
@@ -2236,8 +2241,8 @@ def compute_badges(scores, ledger, cross_llm, sessions, rated):
     else:
         items.append(_badge(
             "shipping_cadence",
-            per_week is not None
-            and per_week >= _BADGE_SHIPPING_COMMITS_PER_WEEK
+            raw_per_week is not None
+            and raw_per_week >= _BADGE_SHIPPING_COMMITS_PER_WEEK
             and with_commits >= _BADGE_SHIPPING_MIN_SESSIONS_WITH_COMMITS,
             with_commits, met, thr))
 

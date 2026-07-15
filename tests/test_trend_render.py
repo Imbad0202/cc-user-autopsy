@@ -9,7 +9,8 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_DIR / "scripts"))
 from report_render import (  # noqa: E402
-    _build_opening_band, _build_trend_ledger, _parse_ledger_narration,
+    _build_opening_band, _build_trend_ledger, _entry_leak_cost,
+    _entry_overall, _entry_trend_values, _parse_ledger_narration,
     _sparkline_svg)
 
 
@@ -123,6 +124,28 @@ class UnlockedTests(unittest.TestCase):
         html = build(ENTRIES_3, locale="zh_TW")
         self.assertIn('id="ledger-trend"', html)
         self.assertNotIn("—", html)
+
+
+class TypedCorruptEntryTests(unittest.TestCase):
+    """A syntactically valid history entry can still carry wrong-typed
+    containers (e.g. `ledger` as a list instead of a dict) if it somehow
+    reaches these functions directly — read_history_snapshots now filters
+    these out at read time, but the render-side helpers stay defensive so
+    a caller passing a raw entry (as these tests do) can't crash either."""
+    def test_entry_trend_values_survives_list_ledger(self):
+        entry = {"date": "2026-01-01", "ledger": [1], "badges": ["x"],
+                 "scores": {"D1": 5}}
+        values = _entry_trend_values(entry)  # must not raise
+        self.assertIsNone(values["commits"])
+        self.assertIsNone(values["sessions"])
+
+    def test_entry_overall_survives_list_scores(self):
+        entry = {"date": "2026-01-01", "scores": ["not", "a", "dict"]}
+        self.assertIsNone(_entry_overall(entry))  # must not raise
+
+    def test_entry_leak_cost_survives_list_ledger(self):
+        entry = {"date": "2026-01-01", "ledger": [1]}
+        self.assertIsNone(_entry_leak_cost(entry))  # must not raise
 
 
 class NarrationBookTests(unittest.TestCase):

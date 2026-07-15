@@ -174,6 +174,25 @@ class ReadHistoryTests(unittest.TestCase):
             self.assertEqual(
                 read_history_snapshots(Path(td) / "nope.jsonl"), [])
 
+    def test_typed_corrupt_entries_skipped(self):
+        # Each of these is a syntactically valid top-level dict with a
+        # parseable date (passes the old validation), but carries a
+        # wrong-typed container that would crash report_render's
+        # _entry_trend_values downstream (e.g. `[1].get(...)` -> AttributeError).
+        with tempfile.TemporaryDirectory() as td:
+            hist = Path(td) / "h.jsonl"
+            good = {"date": "2026-07-01", "schema_version": 1,
+                    "ledger": {"git_commits": 5}}
+            lines = [
+                json.dumps(good),
+                json.dumps({"date": "2026-01-01", "ledger": [1]}),
+                json.dumps({"date": "2026-01-02", "badges": {"not": "a list"}}),
+                json.dumps({"date": "2026-01-03", "scores": ["not", "a", "dict"]}),
+            ]
+            hist.write_text("\n".join(lines) + "\n")
+            entries = read_history_snapshots(hist)
+            self.assertEqual([e["date"] for e in entries], ["2026-07-01"])
+
 
 if __name__ == "__main__":
     unittest.main()

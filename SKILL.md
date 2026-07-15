@@ -606,6 +606,7 @@ The same `build_html.py` produces both audiences from one analysis-data.json. Ke
 | Trend ledger | rendered (locked note below 3 snapshots) | absent |
 | Badges section | absent (badge data still in analysis-data.json + snapshots) | earned-only cards, criteria + n + window; zero earned → section absent |
 | Hero block | Diagnostic letter framing | Practice summary framing |
+| Benchmark caveat | rendered (Usage snapshot §01) | rendered (immediately after hero) |
 | Identity | subtle signature | full letterhead |
 | Peer review | Story format (4 zones + connect-back) | absent |
 | Scoring grid | 9 dimensions, overall average, full disclaimer | absent |

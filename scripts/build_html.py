@@ -86,6 +86,13 @@ def read_history_snapshots(history_path):
     by date — the LAST line for a given date wins, so re-running a report
     the same day doesn't fake trend progress — and returned sorted
     ascending by date. Entries without a parseable ISO date are skipped.
+
+    Also skips entries that are syntactically valid JSON dicts with a good
+    date but carry wrong-typed containers (e.g. `"ledger": [1]` instead of
+    a dict) — those pass a top-level-dict + ISO-date check but crash
+    downstream readers like report_render._entry_trend_values, which call
+    `.get()` on `ledger`/`badges`/`scores` assuming their documented shapes
+    (dict/list/dict respectively).
     """
     p = Path(history_path).expanduser()
     if not p.exists():
@@ -112,6 +119,12 @@ def read_history_snapshots(history_path):
         try:
             date.fromisoformat(d)
         except ValueError:
+            continue
+        if "ledger" in entry and not isinstance(entry["ledger"], dict):
+            continue
+        if "badges" in entry and not isinstance(entry["badges"], list):
+            continue
+        if "scores" in entry and not isinstance(entry["scores"], dict):
             continue
         by_date[d] = entry
     return [by_date[d] for d in sorted(by_date)]

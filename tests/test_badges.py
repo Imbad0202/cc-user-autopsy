@@ -156,6 +156,26 @@ class ShippingCadenceBadgeTests(unittest.TestCase):
         self.assertAlmostEqual(out["items"][4]["metrics"]["commits_per_week"],
                                10.0, places=1)
 
+    def test_rounding_does_not_award_below_raw_bar(self):
+        # 71 commits / (100/7 weeks) = 4.9699.. -> rounds to 5.0, which
+        # would wrongly clear a >=5.0 bar if the ROUNDED value were
+        # compared instead of the raw rate. sessions_with_commits=12 clears
+        # the >=10 floor so this exercises only the rate comparison.
+        out = compute_badges(_scores(), _ledger(days=100, commits=71,
+                                                 with_commits=12),
+                             _cross(), _sessions(60), _sessions(40))
+        b = out["items"][4]
+        self.assertEqual(b["metrics"]["commits_per_week"], 5.0)
+        self.assertFalse(b["earned"])
+
+    def test_earned_when_raw_rate_clears_bar(self):
+        # 72 commits / (100/7 weeks) = 5.04 -> clears >=5.0 on the raw rate.
+        out = compute_badges(_scores(), _ledger(days=100, commits=72,
+                                                 with_commits=12),
+                             _cross(), _sessions(60), _sessions(40))
+        b = out["items"][4]
+        self.assertTrue(b["earned"])
+
 
 class OrchestrationBadgeTests(unittest.TestCase):
     def test_miss_with_one_full_source(self):

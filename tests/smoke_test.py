@@ -231,6 +231,12 @@ def main() -> None:
     assert "legacy-migration" not in hr_html, (
         "non-allowlisted demo project name leaked into HR output")
 
+    # --- codex-review wave: HR must not ship the inline <script> block at
+    # all (finding 1) — HR renders no canvas, so the chart-data script was
+    # pure private-data leakage into the HTML source with zero display use.
+    assert "<script" not in hr_html, (
+        "HR build must not emit any <script> tag (chart data/JS leak)")
+
     # --- Phase 3 trend ledger + badges: seeded 3-snapshot history unlocks
     # the trend book on SELF; badges are earned-only and HR-only ---
     self_html = html

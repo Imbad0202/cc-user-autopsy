@@ -128,8 +128,21 @@ class HrOutputLedgerTests(unittest.TestCase):
         self.assertNotIn("SECRET-WORK-SUMMARY", html)
 
     def test_output_counters_render(self):
+        # Fixture: public-repo has 25 commits / 30 sessions / 900 min (15h);
+        # secret-client has 19 / 31 / 800 min but must be EXCLUDED from the
+        # counters entirely (finding 2) — only allowlisted-project totals
+        # may render, never the ledger.output all-project total (44).
         html = _render_hr([EARNED])
-        self.assertIn("44", html)
+        self.assertIn("25", html)
+        self.assertIn("30", html)
+        self.assertIn("15", html)
+
+    def test_all_project_total_absent(self):
+        # ledger.output.git_commits (44) sums BOTH projects; it must never
+        # appear as the rendered commits counter now that counters are
+        # allowlist-filtered from aggregates.projects instead.
+        html = _render_hr([EARNED])
+        self.assertNotIn(">44<", html)
 
 
 class ScopeDisclosureTests(unittest.TestCase):
@@ -143,6 +156,29 @@ class ScopeDisclosureTests(unittest.TestCase):
         self.assertNotIn("hr_self_awareness_caveat", STRINGS["en"])
 
 
+class HrNoScriptOrChartDataTests(unittest.TestCase):
+    """Finding 1: HR renders no charts, so the inline <script> block (chart
+    data + chart JS) must not ship in HR output source at all — it would
+    leak private behavioral data (tool names, project buckets, heatmaps,
+    weekly tokens/commits) even though no canvas ever displays it."""
+    def test_no_script_tag(self):
+        html = _render_hr([EARNED])
+        self.assertNotIn("<script", html)
+
+    def test_no_canvas_tag(self):
+        html = _render_hr([EARNED])
+        self.assertNotIn("<canvas", html)
+
+
+class HrBenchmarkCaveatTests(unittest.TestCase):
+    """Finding 5: the recruiter report must carry the same
+    unbenchmarked-individual-data disclaimer SELF shows."""
+    def test_benchmark_caveat_present(self):
+        from locales import STRINGS
+        html = _render_hr([EARNED])
+        self.assertIn(STRINGS["en"]["benchmark_caveat"], html)
+
+
 class SelfUnaffectedTests(unittest.TestCase):
     def test_self_never_renders_badge_section(self):
         html = render(
@@ -150,6 +186,14 @@ class SelfUnaffectedTests(unittest.TestCase):
             peer_review_md="", locale="en", audience="self",
             narrative=narrative_en)
         self.assertNotIn('id="badges"', html)
+
+    def test_self_still_has_script_and_i18n(self):
+        html = render(
+            analysis=_analysis([EARNED]), samples_data={},
+            peer_review_md="", locale="en", audience="self",
+            narrative=narrative_en)
+        self.assertIn("const I18N", html)
+        self.assertIn("<canvas", html)
 
 
 if __name__ == "__main__":

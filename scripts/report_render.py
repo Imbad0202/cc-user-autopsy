@@ -826,14 +826,29 @@ def _sparkline_svg(values, width=120, height=28):
             f'points="{" ".join(coords)}"/></svg>')
 
 
+def _entry_field(entry, key, default=None):
+    """Read entry[key], coerced to `default`'s type if wrong-typed.
+
+    History-snapshot entries document `ledger`/`badges`/`scores` as
+    dict/list/dict, but read_history_snapshots' type guard is the only
+    thing that normally enforces that — the three _entry_* readers below
+    are also unit-tested directly with raw (sometimes deliberately
+    malformed) dicts that skip the reader entirely. Centralizing the
+    coercion here means a wrong-typed field (e.g. `"ledger": [1]`, which
+    is truthy and would otherwise survive a plain `or {}`) can't reach a
+    `.get()`/`.values()` call and raise AttributeError, at any call site."""
+    v = entry.get(key)
+    return v if isinstance(v, type(default)) else default
+
+
 def _entry_overall(entry):
     """overall_avg (Phase 3 snapshots) with pre-Phase-3 fallback: mean of
     the per-dim scores map."""
     v = entry.get("overall_avg")
     if isinstance(v, (int, float)):
         return v
-    vals = [x for x in (entry.get("scores") or {}).values()
-            if isinstance(x, (int, float))]
+    scores = _entry_field(entry, "scores", {})
+    vals = [x for x in scores.values() if isinstance(x, (int, float))]
     return round(sum(vals) / len(vals), 2) if vals else None
 
 
@@ -842,7 +857,8 @@ def _entry_leak_cost(entry):
     the COMPACT LIST shape ({type, weekly_cost_usd, ...} items, no
     evidence) — NOT analysis-data.json's {window_weeks, items} dict (see
     docs/SCHEMA-CHANGES.md). Tolerate the dict shape anyway."""
-    leaks = (entry.get("ledger") or {}).get("leaks")
+    led = _entry_field(entry, "ledger", {})
+    leaks = led.get("leaks")
     if isinstance(leaks, dict):
         leaks = leaks.get("items") or []
     if not isinstance(leaks, list):
@@ -907,7 +923,7 @@ def _current_trend_values(analysis):
 
 
 def _entry_trend_values(entry):
-    led = entry.get("ledger") or {}
+    led = _entry_field(entry, "ledger", {})
     badges = entry.get("badges")
     return {
         "overall": _entry_overall(entry),
@@ -1095,20 +1111,37 @@ def _build_badges_section(badges, window, locale):
         f'<div class="c-badge-grid">{"".join(cards)}</div>', locale)
 
 
-def _build_hr_output_ledger(ledger, shipped, artifacts_list, is_public,
+def _build_hr_output_ledger(projects, shipped, artifacts_list, is_public,
                             locale):
-    """Recruiter output ledger (spec §4): ledger.output counters +
-    allowlist-filtered shipped work + public artifact links. Non-public
-    items are excluded entirely, not shown as redacted filler."""
-    out = (ledger or {}).get("output") or {}
+    """Recruiter output ledger (spec §4): counters computed from ONLY the
+    allowlisted projects + allowlist-filtered shipped work + public
+    artifact links. Non-public items are excluded entirely, not shown as
+    redacted filler.
+
+    Counters previously summed ledger.output (an ALL-projects transcript-
+    pool total, including non-allowlisted work) — that contradicted this
+    section's own method text ("allowlisted") and leaked a private
+    project's commit/session/hour volume into the total shown to an
+    outside reader, even though the project's NAME was correctly redacted
+    elsewhere. Recomputing from `projects` (analysis["aggregates"]["projects"],
+    same shape as agg["projects"] used elsewhere in render()) filtered to
+    `is_public(label)` fixes that: only allowlisted projects contribute."""
+    public_projects = [
+        p for p in (projects or {}).values()
+        if is_public(p.get("label", ""))
+    ]
+    total_commits = sum(p.get("commits") or 0 for p in public_projects)
+    total_sessions = sum(p.get("sessions") or 0 for p in public_projects)
+    total_hours = round(
+        sum(p.get("duration_min") or 0 for p in public_projects) / 60)
     counters = (
         '<div class="metrics">'
-        f'<div class="metric"><div class="n">{fmt(out.get("git_commits") or 0)}</div>'
+        f'<div class="metric"><div class="n">{fmt(total_commits)}</div>'
         f'<div class="lbl">{t(locale, "hr_output_commits")}</div></div>'
-        f'<div class="metric"><div class="n">{fmt(out.get("git_pushes") or 0)}</div>'
-        f'<div class="lbl">{t(locale, "hr_output_pushes")}</div></div>'
-        f'<div class="metric"><div class="n">{fmt(out.get("sessions_with_commits") or 0)}</div>'
-        f'<div class="lbl">{t(locale, "hr_output_sessions_with_commits")}</div></div>'
+        f'<div class="metric"><div class="n">{fmt(total_sessions)}</div>'
+        f'<div class="lbl">{t(locale, "hr_output_sessions")}</div></div>'
+        f'<div class="metric"><div class="n">{fmt(total_hours)}</div>'
+        f'<div class="lbl">{t(locale, "hr_output_hours")}</div></div>'
         '</div>')
 
     # Codex v3 (V4 HR review): at most 3 PUBLIC items. Redacted items add
@@ -2421,7 +2454,17 @@ $method_section
 
 </main>
 
-<script>
+$charts_script
+</body>
+</html>
+"""
+
+# ---- SELF-only inline <script> block: chart data + chart-rendering JS.
+# HR renders no canvas elements at all (see render()'s HR branch), so this
+# entire block — including every chart's raw data (project/tool labels,
+# heatmap, weekly series) — must never be substituted into HR output. See
+# render(): subs["charts_script"] is only populated for audience == "self".
+CHARTS_SCRIPT_TEMPLATE = r"""<script>
 const I18N = $i18n_json;
 const INK = '#1a1916';
 const INK_SOFT = '#464239';
@@ -3008,8 +3051,6 @@ function renderAll() {
 window.addEventListener('load', renderAll);
 window.addEventListener('resize', debounce(renderAll, 120));
 </script>
-</body>
-</html>
 """
 
 def render(
@@ -3373,13 +3414,14 @@ def render(
             f'<h1 class="title">{t(locale, "hero_hr_title_line1")}<br>'
             f'<em>{t(locale, "hero_hr_title_line2_em")}</em></h1>\n'
             f'<p class="dek">{t(locale, "hero_hr_dek")}</p>'
+            f'<p class="benchmark-caveat">{t(locale, "benchmark_caveat")}</p>'
         )
         profile_section = ""
         how_to_read_section = ""
         badges_section = _build_badges_section(
             badges_data, ledger_data.get("window"), locale)
         shipped_section = _build_hr_output_ledger(
-            ledger_data, shipped, artifacts_list, is_public, locale)
+            agg["projects"], shipped, artifacts_list, is_public, locale)
         artifacts_section = ""
 
         # TOC — recruiter v1 order: badges -> output ledger -> case study -> method
@@ -3806,6 +3848,16 @@ def render(
         "wk_plen": json_for_script([w["avg_prompt_len"] for w in weekly]),
         "wk_ta": json_for_script([w["uses_task_agent"] for w in weekly]),
     }
+
+    # HR renders no canvas elements (patterns_section / trends_section are
+    # both "" in the HR branch above), so the entire chart script — which
+    # embeds raw private behavioral data (tool names, project buckets,
+    # heatmap, weekly tokens/commits) into the HTML source via $-substitution
+    # — must not ship in HR output at all, not even as inert unused JS.
+    subs["charts_script"] = (
+        string.Template(CHARTS_SCRIPT_TEMPLATE).safe_substitute(subs)
+        if audience == "self" else ""
+    )
 
     # string.Template allows $var and ${var}; literal $ needs $$
     # The CSS in template already uses only CSS vars via var(--x), so no clash.
