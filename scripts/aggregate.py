@@ -2140,9 +2140,22 @@ def compute_badges(scores, ledger, cross_llm, sessions, rated):
 
     # 1. delegation — D1 metrics over rated Task-agent sessions
     d1 = scores.get("D1_delegation") or {}
-    ta_rated_n = sum(1 for s in rated if s.get("uses_task_agent"))
+    ta_rated = [s for s in rated if s.get("uses_task_agent")]
+    ta_rated_n = len(ta_rated)
     ta_rate = d1.get("metric_ta_rate_pct")
     good_ta = d1.get("metric_good_rate_with_ta_pct")
+    # Raw-vs-display split, same rule as shipping_cadence below: D1's
+    # metric_* fields are rounded to one decimal for display, so e.g.
+    # 58/129 sessions = 44.96% adoption displays as 45.0 — gating on the
+    # rounded value would award a >=45 bar that was never actually
+    # cleared. Recompute unrounded rates from the same pools D1 reads
+    # (main() passes compute_badges the identical sessions/rated lists)
+    # and gate on THOSE; met keeps the rounded values for display.
+    raw_ta_rate = (100 * sum(1 for s in sessions if s.get("uses_task_agent"))
+                   / len(sessions)) if sessions else None
+    raw_good_ta = (100 * sum(1 for s in ta_rated
+                             if is_good(s.get("outcome") or ""))
+                   / ta_rated_n) if ta_rated_n else None
     thr = {"min_ta_rated": _BADGE_DELEGATION_MIN_TA_RATED,
            "ta_rate_pct": _BADGE_DELEGATION_TA_RATE,
            "good_rate_with_ta_pct": _BADGE_DELEGATION_GOOD_RATE}
@@ -2156,8 +2169,10 @@ def compute_badges(scores, ledger, cross_llm, sessions, rated):
     else:
         items.append(_badge(
             "delegation",
-            ta_rate >= _BADGE_DELEGATION_TA_RATE
-            and good_ta >= _BADGE_DELEGATION_GOOD_RATE,
+            raw_ta_rate is not None
+            and raw_ta_rate >= _BADGE_DELEGATION_TA_RATE
+            and raw_good_ta is not None
+            and raw_good_ta >= _BADGE_DELEGATION_GOOD_RATE,
             ta_rated_n, met, thr))
 
     # 2. root_cause — D2 iterative-buggy co-occurrence over rated pool
