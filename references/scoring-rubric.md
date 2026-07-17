@@ -471,14 +471,17 @@ sessions drops below gate"), read per-heuristic:
   artifact is precisely the finding; guarded instead by the structural
   exclusions (scratch paths, `(unknown)` project, 14-day horizon).
 
-## Badges (v1, provisional)
+## Badges (v1.1)
 
 The badge layer (spec §4) publishes absolute thresholds; claims that clear
 them may be displayed affirmatively in external report versions. Badges are
 threshold-based, never percentile-based; unearned badges are silently absent
-in external versions (never shown as "failed"). Bars are **provisional v1**
-(spec §13) — revisit after the first real runs. Where a 9-dim analogue
-exists, each bar equals that dimension's "score ≥ 8" band. Badge wording in
+in external versions (never shown as "failed"). Bars are **v1.1**: the
+provisional v1 bars were reviewed against the first real runs (spec §13) —
+see the review log below. Where a 9-dim analogue exists, each bar equals
+that dimension's "score ≥ 8" band, with one deliberate exception:
+`token_efficiency`'s cache-hit leg (≥ 80%) is an additional prior, stricter
+than the cache adjustment inside the D9 band itself. Badge wording in
 reports is fixed template text in `scripts/locales.py`, not LLM prose.
 Computed by `compute_badges()` in `scripts/aggregate.py`; the full item list
 (earned and unearned, with metrics and thresholds) ships in
@@ -486,9 +489,25 @@ Computed by `compute_badges()` in `scripts/aggregate.py`; the full item list
 
 | Badge | Earned when | Minimum sample |
 |---|---|---|
-| `delegation` | Task-agent adoption ≥ 30% of sessions AND good-outcome rate on Task-agent sessions ≥ 70% | ≥ 15 rated Task-agent sessions |
+| `delegation` | Task-agent adoption ≥ 45% of sessions AND good-outcome rate on Task-agent sessions ≥ 65% | ≥ 15 rated Task-agent sessions |
 | `root_cause` | D2 scored AND iterative-refinement-with-buggy-code co-occurrence ≤ 7% of rated sessions | ≥ 30 rated sessions |
 | `tool_breadth` | MCP used in ≥ 15% of sessions AND top-3 built-in tools (Bash/Read/Edit) ≤ 55% of all tool calls | ≥ 30 sessions |
 | `token_efficiency` | not-good/good token ratio ≤ 1.1 AND cache hit ≥ 80% | ≥ 30 rated sessions |
 | `shipping_cadence` | git commits per active week ≥ 5 (evidence-backed ledger count) AND ≥ 10 sessions with commits | ledger window ≥ 14 days |
 | `cross_tool_orchestration` | ≥ 2 full-tier sources detected AND common window ≥ 14 days (not degraded) AND ≥ 10 hours of multi-source parallel work | n = multi-source hours |
+
+### v1.1 review log (2026-07-17)
+
+Provisional v1 bars were reviewed against the first real runs, as spec §13
+scheduled. Outcome:
+
+- `delegation` — **corrected** from adoption ≥ 30% / good-rate ≥ 70% to
+  adoption ≥ 45% / good-rate ≥ 65%. The v1 pair mixed the D1 score-7 band's
+  adoption bar with the score-9 band's good-rate bar, contradicting this
+  section's own alignment rule; the corrected pair equals the published D1
+  "score 8" band above.
+- All other bars **confirmed unchanged**: `root_cause` (≤ 7% = D2 band) and
+  `tool_breadth` (≥ 15% / ≤ 55% = D6 band) already matched their bands;
+  `token_efficiency` keeps ratio ≤ 1.1 (= D9 base band) plus the cache ≥ 80%
+  prior; `shipping_cadence` and `cross_tool_orchestration` have no dimension
+  analogue and their bars remain defensible minimums for sustained practice.

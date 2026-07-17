@@ -1,4 +1,4 @@
-"""compute_badges(): threshold-based badge layer (spec §4, bars provisional v1).
+"""compute_badges(): threshold-based badge layer (spec §4, bars v1.1).
 
 Every badge: one earn case, one miss case, one below-sample case.
 Fixture dicts mirror the exact metric field names the D-scorers emit.
@@ -55,7 +55,7 @@ class BadgeShapeTests(unittest.TestCase):
         out = compute_badges(_scores(), _ledger(), _cross(),
                              _sessions(60), _sessions(40))
         self.assertEqual(out["schema_version"], 1)
-        self.assertEqual(out["standard_version"], "v1")
+        self.assertEqual(out["standard_version"], "v1.1")
         self.assertEqual(
             [b["id"] for b in out["items"]],
             ["delegation", "root_cause", "tool_breadth", "token_efficiency",
@@ -72,12 +72,62 @@ class BadgeShapeTests(unittest.TestCase):
         self.assertTrue(all(b["earned"] for b in out["items"]))
 
 
+def _delegation_pools(total, ta, ta_good, ta_bad, non_ta_rated=10):
+    """Session/rated pools with exact delegation rates encoded: `ta`/`total`
+    Task-agent adoption in sessions; a rated pool whose Task-agent rows
+    split `ta_good` good / `ta_bad` not-good. The earned gate recomputes
+    raw rates from these pools (not from the rounded D1 display metrics),
+    so boundary cases must be expressed here."""
+    sessions = [{"uses_task_agent": i < ta, "outcome": "fully_achieved"}
+                for i in range(total)]
+    rated = ([{"uses_task_agent": True, "outcome": "fully_achieved"}] * ta_good
+             + [{"uses_task_agent": True, "outcome": "not_achieved"}] * ta_bad
+             + [{"uses_task_agent": False, "outcome": "fully_achieved"}]
+             * non_ta_rated)
+    return sessions, rated
+
+
 class DelegationBadgeTests(unittest.TestCase):
-    def test_miss_when_good_rate_below_bar(self):
-        sc = _scores(D1_delegation={"score": 7, "metric_ta_rate_pct": 45.0,
-                                    "metric_good_rate_with_ta_pct": 60.0})
-        out = compute_badges(sc, _ledger(), _cross(), _sessions(60), _sessions(40))
+    def test_miss_when_adoption_below_bar(self):
+        # 20/60 = 33.3% adoption cleared the v1 bar (30) but not v1.1 (45).
+        sessions, rated = _delegation_pools(60, 20, ta_good=20, ta_bad=0)
+        sc = _scores(D1_delegation={"score": 7, "metric_ta_rate_pct": 33.3,
+                                    "metric_good_rate_with_ta_pct": 100.0})
+        out = compute_badges(sc, _ledger(), _cross(), sessions, rated)
         self.assertFalse(out["items"][0]["earned"])
+
+    def test_rounding_does_not_award_below_raw_bar(self):
+        # 58/129 = 44.961% raw adoption; D1's display metric rounds it to
+        # 45.0, which would wrongly clear the >=45 bar if the ROUNDED
+        # value were gated on instead of the raw rate.
+        sessions, rated = _delegation_pools(129, 58, ta_good=20, ta_bad=0)
+        sc = _scores(D1_delegation={"score": 7, "metric_ta_rate_pct": 45.0,
+                                    "metric_good_rate_with_ta_pct": 100.0})
+        out = compute_badges(sc, _ledger(), _cross(), sessions, rated)
+        self.assertFalse(out["items"][0]["earned"])
+
+    def test_miss_when_good_rate_below_bar(self):
+        # 12/20 = 60% good rate on Task-agent rated sessions, below 65.
+        sessions, rated = _delegation_pools(60, 30, ta_good=12, ta_bad=8)
+        sc = _scores(D1_delegation={"score": 7, "metric_ta_rate_pct": 50.0,
+                                    "metric_good_rate_with_ta_pct": 60.0})
+        out = compute_badges(sc, _ledger(), _cross(), sessions, rated)
+        self.assertFalse(out["items"][0]["earned"])
+
+    def test_earned_at_recalibrated_bars(self):
+        # Exactly on both v1.1 bars: 27/60 = 45.0% adoption, 13/20 = 65.0%
+        # good rate. The good rate would MISS the old v1 bar (70), so this
+        # pins the lowered threshold; the assertions on the emitted
+        # thresholds pin the published constants themselves.
+        sessions, rated = _delegation_pools(60, 27, ta_good=13, ta_bad=7)
+        sc = _scores(D1_delegation={"score": 8, "metric_ta_rate_pct": 45.0,
+                                    "metric_good_rate_with_ta_pct": 65.0})
+        out = compute_badges(sc, _ledger(), _cross(), sessions, rated)
+        b = out["items"][0]
+        self.assertTrue(b["earned"])
+        self.assertEqual(b["thresholds"]["ta_rate_pct"], 45.0)
+        self.assertEqual(b["thresholds"]["good_rate_with_ta_pct"], 65.0)
+        self.assertEqual(b["thresholds"]["min_ta_rated"], 15)
 
     def test_below_sample_not_earned_with_reason(self):
         # only 10 rated TA sessions < 15 floor

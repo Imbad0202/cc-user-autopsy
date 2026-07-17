@@ -251,7 +251,7 @@ class HistorySnapshotsAndBadgesTests(unittest.TestCase):
     def test_badges_block_present_with_six_items(self):
         badges = self.analysis["badges"]
         self.assertEqual(len(badges["items"]), 6)
-        self.assertEqual(badges["standard_version"], "v1")
+        self.assertEqual(badges["standard_version"], "v1.1")
 
     def test_at_least_one_badge_earned_deterministically(self):
         # Phase 2 lesson: a badge path nobody reaches is a fake sentinel.
