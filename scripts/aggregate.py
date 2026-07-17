@@ -2092,18 +2092,19 @@ def compute_ledger(activity_metas, cross_llm, window_end=None):
 
 
 # --- Badge layer (Phase 3, spec §4) -----------------------------------
-# Bars are PROVISIONAL v1 (spec §13) and mirrored in
-# references/scoring-rubric.md "## Badges (v1, provisional)" — keep the
-# two in sync (tests/test_badges.py checks ids; numbers are hand-synced).
+# Bars are v1.1 (provisional v1 reviewed against the first real runs on
+# 2026-07-17, per spec §13) and mirrored in references/scoring-rubric.md
+# "## Badges (v1.1)" — keep the two in sync (tests/test_badges.py checks
+# ids; numbers are hand-synced; the rubric's review log records changes).
 # Where a 9-dim analogue exists (D1/D2/D6/D9) each bar equals that
 # dimension's "score >= 8" band, so earning a badge reads as "top band
 # with enough sample". Threshold constants are independent from the
 # scorers' literals on purpose — retuning a score curve must not silently
 # move a published badge bar.
-_BADGE_STANDARD_VERSION = "v1"
+_BADGE_STANDARD_VERSION = "v1.1"
 _BADGE_DELEGATION_MIN_TA_RATED = 15
-_BADGE_DELEGATION_TA_RATE = 30.0
-_BADGE_DELEGATION_GOOD_RATE = 70.0
+_BADGE_DELEGATION_TA_RATE = 45.0
+_BADGE_DELEGATION_GOOD_RATE = 65.0
 _BADGE_ROOTCAUSE_MIN_RATED = 30
 _BADGE_ROOTCAUSE_MAX_ITER_BUGGY_PCT = 7.0
 _BADGE_BREADTH_MIN_SESSIONS = 30

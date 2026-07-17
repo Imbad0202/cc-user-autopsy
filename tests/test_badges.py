@@ -1,4 +1,4 @@
-"""compute_badges(): threshold-based badge layer (spec §4, bars provisional v1).
+"""compute_badges(): threshold-based badge layer (spec §4, bars v1.1).
 
 Every badge: one earn case, one miss case, one below-sample case.
 Fixture dicts mirror the exact metric field names the D-scorers emit.
@@ -55,7 +55,7 @@ class BadgeShapeTests(unittest.TestCase):
         out = compute_badges(_scores(), _ledger(), _cross(),
                              _sessions(60), _sessions(40))
         self.assertEqual(out["schema_version"], 1)
-        self.assertEqual(out["standard_version"], "v1")
+        self.assertEqual(out["standard_version"], "v1.1")
         self.assertEqual(
             [b["id"] for b in out["items"]],
             ["delegation", "root_cause", "tool_breadth", "token_efficiency",
@@ -73,6 +73,13 @@ class BadgeShapeTests(unittest.TestCase):
 
 
 class DelegationBadgeTests(unittest.TestCase):
+    def test_miss_when_adoption_below_bar(self):
+        # 40% adoption cleared the v1 bar (30) but not the v1.1 bar (45).
+        sc = _scores(D1_delegation={"score": 7, "metric_ta_rate_pct": 40.0,
+                                    "metric_good_rate_with_ta_pct": 75.0})
+        out = compute_badges(sc, _ledger(), _cross(), _sessions(60), _sessions(40))
+        self.assertFalse(out["items"][0]["earned"])
+
     def test_miss_when_good_rate_below_bar(self):
         sc = _scores(D1_delegation={"score": 7, "metric_ta_rate_pct": 45.0,
                                     "metric_good_rate_with_ta_pct": 60.0})
