@@ -426,7 +426,7 @@ Don't use HTML `<dl><dt><dd>` tags — `md_to_html` escapes them. Use bold + par
 
 **Cache check:** if `/tmp/cc-autopsy/peer-review.zh_TW.md` already exists and is newer than `/tmp/cc-autopsy/peer-review.md`, use it as-is and skip the rewrite. Re-running the skill should not re-spend tokens on rewriting unchanged peer-review prose.
 
-**Rewrite prompt** (run via the Task tool with `model=claude-sonnet-4-5` or newer, never haiku):
+**Rewrite prompt** (run via the Agent tool with `model: "sonnet"` or a stronger alias, never haiku):
 
 > You are a native zh_TW peer reviewer of Claude Code workflow. Rewrite the following English peer-review report into Traditional Chinese.
 >
