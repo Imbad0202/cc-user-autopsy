@@ -54,6 +54,23 @@ PRICING = {
     "claude-haiku-5-5":  {"input": 0.50, "output":  2.5, "cache_write":  1.0, "cache_read": 0.05},
     "claude-haiku-4-5":  {"input":  1.0, "output":  5.0, "cache_write":  2.0, "cache_read": 0.10},
 }
+# Two uses of PRICING with opposite directions:
+#   - ceiling/estimate (compute_api_equivalent_cost, _FALLBACK_PRICING) reads
+#     PRICING as-is, so Haiku 5.5 is priced at the >100K tier (over-report).
+#   - floor (leak ledger: _leak_cost_usd, _row_input_rate_floor) promises a
+#     lower bound, so it must not be inflated; it reads _lower_bound_rates(),
+#     which swaps in the cheapest tier for models that have price tiers.
+PRICING_LOWER_BOUND_OVERRIDES = {
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.5, "cache_write": 0.20, "cache_read": 0.01},
+}
+
+
+def _lower_bound_rates(model):
+    """Rates safe to use in a lower-bound claim for an already-normalized,
+    PRICING-listed model id."""
+    return PRICING_LOWER_BOUND_OVERRIDES.get(model, PRICING[model])
+
+
 # Fallback used when model_counts references a model not in PRICING, or when
 # there is no model info at all. Each field is the maximum across the whole
 # table, so an unknown model is never priced below any known one: missing-model
@@ -2343,7 +2360,7 @@ def _row_input_rate_floor(row):
     models = {_normalize_model_id(m) for m in (row.get("model_counts") or {})}
     if not models or any(m not in PRICING for m in models):
         return 0.0
-    return min(PRICING[m]["input"] for m in models)
+    return min(_lower_bound_rates(m)["input"] for m in models)
 
 
 def bs_repeated_instructions(claude_rows, cross_rows, window_start=None,
@@ -3012,7 +3029,7 @@ def _leak_cost_usd(sessions):
         models = {_normalize_model_id(m) for m in (s.get("model_counts") or {})}
         if not models or any(m not in PRICING for m in models):
             continue  # (a) no verified rate — withhold the USD claim
-        rates = [PRICING[m] for m in models]
+        rates = [_lower_bound_rates(m) for m in models]
         in_rate = min(p["input"] for p in rates)
         out_rate = min(p["output"] for p in rates)
         cr_rate = min(p["cache_read"] for p in rates)

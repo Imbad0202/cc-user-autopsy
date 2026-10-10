@@ -153,6 +153,26 @@ class HaikuLongPromptTierTests(unittest.TestCase):
                          (0.50, 2.50, 1.00, 0.05))
 
 
+class LowerBoundTierTests(unittest.TestCase):
+    """Floors (leak ledger) use Haiku 5.5's <=100K tier; the API-equivalent
+    estimate keeps the >100K tier."""
+    def _sessions(self):
+        return [{"input_tokens": 50_000, "output_tokens": 10_000,
+                 "cache_create_tokens": 0, "cache_read_tokens": 0,
+                 "model_counts": {"claude-haiku-5-5": 1}} for _ in range(6)]
+
+    def test_leak_cost_uses_lower_bound_tier(self):
+        self.assertEqual(aggregate._leak_cost_usd(self._sessions()), 0.06)
+
+    def test_api_estimate_keeps_ceiling_tier(self):
+        self.assertEqual(aggregate.compute_api_equivalent_cost(self._sessions()), 0.30)
+
+    def test_input_rate_floor_uses_lower_bound_tier(self):
+        row = {"model_counts": {"claude-haiku-5-5-20261001": 1}}
+        self.assertEqual(aggregate._row_input_rate_floor(row), 0.10)
+        self.assertEqual(aggregate._lower_bound_rates("claude-opus-5")["input"], 5.0)
+
+
 class Claude5CacheReadAndFallbackTests(unittest.TestCase):
     def _cr_cost(self, model):
         return aggregate.compute_api_equivalent_cost([{
