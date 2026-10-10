@@ -25,6 +25,10 @@ class PricingTableTests(unittest.TestCase):
             "claude-opus-4-7", "claude-opus-4-6", "claude-opus-4-5",
             "claude-sonnet-4-6", "claude-sonnet-4-5",
             "claude-haiku-4-5",
+            "claude-fable-5-1", "claude-fable-5",
+            "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8",
+            "claude-sonnet-5-5", "claude-sonnet-5",
+            "claude-haiku-5-5",
         }
         self.assertTrue(expected.issubset(set(aggregate.PRICING.keys())),
                         f"missing models: {expected - set(aggregate.PRICING.keys())}")
@@ -103,8 +107,42 @@ class CostCalcTests(unittest.TestCase):
         cost = aggregate.compute_api_equivalent_cost(sessions)
         # Should be close to the Opus input rate (conservative fallback).
         self.assertGreater(cost, 0)
-        self.assertAlmostEqual(cost, aggregate.PRICING["claude-opus-4-6"]["input"],
+        self.assertAlmostEqual(cost, aggregate.PRICING["claude-opus-5-5"]["input"],
                                places=2)
+
+
+class Claude5PricingTests(unittest.TestCase):
+    CLAUDE5 = ["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5",
+               "claude-opus-5", "claude-sonnet-5-5", "claude-sonnet-5",
+               "claude-haiku-5-5"]
+
+    def _input_cost(self, model):
+        return aggregate.compute_api_equivalent_cost([{
+            "input_tokens": 1_000_000, "output_tokens": 0,
+            "cache_create_tokens": 0, "cache_read_tokens": 0,
+            "model_counts": {model: 1},
+        }])
+
+    def test_claude5_models_do_not_fall_back(self):
+        """Each Claude 5 id (also with a date suffix) must price from its own
+        row, not _FALLBACK_PRICING. haiku-5-5 and sonnet-5 differ from the
+        fallback input rate, so a silent fallback would change the number."""
+        for m in self.CLAUDE5:
+            for mid in (m, m + "-20261001"):
+                self.assertAlmostEqual(
+                    self._input_cost(mid), aggregate.PRICING[m]["input"],
+                    places=2, msg=mid)
+        # Distinct from the fallback where the rates differ.
+        self.assertNotEqual(aggregate.PRICING["claude-haiku-5-5"],
+                            aggregate._FALLBACK_PRICING)
+        self.assertNotEqual(aggregate.PRICING["claude-sonnet-5"],
+                            aggregate._FALLBACK_PRICING)
+
+    def test_opus5_and_opus55_are_not_confused(self):
+        """Exact-key lookup: 'claude-opus-5' must not match 'claude-opus-5-5'."""
+        self.assertAlmostEqual(self._input_cost("claude-opus-5"), 5.0, places=2)
+        self.assertAlmostEqual(self._input_cost("claude-opus-5-5"), 4.0, places=2)
+        self.assertAlmostEqual(self._input_cost("claude-sonnet-5"), 2.0, places=2)
 
 
 class ActivityPanelCostTests(unittest.TestCase):

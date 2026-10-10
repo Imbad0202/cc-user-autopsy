@@ -30,20 +30,32 @@ WRITING_GOALS = {
 # Public API pricing in USD per 1M tokens. cache_write uses the 1h ephemeral
 # tier (2× base input) as a conservative upper bound — Claude Code doesn't
 # expose which TTL its caching layer actually picks, and 1h dominates system
-# prompts. Pricing snapshot: 2026-04. Update when anthropic.com/pricing changes.
+# prompts. (anthropic.com/pricing lists the 5-minute write rate, 1.25× input;
+# cache_read is taken from the page as-is.) Pricing snapshot: 2026-10-10.
+# Update when anthropic.com/pricing changes. claude-haiku-5-5 is tiered by
+# prompt size on the page; the ≤100K-token rate is used here (rates above
+# 100K are 5× higher: input 0.50, output 2.50, cache read 0.05).
 PRICING = {
-    "claude-opus-4-7":   {"input": 15.0, "output": 75.0, "cache_write": 30.0, "cache_read": 1.50},
-    "claude-opus-4-6":   {"input": 15.0, "output": 75.0, "cache_write": 30.0, "cache_read": 1.50},
-    "claude-opus-4-5":   {"input": 15.0, "output": 75.0, "cache_write": 30.0, "cache_read": 1.50},
+    "claude-fable-5-1":  {"input": 10.0, "output": 50.0, "cache_write": 20.0, "cache_read": 0.25},
+    "claude-fable-5":    {"input": 10.0, "output": 50.0, "cache_write": 20.0, "cache_read": 1.00},
+    "claude-opus-5-5":   {"input":  4.0, "output": 20.0, "cache_write":  8.0, "cache_read": 0.20},
+    "claude-opus-5":     {"input":  5.0, "output": 25.0, "cache_write": 10.0, "cache_read": 0.50},
+    "claude-opus-4-8":   {"input":  5.0, "output": 25.0, "cache_write": 10.0, "cache_read": 0.50},
+    "claude-opus-4-7":   {"input":  5.0, "output": 25.0, "cache_write": 10.0, "cache_read": 0.50},
+    "claude-opus-4-6":   {"input":  5.0, "output": 25.0, "cache_write": 10.0, "cache_read": 0.50},
+    "claude-opus-4-5":   {"input":  5.0, "output": 25.0, "cache_write": 10.0, "cache_read": 0.50},
+    "claude-sonnet-5-5": {"input":  2.0, "output": 10.0, "cache_write":  4.0, "cache_read": 0.10},
+    "claude-sonnet-5":   {"input":  2.0, "output": 10.0, "cache_write":  4.0, "cache_read": 0.20},
     "claude-sonnet-4-6": {"input":  3.0, "output": 15.0, "cache_write":  6.0, "cache_read": 0.30},
     "claude-sonnet-4-5": {"input":  3.0, "output": 15.0, "cache_write":  6.0, "cache_read": 0.30},
-    "claude-haiku-4-5":  {"input": 0.80, "output":  4.0, "cache_write":  1.6, "cache_read": 0.08},
+    "claude-haiku-5-5":  {"input": 0.10, "output":  0.5, "cache_write": 0.20, "cache_read": 0.01},
+    "claude-haiku-4-5":  {"input":  1.0, "output":  5.0, "cache_write":  2.0, "cache_read": 0.10},
 }
 # Fallback used when model_counts references a model not in PRICING. We
 # choose Opus over cheaper tiers so missing-model cases over-report rather
 # than silently drop to $0 — a recently-released Opus variant is the most
 # likely gap.
-_FALLBACK_PRICING = PRICING["claude-opus-4-6"]
+_FALLBACK_PRICING = PRICING["claude-opus-5-5"]
 
 _PATTERN_MIN_SAMPLE = 5  # minimum group size to emit a per-dimension pattern contrast sentence
 _USAGE_CHAR_MIN_SESSIONS = 10  # minimum session count to emit the usage_characteristics block
@@ -80,7 +92,7 @@ def compute_api_equivalent_cost(sessions):
     total_msgs = sum(model_msgs.values())
     if total_msgs == 0:
         # No model info — assume opus (conservative upper bound).
-        weights = {"claude-opus-4-6": 1.0}
+        weights = {"claude-opus-5-5": 1.0}
     else:
         weights = {m: c / total_msgs for m, c in model_msgs.items()}
 
