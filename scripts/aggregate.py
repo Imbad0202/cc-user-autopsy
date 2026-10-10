@@ -51,11 +51,15 @@ PRICING = {
     "claude-haiku-5-5":  {"input": 0.10, "output":  0.5, "cache_write": 0.20, "cache_read": 0.01},
     "claude-haiku-4-5":  {"input":  1.0, "output":  5.0, "cache_write":  2.0, "cache_read": 0.10},
 }
-# Fallback used when model_counts references a model not in PRICING. We
-# choose Opus over cheaper tiers so missing-model cases over-report rather
-# than silently drop to $0 — a recently-released Opus variant is the most
-# likely gap.
-_FALLBACK_PRICING = PRICING["claude-opus-5-5"]
+# Fallback used when model_counts references a model not in PRICING, or when
+# there is no model info at all. Each field is the maximum across the whole
+# table, so an unknown model is never priced below any known one: missing-model
+# cases over-report rather than silently under-report (or drop to $0). It is
+# derived from PRICING, so it tracks the table when rows are added.
+_FALLBACK_PRICING = {
+    k: max(p[k] for p in PRICING.values())
+    for k in ("input", "output", "cache_write", "cache_read")
+}
 
 _PATTERN_MIN_SAMPLE = 5  # minimum group size to emit a per-dimension pattern contrast sentence
 _USAGE_CHAR_MIN_SESSIONS = 10  # minimum session count to emit the usage_characteristics block
@@ -91,8 +95,9 @@ def compute_api_equivalent_cost(sessions):
             model_msgs[_normalize_model_id(m)] += c
     total_msgs = sum(model_msgs.values())
     if total_msgs == 0:
-        # No model info — assume opus (conservative upper bound).
-        weights = {"claude-opus-5-5": 1.0}
+        # No model info — price at _FALLBACK_PRICING (per-field max of the
+        # table; the key is deliberately absent from PRICING).
+        weights = {"<no-model-info>": 1.0}
     else:
         weights = {m: c / total_msgs for m, c in model_msgs.items()}
 

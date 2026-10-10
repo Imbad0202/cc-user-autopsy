@@ -107,7 +107,7 @@ class CostCalcTests(unittest.TestCase):
         cost = aggregate.compute_api_equivalent_cost(sessions)
         # Should be close to the Opus input rate (conservative fallback).
         self.assertGreater(cost, 0)
-        self.assertAlmostEqual(cost, aggregate.PRICING["claude-opus-5-5"]["input"],
+        self.assertAlmostEqual(cost, aggregate._FALLBACK_PRICING["input"],
                                places=2)
 
 
@@ -143,6 +143,37 @@ class Claude5PricingTests(unittest.TestCase):
         self.assertAlmostEqual(self._input_cost("claude-opus-5"), 5.0, places=2)
         self.assertAlmostEqual(self._input_cost("claude-opus-5-5"), 4.0, places=2)
         self.assertAlmostEqual(self._input_cost("claude-sonnet-5"), 2.0, places=2)
+
+
+class Claude5CacheReadAndFallbackTests(unittest.TestCase):
+    def _cr_cost(self, model):
+        return aggregate.compute_api_equivalent_cost([{
+            "input_tokens": 0, "output_tokens": 0,
+            "cache_create_tokens": 0, "cache_read_tokens": 1_000_000,
+            "model_counts": {model: 1},
+        }])
+
+    def test_cache_read_rates_are_per_model(self):
+        """Independent expectations from anthropic.com/pricing (2026-10-10)."""
+        for model, rate in [("claude-fable-5-1", 0.25), ("claude-fable-5", 1.00),
+                            ("claude-sonnet-5-5", 0.10), ("claude-sonnet-5", 0.20)]:
+            for mid in (model, model + "-20261001"):
+                self.assertAlmostEqual(self._cr_cost(mid), rate, places=2, msg=mid)
+
+    def test_fallback_is_per_field_max_of_table(self):
+        """Unknown models must never be priced below any known model."""
+        for field in ("input", "output", "cache_write", "cache_read"):
+            top = max(p[field] for p in aggregate.PRICING.values())
+            self.assertEqual(aggregate._FALLBACK_PRICING[field], top, field)
+            self.assertEqual(aggregate._FALLBACK_PRICING[field],
+                             max(p[field] for p in aggregate.PRICING.values()))
+
+    def test_no_model_info_uses_same_fallback(self):
+        cost = aggregate.compute_api_equivalent_cost([{
+            "input_tokens": 1_000_000, "output_tokens": 0,
+            "cache_create_tokens": 0, "cache_read_tokens": 0,
+            "model_counts": {}}])
+        self.assertAlmostEqual(cost, aggregate._FALLBACK_PRICING["input"], places=2)
 
 
 class ActivityPanelCostTests(unittest.TestCase):
