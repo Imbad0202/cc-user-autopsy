@@ -30,20 +30,56 @@ WRITING_GOALS = {
 # Public API pricing in USD per 1M tokens. cache_write uses the 1h ephemeral
 # tier (2× base input) as a conservative upper bound — Claude Code doesn't
 # expose which TTL its caching layer actually picks, and 1h dominates system
-# prompts. Pricing snapshot: 2026-04. Update when anthropic.com/pricing changes.
+# prompts. (anthropic.com/pricing lists the 5-minute write rate, 1.25× input;
+# cache_read is taken from the page as-is.) Pricing snapshot: 2026-10-10.
+# Update when anthropic.com/pricing changes. claude-haiku-5-5 is tiered by
+# prompt size on the page. The >100K-token rate is used here because (1) the
+# data has no per-request token counts, so tiers cannot be split, (2) this
+# file prefers over- to under-reporting, and (3) single requests in long
+# Claude Code conversations often exceed 100K. The ≤100K rates are input 0.10,
+# output 0.50, cache read 0.01 (cache write 0.20 at the 2× convention).
 PRICING = {
-    "claude-opus-4-7":   {"input": 15.0, "output": 75.0, "cache_write": 30.0, "cache_read": 1.50},
-    "claude-opus-4-6":   {"input": 15.0, "output": 75.0, "cache_write": 30.0, "cache_read": 1.50},
-    "claude-opus-4-5":   {"input": 15.0, "output": 75.0, "cache_write": 30.0, "cache_read": 1.50},
+    "claude-fable-5-1":  {"input": 10.0, "output": 50.0, "cache_write": 20.0, "cache_read": 0.25},
+    "claude-fable-5":    {"input": 10.0, "output": 50.0, "cache_write": 20.0, "cache_read": 1.00},
+    "claude-opus-5-5":   {"input":  4.0, "output": 20.0, "cache_write":  8.0, "cache_read": 0.20},
+    "claude-opus-5":     {"input":  5.0, "output": 25.0, "cache_write": 10.0, "cache_read": 0.50},
+    "claude-opus-4-8":   {"input":  5.0, "output": 25.0, "cache_write": 10.0, "cache_read": 0.50},
+    "claude-opus-4-7":   {"input":  5.0, "output": 25.0, "cache_write": 10.0, "cache_read": 0.50},
+    "claude-opus-4-6":   {"input":  5.0, "output": 25.0, "cache_write": 10.0, "cache_read": 0.50},
+    "claude-opus-4-5":   {"input":  5.0, "output": 25.0, "cache_write": 10.0, "cache_read": 0.50},
+    "claude-sonnet-5-5": {"input":  2.0, "output": 10.0, "cache_write":  4.0, "cache_read": 0.10},
+    "claude-sonnet-5":   {"input":  2.0, "output": 10.0, "cache_write":  4.0, "cache_read": 0.20},
     "claude-sonnet-4-6": {"input":  3.0, "output": 15.0, "cache_write":  6.0, "cache_read": 0.30},
     "claude-sonnet-4-5": {"input":  3.0, "output": 15.0, "cache_write":  6.0, "cache_read": 0.30},
-    "claude-haiku-4-5":  {"input": 0.80, "output":  4.0, "cache_write":  1.6, "cache_read": 0.08},
+    "claude-haiku-5-5":  {"input": 0.50, "output":  2.5, "cache_write":  1.0, "cache_read": 0.05},
+    "claude-haiku-4-5":  {"input":  1.0, "output":  5.0, "cache_write":  2.0, "cache_read": 0.10},
 }
-# Fallback used when model_counts references a model not in PRICING. We
-# choose Opus over cheaper tiers so missing-model cases over-report rather
-# than silently drop to $0 — a recently-released Opus variant is the most
-# likely gap.
-_FALLBACK_PRICING = PRICING["claude-opus-4-6"]
+# Two uses of PRICING with opposite directions:
+#   - ceiling/estimate (compute_api_equivalent_cost, _FALLBACK_PRICING) reads
+#     PRICING as-is, so Haiku 5.5 is priced at the >100K tier (over-report).
+#   - floor (leak ledger: _leak_cost_usd, _row_input_rate_floor) promises a
+#     lower bound, so it must not be inflated; it reads _lower_bound_rates(),
+#     which swaps in the cheapest tier for models that have price tiers.
+PRICING_LOWER_BOUND_OVERRIDES = {
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.5, "cache_write": 0.20, "cache_read": 0.01},
+}
+
+
+def _lower_bound_rates(model):
+    """Rates safe to use in a lower-bound claim for an already-normalized,
+    PRICING-listed model id."""
+    return PRICING_LOWER_BOUND_OVERRIDES.get(model, PRICING[model])
+
+
+# Fallback used when model_counts references a model not in PRICING, or when
+# there is no model info at all. Each field is the maximum across the whole
+# table, so an unknown model is never priced below any known one: missing-model
+# cases over-report rather than silently under-report (or drop to $0). It is
+# derived from PRICING, so it tracks the table when rows are added.
+_FALLBACK_PRICING = {
+    k: max(p[k] for p in PRICING.values())
+    for k in ("input", "output", "cache_write", "cache_read")
+}
 
 _PATTERN_MIN_SAMPLE = 5  # minimum group size to emit a per-dimension pattern contrast sentence
 _USAGE_CHAR_MIN_SESSIONS = 10  # minimum session count to emit the usage_characteristics block
@@ -79,8 +115,9 @@ def compute_api_equivalent_cost(sessions):
             model_msgs[_normalize_model_id(m)] += c
     total_msgs = sum(model_msgs.values())
     if total_msgs == 0:
-        # No model info — assume opus (conservative upper bound).
-        weights = {"claude-opus-4-6": 1.0}
+        # No model info — price at _FALLBACK_PRICING (per-field max of the
+        # table; the key is deliberately absent from PRICING).
+        weights = {"<no-model-info>": 1.0}
     else:
         weights = {m: c / total_msgs for m, c in model_msgs.items()}
 
@@ -2323,7 +2360,7 @@ def _row_input_rate_floor(row):
     models = {_normalize_model_id(m) for m in (row.get("model_counts") or {})}
     if not models or any(m not in PRICING for m in models):
         return 0.0
-    return min(PRICING[m]["input"] for m in models)
+    return min(_lower_bound_rates(m)["input"] for m in models)
 
 
 def bs_repeated_instructions(claude_rows, cross_rows, window_start=None,
@@ -2992,7 +3029,7 @@ def _leak_cost_usd(sessions):
         models = {_normalize_model_id(m) for m in (s.get("model_counts") or {})}
         if not models or any(m not in PRICING for m in models):
             continue  # (a) no verified rate — withhold the USD claim
-        rates = [PRICING[m] for m in models]
+        rates = [_lower_bound_rates(m) for m in models]
         in_rate = min(p["input"] for p in rates)
         out_rate = min(p["output"] for p in rates)
         cr_rate = min(p["cache_read"] for p in rates)
