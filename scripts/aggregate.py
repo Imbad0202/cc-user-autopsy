@@ -33,8 +33,11 @@ WRITING_GOALS = {
 # prompts. (anthropic.com/pricing lists the 5-minute write rate, 1.25× input;
 # cache_read is taken from the page as-is.) Pricing snapshot: 2026-10-10.
 # Update when anthropic.com/pricing changes. claude-haiku-5-5 is tiered by
-# prompt size on the page; the ≤100K-token rate is used here (rates above
-# 100K are 5× higher: input 0.50, output 2.50, cache read 0.05).
+# prompt size on the page. The >100K-token rate is used here because (1) the
+# data has no per-request token counts, so tiers cannot be split, (2) this
+# file prefers over- to under-reporting, and (3) single requests in long
+# Claude Code conversations often exceed 100K. The ≤100K rates are input 0.10,
+# output 0.50, cache read 0.01 (cache write 0.20 at the 2× convention).
 PRICING = {
     "claude-fable-5-1":  {"input": 10.0, "output": 50.0, "cache_write": 20.0, "cache_read": 0.25},
     "claude-fable-5":    {"input": 10.0, "output": 50.0, "cache_write": 20.0, "cache_read": 1.00},
@@ -48,7 +51,7 @@ PRICING = {
     "claude-sonnet-5":   {"input":  2.0, "output": 10.0, "cache_write":  4.0, "cache_read": 0.20},
     "claude-sonnet-4-6": {"input":  3.0, "output": 15.0, "cache_write":  6.0, "cache_read": 0.30},
     "claude-sonnet-4-5": {"input":  3.0, "output": 15.0, "cache_write":  6.0, "cache_read": 0.30},
-    "claude-haiku-5-5":  {"input": 0.10, "output":  0.5, "cache_write": 0.20, "cache_read": 0.01},
+    "claude-haiku-5-5":  {"input": 0.50, "output":  2.5, "cache_write":  1.0, "cache_read": 0.05},
     "claude-haiku-4-5":  {"input":  1.0, "output":  5.0, "cache_write":  2.0, "cache_read": 0.10},
 }
 # Fallback used when model_counts references a model not in PRICING, or when

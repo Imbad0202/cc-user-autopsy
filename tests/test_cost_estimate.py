@@ -145,6 +145,14 @@ class Claude5PricingTests(unittest.TestCase):
         self.assertAlmostEqual(self._input_cost("claude-sonnet-5"), 2.0, places=2)
 
 
+class HaikuLongPromptTierTests(unittest.TestCase):
+    def test_haiku_55_uses_over_100k_tier(self):
+        """No per-request token data, so the >100K tier is used (over-report)."""
+        p = aggregate.PRICING["claude-haiku-5-5"]
+        self.assertEqual((p["input"], p["output"], p["cache_write"], p["cache_read"]),
+                         (0.50, 2.50, 1.00, 0.05))
+
+
 class Claude5CacheReadAndFallbackTests(unittest.TestCase):
     def _cr_cost(self, model):
         return aggregate.compute_api_equivalent_cost([{
