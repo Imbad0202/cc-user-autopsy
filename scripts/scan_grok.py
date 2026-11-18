@@ -84,6 +84,12 @@ def scan_sessions_dir(root: Path):
                 "first_prompt_hash": s["first_hash"],
                 "source": "grok",
                 "coverage": "partial",
+                # Origin evidence (findings-first Phase 1). Grok records
+                # nothing about how a session was run, so a Grok session
+                # is never classified as hand-driven. No cli_launches
+                # field: the history has no tool calls, so nothing here
+                # can show what this session did or did not start.
+                "interactive": None,
             })
     return rows, parse_errors
 

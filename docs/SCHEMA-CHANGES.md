@@ -45,6 +45,24 @@ for dim, metrics in scores.items():
 **Added:** 2026-07-14
 **Purpose:** Count of malformed/incomplete lines skipped from a given `--cross-llm-rows` input (missing `source` or `start_time`, or invalid JSON — bucketed under `"(unknown)"` when the source can't be guessed). 0 for `claude` (always internally derived, never file-loaded) and for any source with no parse failures.
 
+## 2026-11-18 — additive: `cross_llm.sources[].origin_counts` (findings-first Phase 1)
+
+- Each source card gains `origin_counts`: `{"direct": int, "launched": int,
+  "unknown": int}` — how many of that source's sessions the user drove by
+  hand, how many a tool started, and how many could not be told apart
+  (rule in `scripts/origin.py`; `direct` is given on positive evidence
+  only, so `unknown` includes scheduled and scripted runs). `null` for sources with nothing to
+  classify (`antigravity`, and any undetected source).
+- Readers should show the split only when all three values are
+  non-negative integers (the report renderer skips the line otherwise).
+- The three counts sum to the sessions that were classified, which can be
+  below `session_count` (orphan subagent fragments are not classified).
+- No existing field changes meaning: `session_count`, weekly share,
+  parallel hours and badges still include launched sessions.
+- Per-session origins are NOT in `analysis-data.json`. They are written to
+  the working file named by `aggregate.py --origins-output`.
+- No existing fields changed or removed.
+
 ## 2026-07-14 — additive: `cross_llm` and `ledger` top-level blocks (V5 Phase 1)
 
 - `cross_llm`: cross-tool sources / common_window / weekly_share / parallel /

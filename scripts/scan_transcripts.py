@@ -28,10 +28,13 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from cross_llm_common import (prompt_identity, segments_and_duration,
+    from cross_llm_common import (cli_launch_targets, make_cli_launch,
+                                   prompt_identity, segments_and_duration,
                                    split_segments, to_local_iso)
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_transcripts
-    from scripts.cross_llm_common import (prompt_identity, segments_and_duration,
+    from scripts.cross_llm_common import (cli_launch_targets, make_cli_launch,
+                                           prompt_identity,
+                                           segments_and_duration,
                                            split_segments, to_local_iso)
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -68,6 +71,166 @@ _UUID_RE = _re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 _AGENT_RE = _re.compile(r"^agent-", _re.I)
 
 
+# How Claude Code labels a user-role record that a person produced: the
+# prompt was typed, typed while the assistant was busy and queued, or an
+# offered suggestion the user accepted. Every other label (system, sdk,
+# task notifications, messages from peer sessions, scheduled runs) is the
+# harness or another program speaking in the user's slot.
+HUMAN_PROMPT_SOURCES = frozenset({"typed", "queued", "suggestion_accepted"})
+# Session entrypoints that are programmatic by construction (`claude -p`,
+# the Agent SDK). Matched by prefix.
+_PROGRAMMATIC_ENTRYPOINT_PREFIX = "sdk"
+
+def _content(record):
+    """A record's message content, or None when the record has no message
+    object (a malformed or truncated line must not stop the scan)."""
+    message = record.get("message")
+    return message.get("content") if isinstance(message, dict) else None
+
+
+def _provenance(record):
+    """Who a user-role record's own labels say produced it: "human",
+    "other", or None when it carries no label (tool results, and every
+    record written by a Claude Code version that predates the labels).
+    Every label present must name a person. A label that names anything
+    else, or is not the kind of value expected (a list where a word
+    should be, an explicit null), makes the record "other"."""
+    votes = []
+    if "promptSource" in record:
+        source = record["promptSource"]
+        votes.append(isinstance(source, str) and source in HUMAN_PROMPT_SOURCES)
+    if "turnOrigin" in record:
+        votes.append(record["turnOrigin"] == "human")
+    if "origin" in record:
+        origin = record["origin"]
+        votes.append(isinstance(origin, dict) and origin.get("kind") == "human")
+    if not votes:
+        return None
+    return "human" if all(votes) else "other"
+
+
+def _carries_input(record):
+    """Whether a user-role record holds something a person could have sent:
+    non-blank text (a slash command included) or a non-text block such as
+    an image. Tool output, blank text and a missing message do not count."""
+    content = _content(record)
+    if isinstance(content, str):
+        return bool(content.strip())
+    if not isinstance(content, list):
+        return False
+    for c in content:
+        if not isinstance(c, dict):
+            continue
+        kind = c.get("type")
+        if kind == "text":
+            if isinstance(c.get("text"), str) and c["text"].strip():
+                return True
+        elif isinstance(kind, str) and kind and kind != "tool_result":
+            return True
+    return False
+
+
+def _launch_time(value):
+    """A record's timestamp as the local ISO string the session segments
+    use, or None when it is not a usable time. Converting it the same way
+    keeps a launch and the session it started on one clock, and keeps any
+    other value out of the rows file."""
+    dt = _parse_ts(value) if isinstance(value, str) else None
+    if dt is None:
+        return None
+    try:
+        return to_local_iso(dt)
+    except (OverflowError, ValueError, OSError):
+        return None
+
+
+def _is_programmatic(entrypoint):
+    return isinstance(entrypoint, str) \
+        and entrypoint.lower().startswith(_PROGRAMMATIC_ENTRYPOINT_PREFIX)
+
+
+def _is_human_prompt(record):
+    """Is this a main-thread user record that its own labels attribute to
+    a person, sent through an entrypoint the record itself names and that
+    is not a programmatic one? Unlabelled records are never assumed to be
+    the user's, and neither is a record that does not say how it arrived
+    (every labelled record seen in practice names its entrypoint). The
+    entrypoint is read per record, because a session can be resumed
+    through a different one. A record with nothing a person could have
+    sent (tool output, blank text, no message) is not a prompt, whatever
+    labels it carries.
+
+    Entrypoints are told apart by what marks a programmatic one (`sdk-*`),
+    not by a list of interactive clients: the editor and desktop clients
+    have names of their own, and a list would drop their users."""
+    if record.get("type") != "user" or record.get("isSidechain") \
+            or record.get("isMeta") or record.get("isCompactSummary") \
+            or _provenance(record) != "human" or not _carries_input(record):
+        return False
+    entrypoint = record.get("entrypoint")
+    return isinstance(entrypoint, str) and bool(entrypoint.strip()) \
+        and not _is_programmatic(entrypoint)
+
+
+def _interactive(records):
+    """Whether the transcript itself records a person driving the session.
+
+    True   some prompt is labelled as a person's and came through an
+           interactive entrypoint
+    False  no such prompt, and the transcript does say how it was run:
+           some record names a programmatic entrypoint, or prompts are
+           labelled and none is a person's (a scheduled run, a
+           peer-driven session)
+    None   the transcript carries no such labels (older versions)"""
+    labelled = False
+    for r in records:
+        if _is_human_prompt(r):
+            return True
+        if _is_programmatic(r.get("entrypoint")) or (
+                r.get("type") == "user" and not r.get("isSidechain")
+                and _provenance(r) is not None):
+            labelled = True
+    return False if labelled else None
+
+
+def _cli_launches(records):
+    """[{target, ts, until}] for each Bash call, in any thread of the
+    transcript, that starts an AI CLI (another tool's, or a fresh
+    `claude -p` of its own) — the evidence that a session of that tool
+    was launched from here rather than by hand. `until` is
+    the timestamp of the call's tool_result (None if never recorded): the
+    launched session starts somewhere between the two, and a permission
+    prompt can stretch that gap well past a few seconds."""
+    launches = []
+    by_call_id = {}
+    for r in records:
+        content = _content(r)
+        if not isinstance(content, list):
+            continue
+        if r.get("type") == "assistant":
+            for c in content:
+                if not (isinstance(c, dict) and c.get("type") == "tool_use"
+                        and c.get("name") == "Bash"):
+                    continue
+                inp = c.get("input")
+                cmd = inp.get("command", "") if isinstance(inp, dict) else ""
+                call_id = c.get("id")
+                for target in cli_launch_targets(cmd):
+                    ev = make_cli_launch(target, _launch_time(r.get("timestamp")))
+                    launches.append(ev)
+                    # Without a usable id the result cannot be paired:
+                    # `until` stays None and the minimum window applies.
+                    if isinstance(call_id, str) and call_id:
+                        by_call_id.setdefault(call_id, []).append(ev)
+        elif r.get("type") == "user" and by_call_id:
+            for c in content:
+                if isinstance(c, dict) and c.get("type") == "tool_result" \
+                        and isinstance(c.get("tool_use_id"), str):
+                    for ev in by_call_id.pop(c["tool_use_id"], []):
+                        ev["until"] = _launch_time(r.get("timestamp"))
+    return launches
+
+
 def _load_jsonl(path: Path):
     lines = []
     with path.open(encoding="utf-8", errors="replace") as fh:
@@ -76,9 +239,11 @@ def _load_jsonl(path: Path):
             if not line:
                 continue
             try:
-                lines.append(json.loads(line))
+                rec = json.loads(line)
             except Exception:
                 continue
+            if isinstance(rec, dict):
+                lines.append(rec)
     return lines
 
 
@@ -127,7 +292,7 @@ def _scan_usage(records):
     tool_counts = Counter()
     git_commits = git_pushes = 0
     for r in asst:
-        content = r.get("message", {}).get("content") if isinstance(r.get("message"), dict) else None
+        content = _content(r)
         if not isinstance(content, list):
             continue
         for c in content:
@@ -147,6 +312,9 @@ def _scan_usage(records):
                 git_pushes += 1
 
     return {
+        # A subagent starting another AI CLI is as much a launch as the
+        # parent doing it — reviews are routinely delegated this way.
+        "cli_launches": _cli_launches(records),
         "input_tokens": in_tok,
         "output_tokens": out_tok,
         "cache_creation_input_tokens": cache_create,
@@ -265,9 +433,11 @@ def scan_one(path: Path):
             if not line:
                 continue
             try:
-                lines.append(json.loads(line))
+                rec = json.loads(line)
             except Exception:
                 continue
+            if isinstance(rec, dict):
+                lines.append(rec)
 
     all_user_records = [r for r in lines if r.get("type") == "user"]
     asst_msgs = [r for r in lines if r.get("type") == "assistant"]
@@ -278,7 +448,7 @@ def scan_one(path: Path):
     # is real text (not a tool_result auto-reply). session-meta uses this
     # definition; matching it lets us cross-validate against the ground truth.
     def _is_text_user(r):
-        content = r.get("message", {}).get("content")
+        content = _content(r)
         if isinstance(content, str):
             return bool(content.strip())
         if isinstance(content, list):
@@ -358,7 +528,7 @@ def scan_one(path: Path):
 
     tool_counts = Counter()
     for r in asst_msgs:
-        content = r.get("message", {}).get("content")
+        content = _content(r)
         if not isinstance(content, list):
             continue
         for c in content:
@@ -370,7 +540,7 @@ def scan_one(path: Path):
     tool_errors = 0
     user_interruptions = 0
     for r in all_user_records:
-        content = r.get("message", {}).get("content")
+        content = _content(r)
         if not isinstance(content, list):
             continue
         for c in content:
@@ -386,7 +556,7 @@ def scan_one(path: Path):
 
     git_commits = git_pushes = 0
     for r in asst_msgs:
-        content = r.get("message", {}).get("content")
+        content = _content(r)
         if not isinstance(content, list):
             continue
         for c in content:
@@ -410,7 +580,7 @@ def scan_one(path: Path):
 
     first_prompt = ""
     for r in user_msgs:
-        content = r.get("message", {}).get("content")
+        content = _content(r)
         if isinstance(content, str):
             first_prompt = content
             break
@@ -434,7 +604,7 @@ def scan_one(path: Path):
         if t == "assistant":
             prev_asst_ts = ts
         elif t == "user" and prev_asst_ts is not None:
-            content = r.get("message", {}).get("content")
+            content = _content(r)
             is_text = False
             if isinstance(content, str):
                 is_text = True
@@ -497,6 +667,9 @@ def scan_one(path: Path):
         # to merge in any subagent record_timestamps before rebuilding
         # `segments`. Stripped in Pass 3, never part of the emitted schema.
         "_all_ts": all_ts,
+        # Origin evidence (findings-first Phase 1, read by origin.py).
+        "interactive": _interactive(lines),
+        "cli_launches": _cli_launches(lines),
     }
 
 
@@ -507,7 +680,10 @@ def main():
     ap.add_argument("--min-assistant-msgs", type=int, default=0,
                     help="Drop sessions with fewer than N assistant messages. "
                          "Default 0 (keep all). Use 3 to match session-meta-like "
-                         "filtering that excludes warmup/interrupted-at-start sessions.")
+                         "filtering that excludes warmup/interrupted-at-start sessions. "
+                         "Dropped sessions take their launch evidence with "
+                         "them: a session one of them started is then "
+                         "reported as unknown, not launched.")
     args = ap.parse_args()
 
     projects_dir = Path(args.projects_dir).expanduser()
@@ -587,6 +763,7 @@ def main():
             row["tool_counts"] = dict(tc)
             row["git_commits"] = (row.get("git_commits") or 0) + usage["git_commits"]
             row["git_pushes"] = (row.get("git_pushes") or 0) + usage["git_pushes"]
+            row["cli_launches"] = (row.get("cli_launches") or []) + usage["cli_launches"]
             row["_assistant_output_pairs"] = (
                 row.get("_assistant_output_pairs") or []) + usage["output_seq"]
             row["_all_ts"] = (row.get("_all_ts") or []) + usage["record_timestamps"]
@@ -641,6 +818,7 @@ def main():
             # does for merged parent rows (uses_mcp must not stay False
             # while tool_counts carries an mcp__ call).
             orphan["_merged_subagent_tools"] = True
+            orphan["cli_launches"] = (orphan.get("cli_launches") or []) + usage["cli_launches"]
             orphan["git_commits"] = (orphan.get("git_commits") or 0) + usage["git_commits"]
             orphan["git_pushes"] = (orphan.get("git_pushes") or 0) + usage["git_pushes"]
             orphan["_assistant_output_pairs"] = (
