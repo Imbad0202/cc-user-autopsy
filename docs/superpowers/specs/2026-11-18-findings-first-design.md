@@ -58,28 +58,38 @@ The user chose 1: half of the problem is layout, the other half is that what the
 
 ### 5.1 Capture: user turns
 
-Each scanner gains a second output, `user-turns.jsonl`, one row per turn the user typed:
+Each scanner gains a second output (`--user-turns-output`, one file per scanner), one row per turn the user typed:
 
-`source, session_id, origin, project_path, ts, turn_index, text, after_interrupt, prev_assistant_tail`
+`source, session_id, project_path, ts, turn_index, text, text_len, after_interrupt, prev_assistant_tail`
+
+A row carries no origin. Origin needs every tool's rows at once (5.2), so it is computed afterwards and written to `origins.json`, keyed `source:session_id`; a consumer joins on that key and treats a session with no entry as not hand-driven. `text` is the prompt as typed up to 4,000 characters; a longer one keeps its first and last 2,000 with a marker between, and `text_len` records the original length.
 
 `prev_assistant_tail` is the length-capped end of the assistant message the user was answering, where the source records one (Claude Code and Codex; null for Grok). It lets the analysis see what the user was asked before they ruled.
 
 - Claude Code: text user records only. Tool results, system-injected records, sidechain and `agent-*` subagent records are excluded.
 - Codex: user messages from the rollout stream. Harness-injected context blocks (environment and instruction-file dumps) are excluded.
-- Grok: rows from `prompt_history.jsonl` with `is_bash` false.
+- Grok: rows from `prompt_history.jsonl` whose `is_bash` is explicitly false.
 - Antigravity: none.
 
-The file holds raw prompt text. It is written to the working directory only, is never committed, never copied into `analysis-data.json`, and never reaches HR output. Add it to `.gitignore`.
+These files hold raw prompt text. They are written to the working directory only, readable by the owner alone (mode 0600: the usual working directory is under `/tmp`, which other local accounts can list), never committed, never copied into `analysis-data.json`, and never reach HR output. They are git-ignored; `origins.json`, which holds session ids, gets the same treatment.
 
 ### 5.2 Origin: hand-driven versus launched
 
-Every session, from every source, gets `origin`: `direct`, `launched`, or `unknown`.
+Every session of a source whose content is read (Claude Code, Codex, Grok) gets `origin`: `direct`, `launched`, or `unknown`. Antigravity sessions are presence-only and get none, and neither do orphan subagent fragments, which are not sessions anyone opened.
 
 - `launched`, signal 1: the launch-source field in the session header says another session spawned this one (observed in Codex headers as a structured `source` naming a sub-agent).
 - `launched`, signal 2: another tool's transcript, in the main thread or in any subagent, contains a shell call that invokes this tool's CLI, and this session started while that call was running: from the moment the call was requested until its result came back, and never less than 60 seconds. Time alone decides; the working directory is not compared, so a launched run that changed directory cannot pass as hand-driven. This runs in both directions, so a Claude Code session started from a Codex session is caught the same way as the reverse.
 - `unknown`, by header: the header says the run was non-interactive (Codex `source: exec`) and no launching call was seen. Nobody sat in that session, but the header does not say who started it: the user at a shell, a script, or a tool whose transcript has rotated away. It is never `direct`.
-- `direct`: none of the above, and either (a) the session has two or more user turns with an assistant reply between them, or (b) the transcripts of every other tool that could have launched it still exist for that time, so a launch would have been visible.
-- `unknown`: everything else, typically a single-prompt session from a period whose other-tool transcripts have rotated away.
+- `direct`: none of the above, and either (a) the user typed, the tool answered in words, and the user typed again, or (b) a launch would have been visible. Grok records no replies, so for Grok (a) is two typed prompts in one session.
+- `unknown`: everything else.
+
+"Would have been visible" in (b) is judged narrowly, for every other tool that can launch one (Claude Code and Codex; Grok's history has no tool calls):
+
+- The tool's adapter ran. A tool that was not scanned is "not looked at", never "launched nothing".
+- The session's start lies inside that tool's retained run of scanned transcripts. Transcripts rotate by age, so what is retained is the recent unbroken run: walking back from the latest session, the run ends at the first gap longer than seven days. An older straggler that survived rotation does not vouch for the weeks after it.
+- No session of that tool active at that moment is known only from a row without scanned shell calls (a session-meta row, for instance).
+
+A call that names the launching tool's own CLI (`claude -p` from a Claude Code session) counts too; the session it starts is `launched`.
 
 Absence of a launch counts as evidence only where a launch could have been seen. Only `direct` sessions feed findings. `launched` and `unknown` counts are shown in the coverage line so the reader sees what was left out. This follows the existing lower-bound accounting rule: when in doubt, undercount.
 

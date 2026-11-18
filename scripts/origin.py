@@ -16,10 +16,17 @@ Rule (spec 2026-11-18 findings-first, section 5.2):
             but who started it — the user at a shell, a script, a tool
             whose transcript is gone — cannot be told
   direct    none of the above, and either the user and the tool went back
-            and forth (multi_turn), or every tool that could have launched
-            it still has transcripts covering that moment — so a launch
-            would have been visible
+            and forth (multi_turn), or a launch would have been visible:
+            every other tool that can launch one was scanned, and its
+            retained transcripts cover that moment without a gap
   unknown   everything else
+
+"Would have been visible" is judged narrowly. A launcher tool whose
+adapter was not run, or whose sessions at that moment are known only
+from rows without scanned shell calls, hides whatever it launched.
+Transcripts are rotated by age, so what is retained is the recent,
+unbroken run of sessions; an older straggler that survived rotation does
+not vouch for the weeks between it and that run.
 
 Absence of a launch counts as evidence only where a launch could have
 been seen. When in doubt the session is not counted as the user's.
@@ -42,6 +49,10 @@ ORIGINS = ("direct", "launched", "unknown")
 # recorded. Time alone decides (no working-directory match): a launched
 # run that changed directory must not pass as hand-driven.
 LAUNCH_WINDOW_SECONDS = 60
+
+# Two retained sessions of one tool further apart than this are treated as
+# separated by rotated-away history, not by the user simply being away.
+COVERAGE_GAP_DAYS = 7
 
 # Values of a session header's launch-source field, compared lowercased.
 # SPAWNED: another session of the same tool created this one.
@@ -77,8 +88,8 @@ def _ts(value):
 
 def _row_span(row):
     """(first, last) activity instant of a row: the hull of its well-formed
-    `segments`, else its start_time for both ends. (None, None) if the row
-    has no usable time."""
+    `segments`, else start_time to start_time + duration_minutes.
+    (None, None) if the row has no usable time."""
     starts, ends = [], []
     for seg in row.get("segments") or []:
         if not (isinstance(seg, (list, tuple)) and len(seg) == 2):
@@ -90,6 +101,11 @@ def _row_span(row):
     if starts:
         return min(starts), max(ends)
     start = _ts(row.get("start_time"))
+    if start is None:
+        return None, None
+    minutes = row.get("duration_minutes")
+    if isinstance(minutes, (int, float)) and minutes > 0:
+        return start, start + timedelta(minutes=minutes)
     return start, start
 
 
@@ -100,19 +116,33 @@ def launch_windows(rows):
     inside some call's window iff reach[i] >= S for the last call i with
     starts[i] <= S.
 
-    `until` is when the call's result came back, floored at the request
-    time plus the minimum window. Every row contributes, orphan subagent
-    fragments included: a fragment whose parent transcript rotated away
-    still shows the shell call that started another tool."""
+    `until` is when the call's result came back. A call to a DIFFERENT
+    tool gets at least the minimum window (a backgrounded call returns at
+    once while the run it started is still coming up). A call that names
+    the row's own tool — `claude -p` from a Claude session — keeps its
+    real duration when known: sessions of one tool start beside each
+    other all the time, and a padded window would sweep them in.
+
+    Every row contributes, orphan subagent fragments included: a fragment
+    whose parent transcript rotated away still shows the shell call that
+    started another tool."""
     floor = timedelta(seconds=LAUNCH_WINDOW_SECONDS)
     by_target = {}
     for r in rows:
-        for ev in r.get("cli_launches") or []:
+        events = r.get("cli_launches")
+        if not isinstance(events, list):
+            continue
+        own = _source(r)
+        for ev in events:
+            if not isinstance(ev, dict) or not ev.get("target"):
+                continue
             ts = _ts(ev.get("ts"))
-            if not ts or not ev.get("target"):
+            if not ts:
                 continue
             until = _ts(ev.get("until"))
-            if until is None or until < ts + floor:
+            if until is None or until < ts:
+                until = ts + floor
+            elif ev["target"] != own and until < ts + floor:
                 until = ts + floor
             by_target.setdefault(ev["target"], []).append((ts, until))
     out = {}
@@ -126,52 +156,85 @@ def launch_windows(rows):
     return out
 
 
-def _in_a_launch_window(source, start, windows):
-    starts, reach = windows.get(source, ((), ()))
+def _in_a_launch_window(row, start, windows):
+    """A session cannot have been started by a call made after it began,
+    so its own calls never match it: they all come later than `start`."""
+    starts, reach = windows.get(_source(row), ((), ()))
     i = bisect_right(starts, start)
     return i > 0 and reach[i - 1] >= start
 
 
-def launcher_spans(rows):
-    """{launcher: (earliest, latest) or None} for each tool that can be
-    seen launching others AND that the user has sessions of.
+def launcher_coverage(rows, scanned_sources=None):
+    """What is known about each tool that can launch others:
 
-    The span covers rows whose shell calls were scanned (they carry a
-    cli_launches list). None means the tool's sessions exist but none
-    were scanned — session-meta rows, an older scanner's output, or only
-    orphan subagent fragments, whose parent transcript (where other
-    launches would sit) is gone. A launcher the user has no sessions of
-    is absent: it cannot have launched anything."""
-    spans = {}
+      {launcher: {"retained": (lo, hi) or None, "blind": [(lo, hi), ...]}}
+
+    retained  the recent unbroken run of this tool's scanned sessions
+              (rows with a cli_launches list, orphan fragments excluded):
+              walking back from the latest one, the run ends at the first
+              gap longer than COVERAGE_GAP_DAYS. None if no scanned row
+              has a usable time, or if the tool was not scanned at all.
+    blind     spans of this tool's sessions that exist but whose shell
+              calls were NOT scanned (session-meta rows, an older
+              scanner's output). Whatever they launched is invisible.
+
+    scanned_sources: the tools whose adapter actually ran. A launcher
+    missing from it gets retained=None — "no rows" then means "not
+    looked", not "launched nothing". When the argument is None, only
+    launchers with at least one scanned row count as scanned."""
+    scanned, blind, has_sessions = {}, {}, set()
     for r in rows:
         src = _source(r)
         if src not in LAUNCHER_SOURCES or r.get("coverage") == "presence_only":
             continue
-        spans.setdefault(src, None)
-        if not isinstance(r.get("cli_launches"), list) \
-                or r.get("orphan_subagent_only"):
+        has_sessions.add(src)
+        if r.get("orphan_subagent_only"):
+            # Proof the tool was in use, but its parent transcript — where
+            # other launches would sit — is gone: no coverage from it.
             continue
         lo, hi = _row_span(r)
         if lo is None:
             continue
-        cur = spans[src]
-        spans[src] = (lo, hi) if cur is None else (min(cur[0], lo),
-                                                   max(cur[1], hi))
-    return spans
+        bucket = scanned if isinstance(r.get("cli_launches"), list) else blind
+        bucket.setdefault(src, []).append((lo, hi))
+    if scanned_sources is None:
+        scanned_sources = set(scanned)
+    gap = timedelta(days=COVERAGE_GAP_DAYS)
+    out = {}
+    for launcher in LAUNCHER_SOURCES:
+        retained = None
+        spans = sorted(scanned.get(launcher, ()))
+        if launcher in scanned_sources and spans:
+            lo, hi = spans[-1]
+            for s_lo, s_hi in reversed(spans[:-1]):
+                if lo - s_hi > gap:
+                    break
+                lo, hi = min(lo, s_lo), max(hi, s_hi)
+            retained = (lo, hi)
+        elif launcher in scanned_sources and launcher not in has_sessions:
+            # Scanned, and the user has no sessions of it: nothing to hide.
+            continue
+        out[launcher] = {"retained": retained,
+                         "blind": blind.get(launcher, [])}
+    return out
 
 
-def _a_launch_would_have_been_seen(source, start, spans):
-    """True when every OTHER launcher tool the user has sessions of still
-    has scanned transcripts spanning `start`."""
-    for launcher, span in spans.items():
+def _a_launch_would_have_been_seen(source, start, coverage):
+    """True when, for every OTHER launcher tool, `start` lies inside its
+    retained run and inside none of its unscanned sessions."""
+    pad = timedelta(seconds=LAUNCH_WINDOW_SECONDS)
+    for launcher, known in coverage.items():
         if launcher == source:
             continue
-        if span is None or not (span[0] <= start <= span[1]):
+        retained = known["retained"]
+        if retained is None or not (retained[0] <= start <= retained[1]):
+            return False
+        if any(lo <= start <= hi + pad for lo, hi in known["blind"]):
             return False
     return True
 
 
-def classify(row, windows, spans):
+def classify(row, windows, coverage):
     source = _source(row)
     declared = row.get("launch_source")
     declared = declared.lower() if isinstance(declared, str) else None
@@ -180,24 +243,25 @@ def classify(row, windows, spans):
     start = _row_span(row)[0]
     if start is None:
         return "unknown"
-    if _in_a_launch_window(source, start, windows):
+    if _in_a_launch_window(row, start, windows):
         return "launched"
     if declared in NON_INTERACTIVE_SOURCES:
         return "unknown"
     if row.get("multi_turn"):
         return "direct"
-    if _a_launch_would_have_been_seen(source, start, spans):
+    if _a_launch_would_have_been_seen(source, start, coverage):
         return "direct"
     return "unknown"
 
 
-def classify_all(rows):
+def classify_all(rows, scanned_sources=None):
     """{"source:session_id": origin} for every row that can carry one.
     Not classified: presence_only rows (no content, no reliable start)
-    and orphan subagent fragments (not a session anyone opened)."""
+    and orphan subagent fragments (not a session anyone opened).
+    scanned_sources: see launcher_coverage."""
     windows = launch_windows(rows)
-    spans = launcher_spans(rows)
-    return {session_key(r): classify(r, windows, spans) for r in rows
+    coverage = launcher_coverage(rows, scanned_sources)
+    return {session_key(r): classify(r, windows, coverage) for r in rows
             if r.get("coverage") != "presence_only" and r.get("session_id")
             and not r.get("orphan_subagent_only")}
 

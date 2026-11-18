@@ -1,6 +1,8 @@
 """User-turn capture (findings-first Phase 1): every prompt the user typed
 is written to a working file, and that text reaches no other output."""
 import json
+import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -13,7 +15,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from scripts import scan_codex, scan_grok, scan_transcripts  # noqa: E402
 from scripts.cross_llm_common import (  # noqa: E402
-    ASSISTANT_TAIL_CAP, TURN_TEXT_CAP, make_user_turn)
+    ASSISTANT_TAIL_CAP, TURN_TEXT_CAP, make_user_turn, write_private_text)
 from scripts.report_render import _source_card_html  # noqa: E402
 
 SID = "11111111-2222-3333-4444-555555555555"
@@ -45,11 +47,17 @@ def _ts(n):
 
 
 class MakeUserTurnTests(unittest.TestCase):
-    def test_caps_text_and_tail_but_keeps_true_length(self):
-        t = make_user_turn("codex", "s", "/p", "ts", 0, "x" * (TURN_TEXT_CAP + 50),
+    def test_long_text_keeps_both_ends_and_its_true_length(self):
+        long = "HEAD " + "x" * (TURN_TEXT_CAP + 50) + " fix the last one TAIL"
+        t = make_user_turn("codex", "s", "/p", "ts", 0, long,
                            prev_assistant="y" * (ASSISTANT_TAIL_CAP + 50) + "END")
-        self.assertEqual(len(t["text"]), TURN_TEXT_CAP)
-        self.assertEqual(t["text_len"], TURN_TEXT_CAP + 50)
+        self.assertTrue(t["text"].startswith("HEAD "))
+        self.assertTrue(t["text"].endswith("fix the last one TAIL"))
+        self.assertIn("characters omitted", t["text"])
+        self.assertLess(len(t["text"]), TURN_TEXT_CAP + 60)
+        self.assertEqual(t["text_len"], len(long))
+        short = make_user_turn("codex", "s", "/p", "ts", 0, "x" * TURN_TEXT_CAP)
+        self.assertEqual(short["text"], "x" * TURN_TEXT_CAP)
         self.assertEqual(len(t["prev_assistant_tail"]), ASSISTANT_TAIL_CAP)
         self.assertTrue(t["prev_assistant_tail"].endswith("END"))
 
@@ -57,6 +65,27 @@ class MakeUserTurnTests(unittest.TestCase):
         self.assertIsNone(
             make_user_turn("grok", "s", "/p", "ts", 0, "hi",
                            prev_assistant="  ")["prev_assistant_tail"])
+
+
+class PrivateFileTests(unittest.TestCase):
+    def test_new_file_is_owner_only_whatever_the_umask(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "sub" / "turns.jsonl"
+            old = os.umask(0o022)
+            try:
+                write_private_text("x\n", out)
+            finally:
+                os.umask(old)
+            self.assertEqual(stat.S_IMODE(out.stat().st_mode), 0o600)
+
+    def test_existing_loose_file_is_tightened(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "turns.jsonl"
+            out.write_text("old")
+            os.chmod(out, 0o644)
+            write_private_text("new", out)
+            self.assertEqual(stat.S_IMODE(out.stat().st_mode), 0o600)
+            self.assertEqual(out.read_text(encoding="utf-8"), "new")
 
 
 class ClaudeTurnTests(unittest.TestCase):
@@ -90,9 +119,36 @@ class ClaudeTurnTests(unittest.TestCase):
         self.assertTrue(row["multi_turn"])
 
     def test_pasted_html_is_still_the_users_text(self):
-        row = self.scan([_user("<div>why is this centered?</div>", _ts(0)),
-                         _user("<b>bold</b> or not", _ts(1))])
+        kept = ["<div>why is this centered?</div>", "<b>bold</b> or not",
+                "<my-widget> does not render, why?",
+                "<my-widget>x</my-widget> shows nothing"]
+        row = self.scan([_user(t, _ts(i)) for i, t in enumerate(kept)])
+        self.assertEqual([t["text"] for t in row["_user_turns"]], kept)
+
+    def test_block_wholly_wrapped_in_hyphenated_tags_is_injected(self):
+        row = self.scan([
+            _user("<command-message>x</command-message>\n"
+                  "<command-name>/x</command-name>", _ts(0)),
+            _user("<new-harness-tag attr='1'>later addition</new-harness-tag>",
+                  _ts(1))])
+        self.assertEqual(row["_user_turns"], [])
+
+    def test_a_tool_call_alone_is_not_a_reply(self):
+        row = self.scan([
+            _user("go", _ts(0)),
+            _asst([{"type": "tool_use", "id": "1", "name": "Bash",
+                    "input": {"command": "ls"}}], _ts(1)),
+            _user("and then?", _ts(2))])
         self.assertEqual(len(row["_user_turns"]), 2)
+        self.assertFalse(row["multi_turn"])
+
+    def test_records_without_a_message_object_do_not_stop_the_scan(self):
+        row = self.scan([
+            {"type": "user", "timestamp": _ts(0), "message": None},
+            {"type": "assistant", "timestamp": _ts(1), "message": "broken"},
+            {"type": "user", "timestamp": _ts(2)},
+            _user("still here", _ts(3))])
+        self.assertEqual([t["text"] for t in row["_user_turns"]], ["still here"])
 
     def test_two_prompts_with_no_reply_between_is_not_multi_turn(self):
         row = self.scan([_user("a", _ts(0)), _user("b", _ts(1)),
@@ -169,10 +225,64 @@ class ClaudeTurnTests(unittest.TestCase):
                 [sys.executable, str(REPO_ROOT / "scripts" / "scan_transcripts.py"),
                  "--projects-dir", str(proj), "--output", str(rows)],
                 check=True, capture_output=True)
-            got = [json.loads(l) for l in rows.read_text().splitlines()]
+            got = [json.loads(l) for l in rows.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(len(got), 1)
         self.assertEqual(got[0]["cli_launches"],
                          [{"target": "codex", "ts": _ts(2), "until": None}])
+
+    def test_own_cli_call_is_recorded_too(self):
+        row = self.scan([
+            _user("ask a fresh one", _ts(0)),
+            _asst([{"type": "tool_use", "id": "1", "name": "Bash",
+                    "input": {"command": "claude -p 'second opinion'"}}], _ts(1))])
+        self.assertEqual([e["target"] for e in row["cli_launches"]], ["claude"])
+
+    def _run_scan(self, td, records_by_sid, *extra):
+        proj = Path(td) / "projects"
+        for sid, records in records_by_sid.items():
+            _write_transcript(proj, records, sid=sid)
+        rows, turns = Path(td) / "rows.jsonl", Path(td) / "turns.jsonl"
+        proc = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "scripts" / "scan_transcripts.py"),
+             "--projects-dir", str(proj), "--output", str(rows),
+             "--user-turns-output", str(turns), *extra],
+            capture_output=True, text=True)
+        return proc, rows, turns
+
+    def test_turns_file_is_owner_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            proc, _, turns = self._run_scan(td, {SID: [_user("hi", _ts(0))]})
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(stat.S_IMODE(turns.stat().st_mode), 0o600)
+
+    def test_same_path_for_both_outputs_is_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td) / "projects"
+            _write_transcript(proj, [_user("hi", _ts(0))])
+            same = Path(td) / "out.jsonl"
+            proc = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "scripts" / "scan_transcripts.py"),
+                 "--projects-dir", str(proj), "--output", str(same),
+                 "--user-turns-output", str(Path(td) / "." / "out.jsonl")],
+                capture_output=True, text=True)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("same file", proc.stderr)
+            self.assertFalse(same.exists())
+
+    def test_filtered_out_sessions_leave_no_turns(self):
+        other = "99999999-2222-3333-4444-555555555555"
+        with tempfile.TemporaryDirectory() as td:
+            proc, rows, turns = self._run_scan(td, {
+                SID: [_user("KEPT one", _ts(0)),
+                      _asst([{"type": "text", "text": "a"}], _ts(1)),
+                      _asst([{"type": "text", "text": "b"}], _ts(2))],
+                other: [_user("DROPPED one", _ts(0)),
+                        _asst([{"type": "text", "text": "a"}], _ts(1))],
+            }, "--min-assistant-msgs", "2")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(len(rows.read_text(encoding="utf-8").splitlines()), 1)
+            self.assertIn("KEPT one", turns.read_text(encoding="utf-8"))
+            self.assertNotIn("DROPPED one", turns.read_text(encoding="utf-8"))
 
     def test_cli_writes_turns_file_and_strips_them_from_rows(self):
         with tempfile.TemporaryDirectory() as td:
@@ -186,14 +296,14 @@ class ClaudeTurnTests(unittest.TestCase):
                     "--projects-dir", str(proj), "--output", str(rows)]
             subprocess.run(base, check=True, capture_output=True)
             self.assertFalse(turns.exists())
-            without_flag = rows.read_text()
+            without_flag = rows.read_text(encoding="utf-8")
             subprocess.run(base + ["--user-turns-output", str(turns)],
                            check=True, capture_output=True)
-            self.assertEqual(rows.read_text(), without_flag)
+            self.assertEqual(rows.read_text(encoding="utf-8"), without_flag)
             row = json.loads(without_flag.splitlines()[0])
             self.assertNotIn("_user_turns", row)
             self.assertNotIn("SECRET_TYPED_TEXT two", without_flag)
-            got = [json.loads(l) for l in turns.read_text().splitlines()]
+            got = [json.loads(l) for l in turns.read_text(encoding="utf-8").splitlines()]
             self.assertEqual([t["text"] for t in got],
                              ["SECRET_TYPED_TEXT one", "SECRET_TYPED_TEXT two"])
             self.assertEqual({t["source"] for t in got}, {"claude"})
@@ -244,23 +354,32 @@ class CodexTurnTests(unittest.TestCase):
         self.assertEqual(
             self.scan({"source": {"subagent": "review"}}, body)[0]["launch_source"],
             "subagent")
+        for other in ({}, {"something": "else"}, 7):
+            self.assertIsNone(self.scan({"source": other}, body)[0]["launch_source"])
         self.assertIsNone(self.scan({}, body)[0]["launch_source"])
 
-    def test_shell_calls_to_claude_are_recorded(self):
-        def call(args):
+    def test_calls_naming_claude_are_recorded_whatever_the_argument_shape(self):
+        def call(args, name="shell"):
             return _codex_line(_ts(2), "response_item",
-                               {"type": "function_call", "name": "shell",
+                               {"type": "function_call", "name": name,
                                 "arguments": args})
-        row, _ = self.scan({}, [
-            _codex_line(_ts(1), "event_msg",
-                        {"type": "user_message", "message": "x"}),
+        hits = [
             call(json.dumps({"command": ["bash", "-lc", "claude -p 'hi'"]})),
+            call(json.dumps({"cmd": "claude -p hi"}), name="exec_command"),
+            call(json.dumps({"command": "cd /w\nclaude -p hi"})),
+            call("claude -p not-json"),
+        ]
+        misses = [
             call(json.dumps({"command": "cat claude-notes.md"})),
-            call("not json but says claude"),
+            call(json.dumps({"command": "ls ~/.claude/projects"})),
             _codex_line(_ts(2), "response_item",
                         {"type": "function_call", "name": "shell"}),
-        ])
-        self.assertEqual([e["target"] for e in row["cli_launches"]], ["claude"])
+        ]
+        row, _ = self.scan({}, [
+            _codex_line(_ts(1), "event_msg",
+                        {"type": "user_message", "message": "x"})] + hits + misses)
+        self.assertEqual([e["target"] for e in row["cli_launches"]],
+                         ["claude"] * len(hits))
 
     def test_launch_window_closes_at_the_call_output(self):
         row, _ = self.scan({}, [
@@ -302,6 +421,10 @@ class GrokTurnTests(unittest.TestCase):
                  "prompt": "ask two", "is_bash": False},
                 {"timestamp": "2026-04-01T11:00:00.000Z", "session_id": "h",
                  "prompt": "only one", "is_bash": False},
+                {"timestamp": "2026-04-01T11:01:00.000Z", "session_id": "h",
+                 "prompt": "no is_bash field"},
+                {"timestamp": "2026-04-01T11:02:00.000Z", "session_id": "h",
+                 "prompt": "null is_bash", "is_bash": None},
             ]
             (d / "prompt_history.jsonl").write_text(
                 "\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
@@ -312,6 +435,8 @@ class GrokTurnTests(unittest.TestCase):
         self.assertFalse(by_sid["h"]["multi_turn"])
         self.assertEqual([t["text"] for t in turns if t["session_id"] == "g"],
                          ["ask one", "ask two"])
+        self.assertEqual([t["text"] for t in turns if t["session_id"] == "h"],
+                         ["only one"])
         self.assertTrue(all(t["prev_assistant_tail"] is None for t in turns))
         self.assertEqual(turns[0]["project_path"], "/home/user/projects/demo")
         self.assertNotIn("cli_launches", by_sid["g"])
@@ -370,9 +495,9 @@ class DemoPipelineTests(unittest.TestCase):
             "--origins-output", str(out / "origins.json"),
             "--output", str(out / "analysis-data.json"))
         cls.out = out
-        cls.analysis_text = (out / "analysis-data.json").read_text()
+        cls.analysis_text = (out / "analysis-data.json").read_text(encoding="utf-8")
         cls.analysis = json.loads(cls.analysis_text)
-        cls.origins = json.loads((out / "origins.json").read_text())["sessions"]
+        cls.origins = json.loads((out / "origins.json").read_text(encoding="utf-8"))["sessions"]
 
     @classmethod
     def tearDownClass(cls):
@@ -391,7 +516,8 @@ class DemoPipelineTests(unittest.TestCase):
                   f"codex:{self.sid(3)}": "launched",
                   f"codex:{self.sid(4)}": "direct",
                   f"claude:{self.sid(5)}": "launched",
-                  f"grok:{self.sid(6)}": "unknown"}
+                  f"grok:{self.sid(6)}": "unknown",
+                  f"grok:{self.sid(7)}": "direct"}
         self.assertEqual({k: self.origins.get(k) for k in expect}, expect)
 
     def test_source_cards_carry_counts_that_sum_to_classified_sessions(self):
@@ -411,29 +537,42 @@ class DemoPipelineTests(unittest.TestCase):
         for n in (2, 3, 4, 6):  # cross-tool session ids
             self.assertNotIn(self.sid(n), self.analysis_text)
 
-    def test_typed_text_is_in_the_turns_file_and_nowhere_else(self):
-        claude_turns = (self.out / "user-turns.claude.jsonl").read_text()
+    LATER = {"claude": "CLAUDE_LATER_TURN_MARKER",
+             "codex": "CODEX_LATER_TURN_MARKER",
+             "grok": "GROK_LATER_TURN_MARKER"}
+    ROWS = {"claude": "t.jsonl", "codex": "c.jsonl", "grok": "g.jsonl"}
+
+    def test_later_turns_of_every_source_are_in_their_turns_file_only(self):
+        for src, marker in self.LATER.items():
+            turns = (self.out / f"user-turns.{src}.jsonl").read_text(encoding="utf-8")
+            self.assertIn(marker, turns, src)
+            self.assertNotIn(marker, (self.out / self.ROWS[src]).read_text(encoding="utf-8"), src)
+            self.assertNotIn(marker, self.analysis_text, src)
+
+    def test_injected_text_and_first_prompt_marker(self):
+        claude_turns = (self.out / "user-turns.claude.jsonl").read_text(encoding="utf-8")
         self.assertIn("TURN_PRIVATE_MARKER", claude_turns)
         self.assertNotIn("injected, not typed", claude_turns)
         self.assertNotIn("/model", claude_turns)
-        grok_turns = (self.out / "user-turns.grok.jsonl").read_text()
-        self.assertIn("GROK_PRIVATE_MARKER", grok_turns)
+        self.assertIn("GROK_PRIVATE_MARKER",
+                      (self.out / "user-turns.grok.jsonl").read_text(encoding="utf-8"))
         self.assertNotIn("GROK_PRIVATE_MARKER", self.analysis_text)
-        # The planted prompt is the 2nd+ kind of text that only the turns
-        # file may hold: a later turn, never a session's first prompt.
-        self.assertNotIn("yes, apply both", self.analysis_text)
-        for name in ("t.jsonl", "c.jsonl", "g.jsonl"):
-            self.assertNotIn("yes, apply both", (self.out / name).read_text())
+
+    def test_working_files_are_owner_only(self):
+        for name in ("user-turns.claude.jsonl", "user-turns.codex.jsonl",
+                     "user-turns.grok.jsonl", "origins.json"):
+            mode = stat.S_IMODE((self.out / name).stat().st_mode)
+            self.assertEqual(mode, 0o600, name)
 
     def test_report_builds_show_the_split_only_in_self(self):
         hist = self.out / "history.jsonl"
         samples = self.out / "samples.json"
         samples.write_text("{}", encoding="utf-8")
+        narr = self.out / "ledger.md"
+        narr.write_text("# opening\n\nDemo.\n\n# team-ledger\n\nDemo team.\n",
+                        encoding="utf-8")
         for audience, expect in (("self", True), ("hr", False)):
             html_path = self.out / f"{audience}.html"
-            narr = self.out / "ledger.md"
-            narr.write_text("# opening\n\nDemo.\n\n# team-ledger\n\nDemo team.\n",
-                            encoding="utf-8")
             subprocess.run(
                 [sys.executable, str(REPO_ROOT / "scripts" / "build_html.py"),
                  "--input", str(self.out / "analysis-data.json"),
@@ -441,10 +580,13 @@ class DemoPipelineTests(unittest.TestCase):
                  "--audience", audience, "--ledger-narration", str(narr),
                  "--output", str(html_path), "--history-file", str(hist)],
                 check=True, cwd=REPO_ROOT, capture_output=True)
-            html = html_path.read_text()
+            html = html_path.read_text(encoding="utf-8")
             self.assertEqual("c-source-card-origin" in html, expect, audience)
+            self.assertEqual("launched by another tool" in html, expect, audience)
+            self.assertNotIn("origin_counts", html)
             self.assertNotIn("TURN_PRIVATE_MARKER", html)
-            self.assertNotIn("yes, apply both", html)
+            for marker in self.LATER.values():
+                self.assertNotIn(marker, html, audience)
 
 
 if __name__ == "__main__":

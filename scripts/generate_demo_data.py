@@ -857,6 +857,12 @@ def gen_grok_sessions(now, n=16):
 # Marker planted in a hand-typed demo prompt. Tests assert it appears in the
 # user-turns working file and in no report or analysis output.
 DEMO_TURN_MARKER = "TURN_PRIVATE_MARKER"
+# One marker per source, each planted in a turn AFTER the session's first:
+# first prompts already travel in session rows (existing behaviour), so
+# only a later turn proves the new capture path keeps text to its own file.
+DEMO_LATER_TURN_MARKERS = {"claude": "CLAUDE_LATER_TURN_MARKER",
+                           "codex": "CODEX_LATER_TURN_MARKER",
+                           "grok": "GROK_LATER_TURN_MARKER"}
 
 
 def gen_origin_fixtures(now):
@@ -871,6 +877,7 @@ def gen_origin_fixtures(now):
       codex  D   hand-driven, two turns; its shell call starts claude
       claude E   launched: single prompt, starts 4s after D's call
       grok   F   unknown: one prompt, older than every codex transcript
+      grok   G   hand-driven, two typed prompts
     """
     def sid(n):
         return str(uuid.UUID(int=0xC0FFEE00000000000000000000000000 + n))
@@ -910,7 +917,8 @@ def gen_origin_fixtures(now):
         asst(bash('codex exec -m demo "review the diff"'), call_1),
         asst([{"type": "text", "text": "Review is back. Apply both fixes?"}],
              base + timedelta(minutes=5)),
-        user("yes, apply both", base + timedelta(minutes=6)),
+        user(f"{DEMO_LATER_TURN_MARKERS['claude']} yes, apply both",
+             base + timedelta(minutes=6)),
         asst(bash("cd /tmp && timeout 600 codex review"), call_2),
         asst([{"type": "text", "text": "Done."}], base + timedelta(minutes=14)),
     ]
@@ -946,7 +954,8 @@ def gen_origin_fixtures(now):
     codex_session(3, call_2 + timedelta(seconds=5), {}, ["review"])
     d_start = base + timedelta(hours=2)
     codex_session(4, d_start, {"source": "cli"},
-                  ["summarise this folder", "now ask the other tool"],
+                  ["summarise this folder",
+                   f"{DEMO_LATER_TURN_MARKERS['codex']} now ask the other tool"],
                   shell_args={"command": ["bash", "-lc", "claude -p 'second opinion'"]})
     # D's shell call lands 1s + 1min after its start (first turn).
     e_start = d_start + timedelta(seconds=1, minutes=1) + timedelta(seconds=4)
@@ -965,6 +974,16 @@ def gen_origin_fixtures(now):
             "timestamp": f_start.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "session_id": sid(6), "prompt": "one-off question",
             "is_bash": False}) + "\n")
+        # grok G: two typed prompts in one session (hand-driven).
+        g_start = now - timedelta(days=4)
+        for k, prompt in enumerate(
+                ["compare the two drafts",
+                 f"{DEMO_LATER_TURN_MARKERS['grok']} keep the shorter one"]):
+            fh.write(json.dumps({
+                "timestamp": (g_start + timedelta(minutes=2 * k))
+                .strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                "session_id": sid(7), "prompt": prompt,
+                "is_bash": False}) + "\n")
 
 
 def gen_antigravity_files(now, n=6):

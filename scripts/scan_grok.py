@@ -12,12 +12,14 @@ from urllib.parse import unquote
 
 try:
     from cross_llm_common import (
-        add_user_turns_arg, make_user_turn, parse_jsonl_object, parse_ts,
-        prompt_identity, segments_and_duration, to_local_iso, write_rows)
+        add_user_turns_arg, check_distinct_outputs, make_user_turn,
+        parse_jsonl_object, parse_ts, prompt_identity, segments_and_duration,
+        to_local_iso, write_rows, write_user_turns)
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_grok
     from scripts.cross_llm_common import (
-        add_user_turns_arg, make_user_turn, parse_jsonl_object, parse_ts,
-        prompt_identity, segments_and_duration, to_local_iso, write_rows)
+        add_user_turns_arg, check_distinct_outputs, make_user_turn,
+        parse_jsonl_object, parse_ts, prompt_identity, segments_and_duration,
+        to_local_iso, write_rows, write_user_turns)
 
 DEFAULT_SESSIONS_DIR = Path.home() / ".grok" / "sessions"
 
@@ -56,7 +58,11 @@ def scan_sessions_dir(root: Path, turns_out=None):
                 s["prompts"] += 1
                 if rec.get("is_bash"):
                     s["bash"] += 1
-                elif isinstance(rec.get("prompt"), str) and rec["prompt"].strip():
+                elif rec.get("is_bash") is False \
+                        and isinstance(rec.get("prompt"), str) \
+                        and rec["prompt"].strip():
+                    # Typed prompt. A row that does not say is_bash: false
+                    # is not assumed to be one.
                     s["typed"].append((ts, rec["prompt"]))
                 if s["first"] is None:
                     text = rec.get("prompt")
@@ -110,6 +116,7 @@ def main():
     ap.add_argument("--output", required=True)
     add_user_turns_arg(ap)
     args = ap.parse_args()
+    check_distinct_outputs(ap, args.output, args.user_turns_output)
     user_turns = [] if args.user_turns_output else None
     rows, errors = scan_sessions_dir(
         Path(args.sessions_dir).expanduser(), user_turns)
@@ -120,7 +127,7 @@ def main():
     rows.append({"_meta": True, "source": "grok", "parse_errors": errors})
     write_rows(rows, args.output)
     if user_turns is not None:
-        write_rows(user_turns, args.user_turns_output)
+        write_user_turns(user_turns, args.user_turns_output)
     print(f"grok: {len(rows) - 1} sessions, {errors} parse errors", file=sys.stderr)
 
 

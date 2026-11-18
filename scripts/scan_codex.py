@@ -7,50 +7,68 @@ into idle-gap segments). Emits scan_transcripts-shaped rows plus
 source/coverage/segments. Missing signals stay null, never imputed.
 """
 import argparse
+import json
 import sys
 from pathlib import Path
 
 try:
     from cross_llm_common import (
-        add_user_turns_arg, cli_launch_targets, make_cli_launch,
-        make_user_turn, parse_jsonl_object, parse_ts, prompt_identity,
-        segments_and_duration, to_local_iso, write_rows)
+        add_user_turns_arg, check_distinct_outputs, cli_launch_targets,
+        make_cli_launch, make_user_turn, parse_jsonl_object, parse_ts,
+        prompt_identity, segments_and_duration, to_local_iso, write_rows,
+        write_user_turns)
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_codex
     from scripts.cross_llm_common import (
-        add_user_turns_arg, cli_launch_targets, make_cli_launch,
-        make_user_turn, parse_jsonl_object, parse_ts, prompt_identity,
-        segments_and_duration, to_local_iso, write_rows)
+        add_user_turns_arg, check_distinct_outputs, cli_launch_targets,
+        make_cli_launch, make_user_turn, parse_jsonl_object, parse_ts,
+        prompt_identity, segments_and_duration, to_local_iso, write_rows,
+        write_user_turns)
 
 DEFAULT_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
 
 def _launch_source(payload):
     """How the session header says the session was started, as one
-    lowercase word, or None when the header does not say. A non-string
-    value is the header of a spawned sub-session."""
+    lowercase word, or None when the header does not say. A spawned
+    sub-session's header carries an object naming the sub-agent instead
+    of a word."""
     src = payload.get("source")
     if isinstance(src, str) and src.strip():
         return src.strip().lower()
-    if isinstance(src, dict):
+    if isinstance(src, dict) and "subagent" in src:
         return "subagent"
     return None
 
 
-def _shell_command(payload):
-    """The command text of a function_call payload, or "". `arguments` is
-    a JSON string whose `command` is a string or an argv list. Only
-    decoded when the raw text names another AI CLI at all — most calls
-    do not, and decoding every one would double the JSON work per call."""
+def _strings(value):
+    """Every string inside a decoded JSON value, depth-first."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _strings(v)
+
+
+def _call_text(payload):
+    """The text of a function_call's arguments, or "". Tools name their
+    command field differently (`command` as a string or argv list, `cmd`,
+    ...), so every string in the arguments is read rather than one key.
+    The raw JSON is decoded first — inside it, a newline before a command
+    is the two characters backslash-n, which would glue onto the word —
+    but only when it names an AI CLI at all: most calls do not, and
+    decoding every one would double the JSON work per call."""
     args = payload.get("arguments")
-    if not isinstance(args, str) or not cli_launch_targets(args, "codex"):
+    if not isinstance(args, str) or not cli_launch_targets(
+            args.replace("\\n", " ").replace("\\t", " ").replace("\\r", " ")):
         return ""
-    parsed = parse_jsonl_object(args)
-    if parsed is None:
-        return ""
-    cmd = parsed.get("command")
-    if isinstance(cmd, list):
-        return " ".join(c for c in cmd if isinstance(c, str))
-    return cmd if isinstance(cmd, str) else ""
+    try:
+        decoded = json.loads(args)
+    except ValueError:
+        return args
+    return "\n".join(_strings(decoded))
 
 
 def scan_one(path: Path, turns_out=None):
@@ -139,13 +157,14 @@ def scan_one(path: Path, turns_out=None):
                     name = payload.get("name") or "(unknown)"
                     tool_counts[name] = tool_counts.get(name, 0) + 1
                     if ts:
-                        for target in cli_launch_targets(
-                                _shell_command(payload), "codex"):
+                        for target in cli_launch_targets(_call_text(payload)):
                             ev = make_cli_launch(target, to_local_iso(ts))
                             cli_launches.append(ev)
-                            launches_by_call.setdefault(
-                                payload.get("call_id"), []).append(ev)
-                elif payload.get("type") == "function_call_output" and ts:
+                            if payload.get("call_id"):
+                                launches_by_call.setdefault(
+                                    payload["call_id"], []).append(ev)
+                elif payload.get("type") == "function_call_output" and ts \
+                        and payload.get("call_id"):
                     # The call's result: the launched session started
                     # somewhere between the request and this moment.
                     for ev in launches_by_call.pop(payload.get("call_id"), []):
@@ -193,6 +212,7 @@ def main():
     ap.add_argument("--output", required=True)
     add_user_turns_arg(ap)
     args = ap.parse_args()
+    check_distinct_outputs(ap, args.output, args.user_turns_output)
     root = Path(args.sessions_dir).expanduser()
     rows = []
     total_errors = 0
@@ -210,7 +230,7 @@ def main():
     rows.append({"_meta": True, "source": "codex", "parse_errors": total_errors})
     write_rows(rows, args.output)
     if user_turns is not None:
-        write_rows(user_turns, args.user_turns_output)
+        write_user_turns(user_turns, args.user_turns_output)
     print(f"codex: {len(rows) - 1} sessions, {total_errors} parse errors",
           file=sys.stderr)
 

@@ -13,10 +13,12 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 try:
-    from cross_llm_common import normalize_prompt, parse_jsonl_object, prompt_identity
+    from cross_llm_common import (normalize_prompt, parse_jsonl_object,
+                                   prompt_identity, write_private_text)
     from origin import classify_all, count_by_source
 except ImportError:  # pragma: no cover - exercised when imported as scripts.aggregate
-    from scripts.cross_llm_common import normalize_prompt, parse_jsonl_object, prompt_identity
+    from scripts.cross_llm_common import (normalize_prompt, parse_jsonl_object,
+                                           prompt_identity, write_private_text)
     from scripts.origin import classify_all, count_by_source
 
 DEFAULT_DATA_DIR = Path.home() / ".claude/usage-data"
@@ -3220,8 +3222,11 @@ def main():
                              "Local sessions take precedence on session_id collisions.")
     parser.add_argument("--origins-output", default=None,
                         help="Write {source:session_id -> direct|launched|"
-                             "unknown} to this JSON file. Session-level, so "
-                             "it stays a working file outside analysis-data.")
+                             "unknown} to this JSON file (created owner-"
+                             "readable only). Session-level, so it stays a "
+                             "working file outside analysis-data. Sources "
+                             "with nothing to classify (antigravity) and "
+                             "orphan subagent fragments have no entry.")
     parser.add_argument("--cross-llm-rows", action="append", default=[],
                         help="Path to scan_codex/grok/antigravity output jsonl. "
                              "Repeatable. Rows feed the cross_llm/ledger blocks "
@@ -3395,15 +3400,22 @@ def main():
     # working file (read by the findings verifier); analysis-data.json
     # only ever gets the per-source counts.
     claude_rows = list(activity_rows.values())
-    session_origins = classify_all(claude_rows + cross_rows)
+    # Which tools were actually scanned for shell calls: Claude when its
+    # transcripts were (session-meta alone carries none), and each adapter
+    # that ran — an adapter's output always ends with a _meta line, which
+    # load_cross_llm_rows records under its source even at zero rows. A
+    # tool missing here is "not looked at", never "launched nothing".
+    scanned_sources = {s for s in cross_errors if s != "(unknown)"}
+    scanned_sources.update(r["source"] for r in cross_rows)
+    if activity_metas is not None:
+        scanned_sources.add("claude")
+    session_origins = classify_all(claude_rows + cross_rows, scanned_sources)
     cross_llm = compute_cross_llm(claude_rows, cross_rows,
                                   origins=session_origins)
     if args.origins_output:
-        origins_path = Path(args.origins_output).expanduser()
-        origins_path.parent.mkdir(parents=True, exist_ok=True)
-        origins_path.write_text(json.dumps(
+        write_private_text(json.dumps(
             {"schema_version": 1, "sessions": session_origins},
-            ensure_ascii=False, indent=1), encoding="utf-8")
+            ensure_ascii=False, indent=1), args.origins_output)
     for card in cross_llm["sources"]:
         card["parse_errors"] = cross_errors.get(card["source"], 0)
     # Errors bucketed under "(unknown)" (malformed JSON, or a row missing

@@ -28,18 +28,20 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from cross_llm_common import (add_user_turns_arg, cli_launch_targets,
-                                   make_cli_launch, make_user_turn,
-                                   prompt_identity, segments_and_duration,
-                                   split_segments, to_local_iso, write_rows)
+    from cross_llm_common import (add_user_turns_arg, check_distinct_outputs,
+                                   cli_launch_targets, make_cli_launch,
+                                   make_user_turn, prompt_identity,
+                                   segments_and_duration, split_segments,
+                                   to_local_iso, write_user_turns)
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_transcripts
     from scripts.cross_llm_common import (add_user_turns_arg,
+                                           check_distinct_outputs,
                                            cli_launch_targets,
                                            make_cli_launch, make_user_turn,
                                            prompt_identity,
                                            segments_and_duration,
                                            split_segments, to_local_iso,
-                                           write_rows)
+                                           write_user_turns)
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
@@ -77,12 +79,16 @@ _AGENT_RE = _re.compile(r"^agent-", _re.I)
 
 # Text the harness writes into user-role records on the user's behalf:
 # slash-command echoes, local command output, hook and task notices,
-# injected reminders. They all open with a lowercase hyphenated tag
-# (<system-reminder>, <command-name>, <local-command-stdout>, ...). The
-# test is the convention, not a list of today's tag names, so a tag the
-# harness adds later is still left out rather than read as the user's
-# words. Text the user pastes is safe: no HTML element name has a hyphen.
-_INJECTED_TAG_RE = re.compile(r"<[a-z]+(?:-[a-z]+)+[\s>]")
+# injected reminders. Such a block is wholly wrapped in lowercase
+# hyphenated tags: it opens with one (<system-reminder>, <command-name>,
+# <local-command-stdout>, ...) and ends with a closing one. The test is
+# that convention, not a list of today's tag names, so a tag the harness
+# adds later is still left out rather than read as the user's words.
+# What the user types survives unless it is nothing but such an element:
+# plain HTML has no hyphenated element names, and a question about a
+# custom element ("<my-widget> does not render") is not wholly wrapped.
+_INJECTED_BLOCK_RE = re.compile(
+    r"<[a-z]+(?:-[a-z]+)+[\s>].*</[a-z]+(?:-[a-z]+)+>\Z", re.DOTALL)
 _INTERRUPT_MARK = "[Request interrupted by user"
 # Injected prose with no tag: the notice before local-command output, the
 # summary that opens a compacted session, and the interrupt marker.
@@ -93,9 +99,16 @@ _INJECTED_PREFIXES = (
 )
 
 
+def _content(record):
+    """A record's message content, or None when the record has no message
+    object (a malformed or truncated line must not stop the scan)."""
+    message = record.get("message")
+    return message.get("content") if isinstance(message, dict) else None
+
+
 def _text_parts(record):
     """The stripped, non-empty text blocks of a record's message."""
-    content = record.get("message", {}).get("content")
+    content = _content(record)
     if isinstance(content, str):
         content = [{"type": "text", "text": content}]
     if not isinstance(content, list):
@@ -121,7 +134,7 @@ def _typed_text(record):
         return ""
     return "\n".join(
         t for t in _text_parts(record)
-        if not _INJECTED_TAG_RE.match(t) and not t.startswith(_INJECTED_PREFIXES))
+        if not _INJECTED_BLOCK_RE.match(t) and not t.startswith(_INJECTED_PREFIXES))
 
 
 def _is_interrupt_result(block):
@@ -140,23 +153,23 @@ def _has_interrupt(record):
     cancelled tool call."""
     if any(t.startswith(_INTERRUPT_MARK) for t in _text_parts(record)):
         return True
-    content = record.get("message", {}).get("content")
+    content = _content(record)
     return isinstance(content, list) and any(
         _is_interrupt_result(c) for c in content)
 
 
 def _cli_launches(records):
     """[{target, ts, until}] for each Bash call, in any thread of the
-    transcript, that starts another AI CLI — the evidence that a session
-    of that tool was launched from here rather than by hand. `until` is
+    transcript, that starts an AI CLI (another tool's, or a fresh
+    `claude -p` of its own) — the evidence that a session of that tool
+    was launched from here rather than by hand. `until` is
     the timestamp of the call's tool_result (None if never recorded): the
     launched session starts somewhere between the two, and a permission
     prompt can stretch that gap well past a few seconds."""
     launches = []
     by_call_id = {}
     for r in records:
-        content = r.get("message", {}).get("content") \
-            if isinstance(r.get("message"), dict) else None
+        content = _content(r)
         if not isinstance(content, list):
             continue
         if r.get("type") == "assistant":
@@ -166,7 +179,7 @@ def _cli_launches(records):
                     continue
                 inp = c.get("input")
                 cmd = inp.get("command", "") if isinstance(inp, dict) else ""
-                for target in cli_launch_targets(cmd, "claude"):
+                for target in cli_launch_targets(cmd):
                     ev = make_cli_launch(target, r.get("timestamp") or "")
                     launches.append(ev)
                     by_call_id.setdefault(c.get("id"), []).append(ev)
@@ -182,8 +195,9 @@ def _user_turns(records, sid, project_path):
     """(turns, multi_turn) for one session transcript.
 
     turns: one row per prompt the user typed, in order.
-    multi_turn: the user typed, the assistant answered, and the user typed
-      again — the mark of a session somebody was sitting in."""
+    multi_turn: the user typed, the assistant answered in words, and the
+      user typed again — the mark of a session somebody was sitting in.
+      A tool call alone is not an answer."""
     turns = []
     last_assistant = None
     replied_since_turn = False
@@ -193,10 +207,9 @@ def _user_turns(records, sid, project_path):
         rtype = r.get("type")
         sidechain = bool(r.get("isSidechain"))
         if rtype == "assistant":
-            if not sidechain:
+            if not sidechain and _text_parts(r):
                 # Only the main thread's replies are what the user read.
-                if _text_parts(r):
-                    last_assistant = r
+                last_assistant = r
                 replied_since_turn = True
         elif rtype == "user" and not sidechain:
             if _has_interrupt(r):
@@ -277,7 +290,7 @@ def _scan_usage(records):
     tool_counts = Counter()
     git_commits = git_pushes = 0
     for r in asst:
-        content = r.get("message", {}).get("content") if isinstance(r.get("message"), dict) else None
+        content = _content(r)
         if not isinstance(content, list):
             continue
         for c in content:
@@ -431,7 +444,7 @@ def scan_one(path: Path):
     # is real text (not a tool_result auto-reply). session-meta uses this
     # definition; matching it lets us cross-validate against the ground truth.
     def _is_text_user(r):
-        content = r.get("message", {}).get("content")
+        content = _content(r)
         if isinstance(content, str):
             return bool(content.strip())
         if isinstance(content, list):
@@ -511,7 +524,7 @@ def scan_one(path: Path):
 
     tool_counts = Counter()
     for r in asst_msgs:
-        content = r.get("message", {}).get("content")
+        content = _content(r)
         if not isinstance(content, list):
             continue
         for c in content:
@@ -523,7 +536,7 @@ def scan_one(path: Path):
     tool_errors = 0
     user_interruptions = 0
     for r in all_user_records:
-        content = r.get("message", {}).get("content")
+        content = _content(r)
         if not isinstance(content, list):
             continue
         for c in content:
@@ -536,7 +549,7 @@ def scan_one(path: Path):
 
     git_commits = git_pushes = 0
     for r in asst_msgs:
-        content = r.get("message", {}).get("content")
+        content = _content(r)
         if not isinstance(content, list):
             continue
         for c in content:
@@ -560,7 +573,7 @@ def scan_one(path: Path):
 
     first_prompt = ""
     for r in user_msgs:
-        content = r.get("message", {}).get("content")
+        content = _content(r)
         if isinstance(content, str):
             first_prompt = content
             break
@@ -584,7 +597,7 @@ def scan_one(path: Path):
         if t == "assistant":
             prev_asst_ts = ts
         elif t == "user" and prev_asst_ts is not None:
-            content = r.get("message", {}).get("content")
+            content = _content(r)
             is_text = False
             if isinstance(content, str):
                 is_text = True
@@ -668,8 +681,11 @@ def main():
     ap.add_argument("--min-assistant-msgs", type=int, default=0,
                     help="Drop sessions with fewer than N assistant messages. "
                          "Default 0 (keep all). Use 3 to match session-meta-like "
-                         "filtering that excludes warmup/interrupted-at-start sessions.")
+                         "filtering that excludes warmup/interrupted-at-start sessions. "
+                         "Dropped sessions take their user turns and their "
+                         "launch evidence with them.")
     args = ap.parse_args()
+    check_distinct_outputs(ap, args.output, args.user_turns_output)
 
     projects_dir = Path(args.projects_dir).expanduser()
     out = Path(args.output).expanduser()
@@ -854,7 +870,7 @@ def main():
     user_turns = []
     with out.open("w", encoding="utf-8") as fh:
         for row in rows_by_sid.values():
-            user_turns.extend(row.pop("_user_turns", None) or [])
+            turns = row.pop("_user_turns", None) or []
             pairs = row.pop("_assistant_output_pairs", None)
             if pairs is not None:
                 pairs.sort(key=lambda p: p[0] or "")
@@ -882,11 +898,15 @@ def main():
                     row["assistant_message_count"] < args.min_assistant_msgs:
                 n_filtered += 1
                 continue
+            # Turns follow their row: a session filtered out above has no
+            # row for origin.py to classify, so its prompts could never be
+            # told apart from launched ones.
+            user_turns.extend(turns)
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             n_emitted += 1
 
     if args.user_turns_output:
-        write_rows(user_turns, args.user_turns_output)
+        write_user_turns(user_turns, args.user_turns_output)
 
     msg = (f"scanned {n_scanned} jsonl files, emitted {n_emitted} session rows "
            f"to {out} (merged {n_merged} subagent runs into parents, "

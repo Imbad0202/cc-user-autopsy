@@ -9,6 +9,7 @@ gaps, so parallel detection never counts idle days as active time.
 """
 import hashlib
 import json
+import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -121,23 +122,30 @@ def write_rows(rows, output) -> None:
 # (--user-turns-output). That file holds raw prompt text: it stays in the
 # working directory and never flows into analysis-data.json or any HTML.
 
-TURN_TEXT_CAP = 2000
+# A prompt longer than TURN_TEXT_CAP keeps its head and its tail (pasted
+# material tends to sit in the middle; the instruction is at one end).
+TURN_TEXT_CAP = 4000
 ASSISTANT_TAIL_CAP = 300
 
 # A shell command that mentions another AI CLI as a word of its own:
 # `codex exec`, `/opt/bin/codex review`, `nohup codex ... &`, `bash -lc
-# 'claude -p x'`. Deliberately loose. Parsing for "command position" would
-# miss every wrapper nobody listed, and a miss is the costly error: the
-# session it launched would then read as hand-driven. The tight filter is
-# elsewhere — origin.py only counts a mention when a session of that tool
-# also starts while the call is running. Names inside a longer word or a
-# path component do not match (`codex-notes.md`, `~/.claude/settings.json`).
+# 'claude -p x'`, `codex.exe exec`. Deliberately loose. Parsing for
+# "command position" would miss every wrapper nobody listed, and a miss is
+# the costly error: the session it launched would then read as
+# hand-driven. The tight filter is elsewhere — origin.py only counts a
+# mention when a session of that tool also starts while the call is
+# running. A stray mention (`command -v codex`) can therefore mark an
+# unrelated session that happens to start in that window as launched;
+# that errs on the side the design chooses (undercount hand-driven use).
+# Names inside a longer word or a path component do not match
+# (`codex-notes.md`, `~/.claude/settings.json`).
 _CLI_MENTION_RE = re.compile(
-    r"(?<![\w.\-])(?:[\w./~\-]*/)?(codex|grok|claude)(?![\w.\-/])")
+    r"(?<![\w.\-])(?:[\w./~\-]*/)?(codex|grok|claude)(?:\.exe)?(?![\w.\-/])")
 
 USER_TURNS_HELP = ("Also write one row per prompt the user typed to this "
-                   "JSONL file. It holds raw prompt text: keep it out of "
-                   "version control and out of any report.")
+                   "JSONL file (created owner-readable only). It holds raw "
+                   "prompt text: keep it out of version control and out of "
+                   "any report.")
 
 
 def add_user_turns_arg(parser):
@@ -145,17 +153,29 @@ def add_user_turns_arg(parser):
                         help=USER_TURNS_HELP)
 
 
-def cli_launch_targets(command, own_source):
-    """Names of the other AI CLIs a shell command mentions, in order of
-    appearance, without duplicates. own_source is never reported (a tool
-    re-invoking itself is not a cross-tool launch)."""
+def check_distinct_outputs(parser, *paths):
+    """Refuse two output flags that resolve to one file: the second write
+    would silently replace the first (and put raw prompt text where
+    session rows were expected)."""
+    seen = set()
+    for p in paths:
+        if not p:
+            continue
+        resolved = Path(p).expanduser().resolve()
+        if resolved in seen:
+            parser.error(f"two output flags point at the same file: {p}")
+        seen.add(resolved)
+
+
+def cli_launch_targets(command):
+    """Names of the AI CLIs a shell command mentions, in order of
+    appearance, without duplicates."""
     if not isinstance(command, str) or not command:
         return []
     out = []
     for m in _CLI_MENTION_RE.finditer(command):
-        name = m.group(1)
-        if name != own_source and name not in out:
-            out.append(name)
+        if m.group(1) not in out:
+            out.append(m.group(1))
     return out
 
 
@@ -165,11 +185,20 @@ def make_cli_launch(target, ts, until=None):
     return {"target": target, "ts": ts, "until": until}
 
 
+def clip_turn_text(text):
+    if len(text) <= TURN_TEXT_CAP:
+        return text
+    half = TURN_TEXT_CAP // 2
+    omitted = len(text) - 2 * half
+    return f"{text[:half]}\n[... {omitted} characters omitted ...]\n{text[-half:]}"
+
+
 def make_user_turn(source, session_id, project_path, ts, turn_index, text,
                    after_interrupt=False, prev_assistant=None):
-    """One user-turns row. text is capped (text_len keeps the original
-    length); prev_assistant_tail is the end of the reply the user was
-    answering, or None when the source records no assistant text."""
+    """One user-turns row. Long text is clipped in the middle (text_len
+    keeps the original length); prev_assistant_tail is the end of the
+    reply the user was answering, or None when the source records no
+    assistant text."""
     text = text.strip()
     tail = None
     if isinstance(prev_assistant, str) and prev_assistant.strip():
@@ -180,8 +209,26 @@ def make_user_turn(source, session_id, project_path, ts, turn_index, text,
         "project_path": project_path,
         "ts": ts,
         "turn_index": turn_index,
-        "text": text[:TURN_TEXT_CAP],
+        "text": clip_turn_text(text),
         "text_len": len(text),
         "after_interrupt": bool(after_interrupt),
         "prev_assistant_tail": tail,
     }
+
+
+def write_private_text(text, output) -> None:
+    """Write a working file that holds prompt text or session ids so that
+    only the current user can read it (0600), whatever the umask and
+    whatever mode an earlier file at that path had. The usual working
+    directory is under /tmp, which other local accounts can list."""
+    out = Path(output).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        os.chmod(out, 0o600)
+        fh.write(text)
+
+
+def write_user_turns(turns, output) -> None:
+    write_private_text(
+        "".join(json.dumps(t, ensure_ascii=False) + "\n" for t in turns), output)
