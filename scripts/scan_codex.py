@@ -12,18 +12,58 @@ from pathlib import Path
 
 try:
     from cross_llm_common import (
-        parse_jsonl_object, parse_ts, prompt_identity, segments_and_duration,
-        to_local_iso, write_rows)
+        add_user_turns_arg, cli_launch_targets, make_cli_launch,
+        make_user_turn, parse_jsonl_object, parse_ts, prompt_identity,
+        segments_and_duration, to_local_iso, write_rows)
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_codex
     from scripts.cross_llm_common import (
-        parse_jsonl_object, parse_ts, prompt_identity, segments_and_duration,
-        to_local_iso, write_rows)
+        add_user_turns_arg, cli_launch_targets, make_cli_launch,
+        make_user_turn, parse_jsonl_object, parse_ts, prompt_identity,
+        segments_and_duration, to_local_iso, write_rows)
 
 DEFAULT_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
 
-def scan_one(path: Path):
+def _launch_source(payload):
+    """How the session header says the session was started, as one
+    lowercase word, or None when the header does not say. A non-string
+    value is the header of a spawned sub-session."""
+    src = payload.get("source")
+    if isinstance(src, str) and src.strip():
+        return src.strip().lower()
+    if isinstance(src, dict):
+        return "subagent"
+    return None
+
+
+def _shell_command(payload):
+    """The command text of a function_call payload, or "". `arguments` is
+    a JSON string whose `command` is a string or an argv list. Only
+    decoded when the raw text names another AI CLI at all — most calls
+    do not, and decoding every one would double the JSON work per call."""
+    args = payload.get("arguments")
+    if not isinstance(args, str) or not cli_launch_targets(args, "codex"):
+        return ""
+    parsed = parse_jsonl_object(args)
+    if parsed is None:
+        return ""
+    cmd = parsed.get("command")
+    if isinstance(cmd, list):
+        return " ".join(c for c in cmd if isinstance(c, str))
+    return cmd if isinstance(cmd, str) else ""
+
+
+def scan_one(path: Path, turns_out=None):
+    """Returns (row, parse_errors). When turns_out is a list, the prompts
+    the user typed are appended to it (raw text — see cross_llm_common)."""
     session_id = None
+    launch_source = None
+    turns = []
+    cli_launches = []
+    launches_by_call = {}
+    last_assistant = None
+    replied_since_turn = False
+    multi_turn = False
     cwd = None
     model = None
     user_msgs = 0
@@ -56,6 +96,7 @@ def scan_one(path: Path):
             if rtype == "session_meta":
                 session_id = payload.get("id")
                 cwd = payload.get("cwd") or cwd
+                launch_source = _launch_source(payload) or launch_source
             elif rtype == "turn_context":
                 model = payload.get("model") or model
                 cwd = payload.get("cwd") or cwd
@@ -63,10 +104,15 @@ def scan_one(path: Path):
                 ptype = payload.get("type")
                 if ptype == "user_message":
                     user_msgs += 1
+                    text = payload.get("message")
+                    stripped = text.strip() if isinstance(text, str) else ""
+                    if stripped:
+                        if turns and replied_since_turn:
+                            multi_turn = True
+                        turns.append((ts, stripped, last_assistant))
+                        replied_since_turn = False
                     if first_prompt is None:
-                        text = payload.get("message")
-                        if isinstance(text, str) and text.strip():
-                            stripped = text.strip()
+                        if stripped:
                             # Hash the FULL prompt before truncating for
                             # display (Fix 3) — identity must survive the
                             # 500-char display cap below.
@@ -74,6 +120,10 @@ def scan_one(path: Path):
                             first_prompt = stripped[:500]
                 elif ptype == "agent_message":
                     asst_msgs += 1
+                    replied_since_turn = True
+                    reply = payload.get("message")
+                    if isinstance(reply, str) and reply.strip():
+                        last_assistant = reply
                     # Attribute to whichever model is currently active (the
                     # most recent turn_context seen so far), not the LAST
                     # turn_context in the whole file — sessions can switch
@@ -88,6 +138,18 @@ def scan_one(path: Path):
                 if payload.get("type") == "function_call":
                     name = payload.get("name") or "(unknown)"
                     tool_counts[name] = tool_counts.get(name, 0) + 1
+                    if ts:
+                        for target in cli_launch_targets(
+                                _shell_command(payload), "codex"):
+                            ev = make_cli_launch(target, to_local_iso(ts))
+                            cli_launches.append(ev)
+                            launches_by_call.setdefault(
+                                payload.get("call_id"), []).append(ev)
+                elif payload.get("type") == "function_call_output" and ts:
+                    # The call's result: the launched session started
+                    # somewhere between the request and this moment.
+                    for ev in launches_by_call.pop(payload.get("call_id"), []):
+                        ev["until"] = to_local_iso(ts)
     if session_id is None or not timestamps:
         return None, parse_errors
     timestamps.sort()
@@ -111,7 +173,17 @@ def scan_one(path: Path):
         "first_prompt_hash": first_prompt_hash,
         "source": "codex",
         "coverage": "full",
+        # Origin evidence (findings-first Phase 1, read by origin.py).
+        "launch_source": launch_source,
+        "multi_turn": multi_turn,
+        "cli_launches": cli_launches,
     }
+    if turns_out is not None:
+        for i, (tts, text, prev) in enumerate(turns):
+            turns_out.append(make_user_turn(
+                "codex", session_id, cwd or "",
+                to_local_iso(tts) if tts else "", i, text,
+                prev_assistant=prev))
     return row, parse_errors
 
 
@@ -119,13 +191,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sessions-dir", default=str(DEFAULT_SESSIONS_DIR))
     ap.add_argument("--output", required=True)
+    add_user_turns_arg(ap)
     args = ap.parse_args()
     root = Path(args.sessions_dir).expanduser()
     rows = []
     total_errors = 0
+    user_turns = [] if args.user_turns_output else None
     if root.is_dir():
         for p in sorted(root.glob("*/*/*/rollout-*.jsonl")):
-            row, errors = scan_one(p)
+            row, errors = scan_one(p, user_turns)
             total_errors += errors
             if row:
                 rows.append(row)
@@ -135,6 +209,8 @@ def main():
     # instead of treating them as sessions.
     rows.append({"_meta": True, "source": "codex", "parse_errors": total_errors})
     write_rows(rows, args.output)
+    if user_turns is not None:
+        write_rows(user_turns, args.user_turns_output)
     print(f"codex: {len(rows) - 1} sessions, {total_errors} parse errors",
           file=sys.stderr)
 

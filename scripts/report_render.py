@@ -517,7 +517,16 @@ def _source_card_html(s: dict, locale: str) -> str:
         span = ""
         if s.get("first_date") and s.get("last_date"):
             span = f'{esc(s["first_date"])} – {esc(s["last_date"])}'
-        body = f'{esc(label)}<br>{int(s.get("session_count") or 0)} · {span}{err_line_html}'
+        origin_html = ""
+        oc = s.get("origin_counts")
+        if isinstance(oc, dict):
+            origin_line = t(locale, "ledger_origin_template").format(
+                direct=int(oc.get("direct") or 0),
+                launched=int(oc.get("launched") or 0),
+                unknown=int(oc.get("unknown") or 0))
+            origin_html = f'<br><span class="c-source-card-origin">{esc(origin_line)}</span>'
+        body = (f'{esc(label)}<br>{int(s.get("session_count") or 0)} · {span}'
+                f'{origin_html}{err_line_html}')
     return (f'<div class="c-source-card{modifier}">'
             f'<b>{esc(s["source"])}</b> · {body}</div>')
 

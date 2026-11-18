@@ -14,8 +14,10 @@ from pathlib import Path
 
 try:
     from cross_llm_common import normalize_prompt, parse_jsonl_object, prompt_identity
+    from origin import classify_all, count_by_source
 except ImportError:  # pragma: no cover - exercised when imported as scripts.aggregate
     from scripts.cross_llm_common import normalize_prompt, parse_jsonl_object, prompt_identity
+    from scripts.origin import classify_all, count_by_source
 
 DEFAULT_DATA_DIR = Path.home() / ".claude/usage-data"
 META_DIR = DEFAULT_DATA_DIR / "session-meta"
@@ -1793,8 +1795,12 @@ def _bucket_concurrent_intervals_by_hour(concurrent_intervals):
     return hour_max
 
 
-def compute_cross_llm(claude_rows, cross_rows):
+def compute_cross_llm(claude_rows, cross_rows, origins=None):
     """Build the cross_llm block. claude_rows = activity-pool row dicts.
+
+    origins: optional {"source:session_id": origin} from origin.classify_all
+    over the same rows; computed here when not supplied. Only per-source
+    counts of it enter the block — session ids never do.
 
     Cross-LLM rows never enter scoring_metas/activity_metas; this function
     only reads the two row lists it's given and returns a new block, so
@@ -1815,6 +1821,13 @@ def compute_cross_llm(claude_rows, cross_rows):
         comparable_by_source.setdefault(r["source"], []).append(r)
     start_dt = {id(r): _parse_dt(r.get("start_time") or "") for r in all_rows}
     windows = {id(r): _row_windows(r) for r in comparable}
+
+    # Who drove each session: the user by hand, another tool, or unknown
+    # (scripts/origin.py). Reported per source beside session_count; no
+    # other number in this block is filtered by it.
+    if origins is None:
+        origins = classify_all(all_rows)
+    origin_counts = count_by_source(origins)
 
     # Per-row (first, last) activity instant used for coverage ranges (source
     # cards' first_date/last_date). For comparable rows, use the row's
@@ -1852,6 +1865,7 @@ def compute_cross_llm(claude_rows, cross_rows):
                 "first_date": None, "last_date": None,
                 "total_input_tokens": None, "total_output_tokens": None,
                 "parse_errors": 0, "detected": False,
+                "origin_counts": None,
             })
             continue
         first, last = _rows_span(rs)
@@ -1870,6 +1884,8 @@ def compute_cross_llm(claude_rows, cross_rows):
             "total_output_tokens": _tok("output_tokens"),
             "parse_errors": 0,
             "detected": True,
+            # None for presence_only sources (nothing to classify).
+            "origin_counts": origin_counts.get(src),
         })
 
     # --- common window across comparable sources ---
@@ -3202,6 +3218,10 @@ def main():
                         help="Path to sessions-redacted.jsonl from another machine. "
                              "Can be given multiple times. Each row augments the session pool. "
                              "Local sessions take precedence on session_id collisions.")
+    parser.add_argument("--origins-output", default=None,
+                        help="Write {source:session_id -> direct|launched|"
+                             "unknown} to this JSON file. Session-level, so "
+                             "it stays a working file outside analysis-data.")
     parser.add_argument("--cross-llm-rows", action="append", default=[],
                         help="Path to scan_codex/grok/antigravity output jsonl. "
                              "Repeatable. Rows feed the cross_llm/ledger blocks "
@@ -3371,7 +3391,19 @@ def main():
     # activity_metas themselves — read-only inputs to a new output block.
     activity_rows = activity_metas if activity_metas is not None else metas
     cross_rows, cross_errors = load_cross_llm_rows(args.cross_llm_rows)
-    cross_llm = compute_cross_llm(list(activity_rows.values()), cross_rows)
+    # Per-session origins carry session ids, so they go to their own
+    # working file (read by the findings verifier); analysis-data.json
+    # only ever gets the per-source counts.
+    claude_rows = list(activity_rows.values())
+    session_origins = classify_all(claude_rows + cross_rows)
+    cross_llm = compute_cross_llm(claude_rows, cross_rows,
+                                  origins=session_origins)
+    if args.origins_output:
+        origins_path = Path(args.origins_output).expanduser()
+        origins_path.parent.mkdir(parents=True, exist_ok=True)
+        origins_path.write_text(json.dumps(
+            {"schema_version": 1, "sessions": session_origins},
+            ensure_ascii=False, indent=1), encoding="utf-8")
     for card in cross_llm["sources"]:
         card["parse_errors"] = cross_errors.get(card["source"], 0)
     # Errors bucketed under "(unknown)" (malformed JSON, or a row missing

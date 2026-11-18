@@ -12,17 +12,19 @@ from urllib.parse import unquote
 
 try:
     from cross_llm_common import (
-        parse_jsonl_object, parse_ts, prompt_identity, segments_and_duration,
-        to_local_iso, write_rows)
+        add_user_turns_arg, make_user_turn, parse_jsonl_object, parse_ts,
+        prompt_identity, segments_and_duration, to_local_iso, write_rows)
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_grok
     from scripts.cross_llm_common import (
-        parse_jsonl_object, parse_ts, prompt_identity, segments_and_duration,
-        to_local_iso, write_rows)
+        add_user_turns_arg, make_user_turn, parse_jsonl_object, parse_ts,
+        prompt_identity, segments_and_duration, to_local_iso, write_rows)
 
 DEFAULT_SESSIONS_DIR = Path.home() / ".grok" / "sessions"
 
 
-def scan_sessions_dir(root: Path):
+def scan_sessions_dir(root: Path, turns_out=None):
+    """Returns (rows, parse_errors). When turns_out is a list, the prompts
+    the user typed (is_bash false) are appended to it as raw text."""
     rows = []
     parse_errors = 0
     if not root.is_dir():
@@ -49,11 +51,13 @@ def scan_sessions_dir(root: Path):
                     continue
                 s = sessions.setdefault(
                     sid, {"ts": [], "prompts": 0, "bash": 0, "first": None,
-                          "first_hash": None})
+                          "first_hash": None, "typed": []})
                 s["ts"].append(ts)
                 s["prompts"] += 1
                 if rec.get("is_bash"):
                     s["bash"] += 1
+                elif isinstance(rec.get("prompt"), str) and rec["prompt"].strip():
+                    s["typed"].append((ts, rec["prompt"]))
                 if s["first"] is None:
                     text = rec.get("prompt")
                     if isinstance(text, str) and text.strip():
@@ -84,7 +88,19 @@ def scan_sessions_dir(root: Path):
                 "first_prompt_hash": s["first_hash"],
                 "source": "grok",
                 "coverage": "partial",
+                # Origin evidence (findings-first Phase 1). Grok records
+                # no assistant text, so "the user came back and typed
+                # again" is the only sign of a session someone sat in. No
+                # cli_launches field: the history has no tool calls, so
+                # nothing here can show what this session did or did not
+                # start.
+                "multi_turn": len(s["typed"]) >= 2,
             })
+            if turns_out is not None:
+                for i, (tts, text) in enumerate(sorted(s["typed"],
+                                                       key=lambda p: p[0])):
+                    turns_out.append(make_user_turn(
+                        "grok", sid, project_path, to_local_iso(tts), i, text))
     return rows, parse_errors
 
 
@@ -92,14 +108,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sessions-dir", default=str(DEFAULT_SESSIONS_DIR))
     ap.add_argument("--output", required=True)
+    add_user_turns_arg(ap)
     args = ap.parse_args()
-    rows, errors = scan_sessions_dir(Path(args.sessions_dir).expanduser())
+    user_turns = [] if args.user_turns_output else None
+    rows, errors = scan_sessions_dir(
+        Path(args.sessions_dir).expanduser(), user_turns)
     # Trailing meta line — how the scanner's own skip-count reaches
     # aggregate.py's cross_llm.sources[].parse_errors (see
     # docs/SCHEMA-CHANGES.md). load_cross_llm_rows() consumes "_meta" rows
     # instead of treating them as sessions.
     rows.append({"_meta": True, "source": "grok", "parse_errors": errors})
     write_rows(rows, args.output)
+    if user_turns is not None:
+        write_rows(user_turns, args.user_turns_output)
     print(f"grok: {len(rows) - 1} sessions, {errors} parse errors", file=sys.stderr)
 
 

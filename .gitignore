@@ -16,6 +16,9 @@ venv/
 # Output artifacts (user-generated, never commit these specific filenames)
 analysis-data.json
 samples.json
+# Raw prompt text and per-session origins (working files of the pipeline)
+user-turns*.jsonl
+origins.json
 peer-review.md
 peer-review-hr.md
 cc-user-autopsy.html

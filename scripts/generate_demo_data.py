@@ -854,6 +854,119 @@ def gen_grok_sessions(now, n=16):
             fh.write("\n".join(lines) + "\n")
 
 
+# Marker planted in a hand-typed demo prompt. Tests assert it appears in the
+# user-turns working file and in no report or analysis output.
+DEMO_TURN_MARKER = "TURN_PRIVATE_MARKER"
+
+
+def gen_origin_fixtures(now):
+    """Hand-built sessions that exercise each origin verdict (see
+    scripts/origin.py). Fully deterministic — fixed ids and offsets, no
+    `random` calls — and run after every other generator so the seeded
+    sequence the rest of the demo depends on is untouched.
+
+      claude A   hand-driven, two turns; its Bash calls start codex twice
+      codex  B   launched: header says exec AND starts 5s after A's first call
+      codex  C   launched: no header hint, starts 5s after A's second call
+      codex  D   hand-driven, two turns; its shell call starts claude
+      claude E   launched: single prompt, starts 4s after D's call
+      grok   F   unknown: one prompt, older than every codex transcript
+    """
+    def sid(n):
+        return str(uuid.UUID(int=0xC0FFEE00000000000000000000000000 + n))
+    def z(dt):
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    base = (now - timedelta(days=5)).replace(hour=3, minute=0, second=0,
+                                             microsecond=0)
+    proj = "origin-demo"
+    cwd = f"/home/user/projects/{proj}"
+    proj_dir = PROJECTS_DIR / f"-home-user-projects-{proj}"
+    proj_dir.mkdir(parents=True, exist_ok=True)
+
+    def user(text, dt, **extra):
+        return {"type": "user", "timestamp": z(dt),
+                "message": {"role": "user", "content": text}, **extra}
+
+    def asst(content, dt):
+        return {"type": "assistant", "timestamp": z(dt),
+                "message": {"role": "assistant", "model": "claude-sonnet-4-5",
+                            "content": content,
+                            "usage": {"input_tokens": 100, "output_tokens": 50,
+                                      "cache_creation_input_tokens": 0,
+                                      "cache_read_input_tokens": 0}}}
+
+    def bash(cmd):
+        return [{"type": "tool_use", "id": "toolu_demo", "name": "Bash",
+                 "input": {"command": cmd}}]
+
+    call_1 = base + timedelta(minutes=2)
+    call_2 = base + timedelta(minutes=10)
+    a = [
+        user(f"{DEMO_TURN_MARKER} review the parser change", base),
+        user("<system-reminder>injected, not typed</system-reminder>",
+             base + timedelta(seconds=1)),
+        user("<command-name>/model</command-name>", base + timedelta(seconds=2)),
+        asst(bash('codex exec -m demo "review the diff"'), call_1),
+        asst([{"type": "text", "text": "Review is back. Apply both fixes?"}],
+             base + timedelta(minutes=5)),
+        user("yes, apply both", base + timedelta(minutes=6)),
+        asst(bash("cd /tmp && timeout 600 codex review"), call_2),
+        asst([{"type": "text", "text": "Done."}], base + timedelta(minutes=14)),
+    ]
+    (proj_dir / f"{sid(1)}.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in a) + "\n", encoding="utf-8")
+
+    def codex_session(n, start, header_extra, turns, shell_args=None):
+        lines = [_codex_line(start, "session_meta",
+                             {"id": sid(n), "cwd": cwd, **header_extra}),
+                 _codex_line(start, "turn_context",
+                             {"model": "gpt-5.4", "effort": "high", "cwd": cwd})]
+        t = start
+        for text in turns:
+            t += timedelta(seconds=1)
+            lines.append(_codex_line(t, "event_msg",
+                                     {"type": "user_message", "message": text}))
+            t += timedelta(minutes=1)
+            payload = {"type": "function_call", "name": "shell"}
+            if shell_args is not None:
+                payload["arguments"] = json.dumps(shell_args)
+            lines.append(_codex_line(t, "response_item", payload))
+            lines.append(_codex_line(t, "event_msg",
+                                     {"type": "agent_message",
+                                      "message": "Checked. Continue?"}))
+        day_dir = CODEX_DIR / start.strftime("%Y/%m/%d")
+        day_dir.mkdir(parents=True, exist_ok=True)
+        fname = f"rollout-{start.strftime('%Y-%m-%dT%H-%M-%S')}-{sid(n)}.jsonl"
+        (day_dir / fname).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return t
+
+    codex_session(2, call_1 + timedelta(seconds=5), {"source": "exec"},
+                  ["review the diff"])
+    codex_session(3, call_2 + timedelta(seconds=5), {}, ["review"])
+    d_start = base + timedelta(hours=2)
+    codex_session(4, d_start, {"source": "cli"},
+                  ["summarise this folder", "now ask the other tool"],
+                  shell_args={"command": ["bash", "-lc", "claude -p 'second opinion'"]})
+    # D's shell call lands 1s + 1min after its start (first turn).
+    e_start = d_start + timedelta(seconds=1, minutes=1) + timedelta(seconds=4)
+    e = [user("second opinion", e_start),
+         asst([{"type": "text", "text": "Looks fine."}],
+              e_start + timedelta(seconds=20))]
+    (proj_dir / f"{sid(5)}.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in e) + "\n", encoding="utf-8")
+
+    from urllib.parse import quote
+    grok_dir = GROK_DIR / quote(cwd, safe="")
+    grok_dir.mkdir(parents=True, exist_ok=True)
+    f_start = now - timedelta(days=75)
+    with open(grok_dir / "prompt_history.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "timestamp": f_start.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "session_id": sid(6), "prompt": "one-off question",
+            "is_bash": False}) + "\n")
+
+
 def gen_antigravity_files(now, n=6):
     ANTIGRAVITY_DIR.mkdir(parents=True, exist_ok=True)
     for _ in range(n):
@@ -988,6 +1101,7 @@ def main():
     gen_grok_sessions(now)
     gen_antigravity_files(now)
     history_path = gen_history_snapshots(now)
+    gen_origin_fixtures(now)
 
     print(f"Generated {len(sessions_meta)} meta, {len(sessions_facets)} facets, "
           f"{len(pick_sids) + engineered_count} transcripts "
