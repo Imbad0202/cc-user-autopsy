@@ -53,7 +53,8 @@ for dim, metrics in scores.items():
   same `method_version`; lines without it are method 1.
   `build_html.read_history_snapshots(path, method_version=N)` keeps only
   lines of method N, and the report passes the current file's method, so
-  the trend ledger never compares scores counted differently.
+  the trend ledger never compares scores counted differently. A
+  `method_version` that is present but not an integer matches no method.
 - **Additive (transcript rows):** `active_minutes` (int): the session span
   with idle gaps over 30 minutes removed.
 - **Meaning changed, no rename or removal:**
@@ -70,6 +71,10 @@ for dim, metrics in scores.items():
     duration now come from the transcript instead of session-meta.
     `lines_added`, `lines_removed`, `files_modified` still come from
     session-meta (the scanner does not count them).
+  - Orphan subagent rows (`orphan_subagent_only`, parent transcript
+    rotated away) do not replace the parent's session-meta fields.
+  - `--extra-redacted` rows are still counted the old way: the redaction
+    key list does not carry `active_minutes` or `uses_subagent`.
   - Transcript-row `first_prompt` skips injected text (see
     `references/scoring-rubric.md`, "Counting method").
 

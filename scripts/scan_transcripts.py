@@ -99,11 +99,12 @@ def _first_text(record):
     first non-empty text block of a list content."""
     content = _content(record)
     if isinstance(content, str):
-        return content
+        return content if content.strip() else ""
     if isinstance(content, list):
         for c in content:
-            if isinstance(c, dict) and c.get("type") == "text" and c.get("text"):
-                return c["text"]
+            text = c.get("text") if isinstance(c, dict) and c.get("type") == "text" else None
+            if isinstance(text, str) and text.strip():
+                return text
     return ""
 
 
@@ -597,12 +598,15 @@ def scan_one(path: Path):
     # The first prompt a person typed. Skip text Claude Code injects
     # (/clear caveats and skill bodies are isMeta; slash-command records
     # start with a command tag), compaction summaries, and records whose
-    # own labels say a person did not type them. Unlabelled records from
-    # older transcripts still count.
+    # own labels say a person did not type them or that arrived through a
+    # programmatic entrypoint. Unlabelled records from older transcripts
+    # still count.
     first_prompt = ""
     for r in user_msgs:
+        entrypoint = r.get("entrypoint")
         if (r.get("isMeta") or r.get("isCompactSummary")
-                or _provenance(r) == "other"):
+                or _provenance(r) == "other"
+                or (isinstance(entrypoint, str) and _is_programmatic(entrypoint))):
             continue
         text = _first_text(r)
         if text and not text.lstrip().startswith(_INJECTED_PREFIXES):

@@ -349,7 +349,8 @@ valid run. When it is, do NOT invent a leak. Instead:
 >= 3 snapshots of the current counting method — below that the renderer
 shows a locked one-liner regardless of what you write here, so writing it
 early is wasted tokens. Count them (run from the skill directory):
-`python3 -c "import sys; sys.path.insert(0,'scripts'); from build_html import read_history_snapshots as r; from aggregate import METHOD_VERSION as v; print(len(r('~/.claude/usage-data/autopsy-history.jsonl', v)))"`
+`python3 -c "import sys,json; sys.path.insert(0,'scripts'); from build_html import read_history_snapshots as r; from report_render import analysis_method_version as v; print(len(r('~/.claude/usage-data/autopsy-history.jsonl', v(json.load(open('/tmp/cc-autopsy/analysis-data.json'))))))"`
+(it uses this run's `analysis-data.json`, the same version the renderer uses)
 
 First line: the opener claim compares a key ledger number across
 snapshots (e.g. "Commits per run rose from 20 to 44 across three runs.") —

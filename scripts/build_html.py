@@ -154,7 +154,7 @@ def read_history_snapshots(history_path, method_version=None):
         if "scores" in entry and not isinstance(entry["scores"], dict):
             continue
         if (method_version is not None
-                and entry.get("method_version", 1) != method_version):
+                and report_render.method_version_of(entry) != method_version):
             continue
         by_date[d] = entry
     return [by_date[d] for d in sorted(by_date)]

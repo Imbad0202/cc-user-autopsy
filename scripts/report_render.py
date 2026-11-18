@@ -880,11 +880,20 @@ def _entry_leak_cost(entry):
     return round(sum(vals), 2) if vals else None
 
 
+def method_version_of(record):
+    """The counting method a history line or analysis `meta` dict records
+    (aggregate.METHOD_VERSION). Missing means 1, from before the field.
+    A value that is present but not a plain int is unknown: 0, which
+    matches no method, so it is never compared."""
+    if "method_version" not in record:
+        return 1
+    v = record["method_version"]
+    return v if type(v) is int else 0
+
+
 def analysis_method_version(analysis):
-    """The counting-method version an analysis-data.json was built with
-    (aggregate.METHOD_VERSION); files from before the field are 1."""
-    v = (analysis.get("meta") or {}).get("method_version")
-    return v if isinstance(v, int) else 1
+    """The counting method an analysis-data.json was built with."""
+    return method_version_of(analysis.get("meta") or {})
 
 
 def snapshot_entry(analysis):

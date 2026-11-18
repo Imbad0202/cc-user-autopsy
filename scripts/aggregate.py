@@ -396,7 +396,6 @@ _REDACTED_META_KEYS = {
     "hit_output_limit",
     "token_accel",
     "segments",  # timestamps only, no content — safe to carry through redaction
-    "active_minutes", "uses_subagent",
 }
 _REDACTED_FACETS_KEYS = {
     "session_id", "outcome", "claude_helpfulness", "session_type",
@@ -537,6 +536,16 @@ def merge_scoring_metas(meta_raw, activity_metas):
         row = activity_metas.get(sid)
         if row is None:
             scoring_metas[sid] = m
+            continue
+        if row.get("orphan_subagent_only"):
+            # Only the subagent runs survived: the row says nothing about
+            # the parent session itself, so session-meta wins wherever it
+            # has a value and the row adds only what meta lacks (cache
+            # tokens, models).
+            merged = dict(row)
+            merged.pop("active_minutes", None)
+            merged.update({k: v for k, v in m.items() if v is not None})
+            scoring_metas[sid] = merged
             continue
         merged = dict(row)
         for k in _META_ONLY_FIELDS:

@@ -49,6 +49,26 @@ class FirstPromptTests(unittest.TestCase):
         row = _run_single_row_session(rows, SID)
         self.assertEqual(row["first_prompt"], "the real request")
 
+    def test_skips_unlabelled_records_from_a_programmatic_entrypoint(self):
+        rows = [
+            _user("scripted request", "2026-11-01T01:00:00Z",
+                  entrypoint="sdk-cli"),
+            _typed("the real request", "2026-11-01T01:01:00Z"),
+            _asst([{"type": "text", "text": "ok"}], "2026-11-01T01:02:00Z"),
+        ]
+        row = _run_single_row_session(rows, SID)
+        self.assertEqual(row["first_prompt"], "the real request")
+
+    def test_skips_blank_text_blocks(self):
+        rows = [
+            _user([{"type": "text", "text": "   "},
+                   {"type": "text", "text": "the real request"}],
+                  "2026-11-01T01:00:00Z"),
+            _asst([{"type": "text", "text": "ok"}], "2026-11-01T01:02:00Z"),
+        ]
+        row = _run_single_row_session(rows, SID)
+        self.assertEqual(row["first_prompt"], "the real request")
+
 
 class ActiveMinutesTests(unittest.TestCase):
     def test_idle_gaps_over_30_minutes_are_not_counted(self):
@@ -113,6 +133,26 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(m["lines_removed"], 30)
         self.assertEqual(m["files_modified"], 4)
 
+    def test_orphan_subagent_row_does_not_replace_parent_meta(self):
+        # Parent transcript rotated away; only its subagent runs remain.
+        orphan = {"session_id": SID, "start_time": "2026-11-01T06:00:00Z",
+                  "project_path": "", "duration_minutes": 3,
+                  "active_minutes": 3, "user_message_count": 0,
+                  "first_prompt": "", "git_commits": 0,
+                  "cache_read_input_tokens": 900,
+                  "model_counts": {"claude-sonnet-5-5": 4},
+                  "orphan_subagent_only": True}
+        merged = aggregate.merge_scoring_metas(
+            {SID: self._tail_only_meta()}, {SID: orphan})
+        m = merged[SID]
+        self.assertEqual(m["user_message_count"], 8)
+        self.assertEqual(m["first_prompt"], "go with the recommendations")
+        self.assertEqual(m["duration_minutes"], 228)
+        self.assertEqual(m["project_path"], "/x/proj")
+        self.assertNotIn("active_minutes", m)
+        # scanner-only extras still come through
+        self.assertEqual(m["cache_read_input_tokens"], 900)
+
     def test_meta_only_session_is_kept(self):
         merged = aggregate.merge_scoring_metas({SID: self._tail_only_meta()}, {})
         self.assertEqual(merged[SID]["user_message_count"], 8)
@@ -163,6 +203,22 @@ class MethodVersionTests(unittest.TestCase):
     def test_snapshot_from_old_analysis_is_version_one(self):
         entry = report_render.snapshot_entry({"meta": {}, "scores": {}})
         self.assertEqual(entry["method_version"], 1)
+
+    def test_malformed_version_matches_no_method(self):
+        for bad in ("2", True, None, 2.0):
+            a = {"meta": {"method_version": bad}, "scores": {}}
+            v = report_render.analysis_method_version(a)
+            self.assertNotIn(v, (1, 2), bad)
+        with tempfile.TemporaryDirectory() as td:
+            hist = Path(td) / "h.jsonl"
+            hist.write_text("\n".join([
+                json.dumps({"date": "2026-07-14", "method_version": True}),
+                json.dumps({"date": "2026-07-15", "method_version": "1"}),
+                json.dumps({"date": "2026-07-16"}),
+            ]) + "\n")
+            self.assertEqual(
+                [e["date"] for e in read_history_snapshots(hist, method_version=1)],
+                ["2026-07-16"])
 
     def test_reader_keeps_only_same_method_snapshots(self):
         with tempfile.TemporaryDirectory() as td:
@@ -219,6 +275,30 @@ class MethodStampTests(unittest.TestCase):
 
     def test_session_meta_only_run_is_method_one(self):
         self.assertEqual(self._run(False), 1)
+
+    def test_redacted_rows_are_counted_the_old_way(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            (td / "usage-data" / "session-meta").mkdir(parents=True)
+            row = {"session_id": SID, "start_time": "2026-11-01T01:00:00Z",
+                   "project_path": "/x/proj", "duration_minutes": 75,
+                   "active_minutes": 15, "uses_task_agent": True,
+                   "uses_subagent": False, "user_message_count": 2,
+                   "input_tokens": 1, "output_tokens": 1}
+            (td / "red.jsonl").write_text(json.dumps(row) + "\n")
+            r = subprocess.run(
+                [sys.executable, str(SKILL_DIR / "scripts" / "aggregate.py"),
+                 "--data-dir", str(td / "usage-data"),
+                 "--extra-redacted", str(td / "red.jsonl"),
+                 "--output", str(td / "a.json")],
+                capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            data = json.loads((td / "a.json").read_text())
+        self.assertEqual(data["meta"]["method_version"], 1)
+        s = data["_sessions"][0]
+        self.assertEqual(s["duration_min"], 75)
+        self.assertTrue(s["uses_task_agent"])
 
 
 if __name__ == "__main__":
