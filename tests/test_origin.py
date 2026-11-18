@@ -121,6 +121,11 @@ class ClassifyTests(unittest.TestCase):
             self.assertEqual(self.origin([r], "codex:c"), "unknown", junk)
         r = row("codex", "c", at(0), multi_turn="yes")
         self.assertEqual(self.origin([r], "codex:c"), "unknown")
+        # A malformed record is not "no record": the back-and-forth rule
+        # is for rows that say nothing at all.
+        for junk in ("false", "true", 0, 1, [], {}):
+            r = row("codex", "c", at(0), interactive=junk, multi_turn=True)
+            self.assertEqual(self.origin([r], "codex:c"), "unknown", junk)
 
     # -- launched -------------------------------------------------------
 
@@ -229,9 +234,18 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(self.origin([launcher(), r], "codex:c1"), "unknown")
 
     def test_malformed_segments_fall_back_to_start_time(self):
+        # The reversed pair starts outside the window: were it used, the
+        # verdict would be unknown.
         r = row("codex", "c1", at(5))
-        r["segments"] = [["garbage"], [at(50), at(10)], "x"]
+        r["segments"] = [["garbage"], [at(5000), at(10)], "x"]
         self.assertEqual(self.origin([launcher(), r], "codex:c1"), "launched")
+
+    def test_segments_of_the_wrong_type_fall_back_to_start_time(self):
+        for junk in (7, "x", {"a": 1}, None):
+            r = row("codex", "c1", at(5))
+            r["segments"] = junk
+            self.assertEqual(self.origin([launcher(), r], "codex:c1"),
+                             "launched", junk)
 
     def test_earliest_segment_is_the_start(self):
         # start_time says later than the first segment (a resumed file).
@@ -258,6 +272,7 @@ class ClassifyTests(unittest.TestCase):
         for rows, want in (([direct, unknown], "unknown"),
                            ([unknown, direct], "unknown"),
                            ([direct, launched, unknown], "launched"),
+                           ([unknown, launched], "launched"),
                            ([launched, direct], "launched")):
             self.assertEqual(
                 classify_all([launcher()] + rows)["codex:dup"], want)

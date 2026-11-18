@@ -141,7 +141,7 @@ ASSISTANT_TAIL_CAP = 300
 # Names inside a longer word or a path component do not match
 # (`codex-notes.md`, `~/.claude/settings.json`).
 _CLI_MENTION_RE = re.compile(
-    r"(?<![\w.\-])(?:[\w./~\-]*/)?(codex|grok|claude)(?:\.exe)?(?![\w.\-/])")
+    r"(?<![\w.\-])(codex|grok|claude)(?:\.exe)?(?![\w.\-/])")
 
 USER_TURNS_HELP = ("Also write one row per prompt the user typed to this "
                    "JSONL file (created owner-readable only). It holds raw "
@@ -169,9 +169,15 @@ def check_distinct_outputs(parser, *paths):
             identity = (st.st_dev, st.st_ino)   # catches hard links too
         except OSError:
             identity = None
-        if resolved in seen or (identity is not None and identity in seen):
+        # Most macOS and Windows volumes ignore case, and a file that does
+        # not exist yet has no inode to compare: two spellings that differ
+        # only in case are refused everywhere rather than probed for.
+        folded = str(resolved).casefold()
+        if resolved in seen or folded in seen \
+                or (identity is not None and identity in seen):
             parser.error(f"two output flags point at the same file: {p}")
         seen.add(resolved)
+        seen.add(folded)
         if identity is not None:
             seen.add(identity)
 
@@ -240,6 +246,7 @@ def write_private_text(text, output) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{out.name}.", dir=out.parent)
     try:
+        os.fchmod(fd, 0o600)   # exactly 0600, whatever the umask
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
         os.replace(tmp, out)

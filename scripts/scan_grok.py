@@ -95,11 +95,13 @@ def scan_sessions_dir(root: Path, turns_out=None):
                 "source": "grok",
                 "coverage": "partial",
                 # Origin evidence (findings-first Phase 1). Grok records
-                # no assistant text, so "the user came back and typed
+                # nothing about how a session was run (interactive: None)
+                # and no assistant text, so "the user came back and typed
                 # again" is the only sign of a session someone sat in. No
                 # cli_launches field: the history has no tool calls, so
                 # nothing here can show what this session did or did not
                 # start.
+                "interactive": None,
                 "multi_turn": len(s["typed"]) >= 2,
             })
             if turns_out is not None:

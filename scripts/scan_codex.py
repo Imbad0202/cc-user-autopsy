@@ -66,13 +66,22 @@ def _is_shell_tool(name):
     return any(part in low for part in ("shell", "exec", "bash", "command"))
 
 
+# Argument fields of a shell call that are not part of the command line:
+# where it runs and why. A directory named after a CLI is not a call to it.
+_NOT_COMMAND_KEYS = frozenset({
+    "workdir", "cwd", "working_dir", "working_directory", "dir",
+    "justification", "description", "explanation", "reason"})
+
+
 def _strings(value):
-    """Every string inside a decoded JSON value, depth-first."""
+    """Every string inside a decoded JSON value, depth-first, leaving out
+    the fields that are not command text."""
     if isinstance(value, str):
         yield value
     elif isinstance(value, dict):
-        for v in value.values():
-            yield from _strings(v)
+        for k, v in value.items():
+            if k not in _NOT_COMMAND_KEYS:
+                yield from _strings(v)
     elif isinstance(value, list):
         for v in value:
             yield from _strings(v)
@@ -153,7 +162,7 @@ def scan_one(path: Path, turns_out=None):
                     if stripped:
                         if turns and replied_since_turn:
                             multi_turn = True
-                        turns.append((ts, text, last_assistant))
+                        turns.append((ts, text, last_assistant, cwd or ""))
                         last_assistant = None
                         replied_since_turn = False
                     if first_prompt is None:
@@ -188,11 +197,12 @@ def scan_one(path: Path, turns_out=None):
                         for target in cli_launch_targets(_call_text(payload)):
                             ev = make_cli_launch(target, to_local_iso(ts))
                             cli_launches.append(ev)
-                            if payload.get("call_id"):
+                            if isinstance(payload.get("call_id"), str) \
+                                    and payload["call_id"]:
                                 launches_by_call.setdefault(
                                     payload["call_id"], []).append(ev)
                 elif payload.get("type") == "function_call_output" and ts \
-                        and payload.get("call_id"):
+                        and isinstance(payload.get("call_id"), str):
                     # The call's result: the launched session started
                     # somewhere between the request and this moment.
                     for ev in launches_by_call.pop(payload.get("call_id"), []):
@@ -226,10 +236,16 @@ def scan_one(path: Path, turns_out=None):
         "multi_turn": multi_turn,
         "cli_launches": cli_launches,
     }
-    if turns_out is not None:
-        for i, (tts, text, prev) in enumerate(turns):
+    # A Codex rollout does not say who wrote a user message. In a run its
+    # own header marks as non-interactive or spawned, the "user" is the
+    # program that started it, so those messages are not written out as
+    # anything a person typed.
+    from_a_program = row["interactive"] is False \
+        or launch_source == "subagent"
+    if turns_out is not None and not from_a_program:
+        for i, (tts, text, prev, turn_cwd) in enumerate(turns):
             turns_out.append(make_user_turn(
-                "codex", session_id, cwd or "",
+                "codex", session_id, turn_cwd,
                 to_local_iso(tts) if tts else "", i, text,
                 prev_assistant=prev))
     return row, parse_errors

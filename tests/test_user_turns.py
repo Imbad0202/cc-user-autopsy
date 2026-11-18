@@ -85,6 +85,15 @@ class PrivateFileTests(unittest.TestCase):
             finally:
                 os.umask(old)
             self.assertEqual(stat.S_IMODE(out.stat().st_mode), 0o600)
+            # A umask that would strip the owner's own access as well.
+            other = Path(td) / "strict.jsonl"
+            old = os.umask(0o777)
+            try:
+                write_private_text("y\n", other)
+            finally:
+                os.umask(old)
+            self.assertEqual(stat.S_IMODE(other.stat().st_mode), 0o600)
+            self.assertEqual(other.read_text(encoding="utf-8"), "y\n")
 
     def test_existing_loose_file_is_tightened(self):
         with tempfile.TemporaryDirectory() as td:
@@ -167,6 +176,32 @@ class ClaudeTurnTests(unittest.TestCase):
         row = self.scan([_typed(t, _ts(i)) for i, t in enumerate(kept)])
         self.assertEqual([t["text"] for t in row["_user_turns"]], kept)
 
+    def test_only_properly_closed_harness_elements_are_dropped(self):
+        kept = ["<system-reminder>a</command-name>",        # mismatched
+                "<system-reminder>never closed",
+                "<command-name>/x</command-name> and then my own words",
+                "<system-reminder>a</system-reminder> typed between "
+                "<system-reminder>b</system-reminder>",
+                "<div>plain html</div>"]
+        row = self.scan([_typed(t, _ts(i)) for i, t in enumerate(kept)])
+        self.assertEqual([t["text"] for t in row["_user_turns"]], kept)
+        dropped = ["  <system-reminder>\nmulti\nline\n</system-reminder>\n",
+                   "<a-b>1</a-b><c-d x='1'>2</c-d>\n<a-b>3</a-b>",
+                   # Accepted cost: nothing but a custom element.
+                   "<my-widget>check this</my-widget>"]
+        row = self.scan([_typed(t, _ts(i)) for i, t in enumerate(dropped)])
+        self.assertEqual(row["_user_turns"], [])
+        self.assertIs(row["interactive"], True)
+
+    def test_harness_block_check_is_linear_on_large_input(self):
+        import time
+        big = "<a-b>" * 200000 + "x"
+        nested = "<a-b>x</a-b>" * 200000
+        start = time.perf_counter()
+        self.assertFalse(scan_transcripts._is_harness_block(big))
+        self.assertTrue(scan_transcripts._is_harness_block(nested))
+        self.assertLess(time.perf_counter() - start, 5)
+
     def test_block_wholly_wrapped_in_hyphenated_tags_is_injected(self):
         row = self.scan([
             _typed("<command-message>x</command-message>\n"
@@ -215,7 +250,70 @@ class ClaudeTurnTests(unittest.TestCase):
             _user("c", _ts(2), origin="human"),
             _user("d", _ts(3), origin={"kind": ["human"]})])
         self.assertEqual(row["_user_turns"], [])
-        self.assertIsNone(row["interactive"])
+        # Labelled, however badly: not "no record".
+        self.assertIs(row["interactive"], False)
+
+    def test_one_valid_label_does_not_outvote_a_malformed_one(self):
+        row = self.scan([
+            _typed("a", _ts(0), origin={"kind": ["peer"]}),
+            _typed("b", _ts(1), origin="peer"),
+            _typed("c", _ts(2), origin={}),
+            _typed("d", _ts(3), turnOrigin=["human"]),
+            _typed("e", _ts(4), promptSource=""),
+            _typed("f", _ts(5), entrypoint=["cli"])])
+        self.assertEqual(row["_user_turns"], [])
+        self.assertIs(row["interactive"], False)
+
+    def test_entrypoint_is_read_per_record(self):
+        reply = _asst([{"type": "text", "text": "ok"}], _ts(1))
+        # Opened in the terminal, later resumed by a program: the typed
+        # prompt is the user's, the resumed part is not.
+        row = self.scan([_typed("mine", _ts(0)), reply,
+                         _typed("scripted", _ts(2), entrypoint="sdk-cli")])
+        self.assertIs(row["interactive"], True)
+        self.assertEqual([t["text"] for t in row["_user_turns"]], ["mine"])
+        # The only "typed" record came through the programmatic part.
+        row = self.scan([
+            _user("go", _ts(0), entrypoint="cli", promptSource="system",
+                  turnOrigin="scheduled"), reply,
+            _typed("scripted", _ts(2), entrypoint="sdk-cli")])
+        self.assertIs(row["interactive"], False)
+        self.assertEqual(row["_user_turns"], [])
+        # A record that does not name its entrypoint, in a file where
+        # another record names a programmatic one, is not trusted.
+        nameless = _typed("who", _ts(2))
+        del nameless["entrypoint"]
+        row = self.scan([_user("go", _ts(0), entrypoint="sdk-cli",
+                               promptSource="sdk"), reply, nameless])
+        self.assertIs(row["interactive"], False)
+        self.assertEqual(row["_user_turns"], [])
+        row = self.scan([nameless, reply])
+        self.assertIs(row["interactive"], True)
+
+    def test_a_slash_command_was_the_answer_to_the_last_reply(self):
+        row = self.scan([
+            _typed("one", _ts(0)),
+            _asst([{"type": "text", "text": "Which file?"}], _ts(1)),
+            _typed("<command-name>/model</command-name>", _ts(2)),
+            _typed("now something else", _ts(3))])
+        self.assertEqual([t["prev_assistant_tail"] for t in row["_user_turns"]],
+                         [None, None])
+
+    def test_launch_without_a_usable_call_id_is_never_paired(self):
+        def call(i, **ident):
+            return _asst([{"type": "tool_use", "name": "Bash", **ident,
+                           "input": {"command": "codex review"}}], _ts(i))
+        row = self.scan([
+            _typed("go", _ts(0)), call(1), call(2, id=None),
+            call(3, id=["x"]), call(4, id={"a": 1}), call(5, id=""),
+            _user([{"type": "tool_result", "content": "no id"}], _ts(6)),
+            _user([{"type": "tool_result", "tool_use_id": None,
+                    "content": "x"}], _ts(7)),
+            _user([{"type": "tool_result", "tool_use_id": ["x"],
+                    "content": "x"}], _ts(8)),
+            _user([{"type": "tool_result", "tool_use_id": {"a": 1},
+                    "content": "x"}], _ts(9))])
+        self.assertEqual([e["until"] for e in row["cli_launches"]], [None] * 5)
 
     def test_interactive_is_what_the_transcript_records(self):
         reply = _asst([{"type": "text", "text": "ok"}], _ts(1))
@@ -247,6 +345,7 @@ class ClaudeTurnTests(unittest.TestCase):
             # Turn text follows each prompt's own label; whether the
             # session counts as hand-driven is the row's `interactive`.
             labelled_human = (records[0].get("promptSource") == "typed"
+                              and records[0]["entrypoint"] == "cli"
                               and not records[0].get("isSidechain")
                               and not records[0].get("isMeta")
                               and "<command-name>" not in
@@ -423,6 +522,22 @@ class ClaudeTurnTests(unittest.TestCase):
             self.assertIn("same file", proc.stderr)
             self.assertFalse(same.exists())
 
+    def test_paths_differing_only_in_case_are_refused(self):
+        # On a volume that ignores case these are one file, and neither
+        # exists yet, so there is no inode to compare.
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td) / "projects"
+            _write_transcript(proj, [_typed("PRIVATE hi", _ts(0))])
+            proc = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "scripts" / "scan_transcripts.py"),
+                 "--projects-dir", str(proj),
+                 "--output", str(Path(td) / "Rows.jsonl"),
+                 "--user-turns-output", str(Path(td) / "rows.jsonl")],
+                capture_output=True, text=True)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("same file", proc.stderr)
+            self.assertEqual([p.name for p in Path(td).iterdir()], ["projects"])
+
     def test_filtered_out_sessions_leave_no_turns(self):
         other = "99999999-2222-3333-4444-555555555555"
         with tempfile.TemporaryDirectory() as td:
@@ -499,6 +614,50 @@ class CodexTurnTests(unittest.TestCase):
         self.assertEqual(row["launch_source"], "cli")
         self.assertTrue(row["multi_turn"])
         self.assertNotIn("_user_turns", row)
+
+    def test_messages_of_a_run_a_program_started_are_not_written_out(self):
+        body = [_codex_line(_ts(1), "event_msg",
+                            {"type": "user_message", "message": "review the diff"})]
+        for header, written in (({"source": "exec"}, 0), ({"source": "mcp"}, 0),
+                                ({"source": {"subagent": "r"}}, 0),
+                                ({"source": "cli"}, 1), ({}, 1)):
+            row, turns = self.scan(header, body)
+            self.assertEqual(len(turns), written, header)
+            self.assertEqual(row["user_message_count"], 1)
+
+    def test_each_turn_keeps_the_directory_it_was_sent_from(self):
+        def ctx(n, cwd):
+            return _codex_line(_ts(n), "turn_context", {"model": "m", "cwd": cwd})
+        def user(n, text):
+            return _codex_line(_ts(n), "event_msg",
+                               {"type": "user_message", "message": text})
+        row, turns = self.scan({"source": "cli"}, [
+            user(1, "a"), ctx(2, "/first"), user(3, "b"),
+            ctx(4, "/second"), user(5, "c")])
+        self.assertEqual([t["project_path"] for t in turns],
+                         ["/w", "/first", "/second"])
+        self.assertEqual(row["project_path"], "/second")
+
+    def test_a_directory_named_after_a_cli_is_not_a_call_to_it(self):
+        def call(n, args, **extra):
+            return _codex_line(_ts(n), "response_item",
+                               {"type": "function_call", "name": "shell",
+                                "arguments": json.dumps(args), **extra})
+        row, _ = self.scan({}, [
+            call(1, {"command": "pwd", "workdir": "/work/codex"}),
+            call(2, {"command": ["ls"], "cwd": "/home/u/claude",
+                     "justification": "see what claude wrote"}),
+            call(3, {"command": "cd /work && codex review", "workdir": "/w"},
+                 call_id=["bad"]),
+            call(4, {"command": "codex review"}, call_id={"a": 1}),
+            _codex_line(_ts(5), "response_item",
+                        {"type": "function_call_output", "call_id": ["bad"],
+                         "output": "x"}),
+            _codex_line(_ts(6), "response_item",
+                        {"type": "function_call_output", "call_id": {"a": 1},
+                         "output": "x"})])
+        self.assertEqual([(e["target"], e["until"]) for e in row["cli_launches"]],
+                         [("codex", None), ("codex", None)])
 
     def test_interactive_follows_the_header(self):
         body = [_codex_line(_ts(1), "event_msg",
@@ -617,6 +776,8 @@ class GrokTurnTests(unittest.TestCase):
             rows, _ = scan_grok.scan_sessions_dir(Path(td), turns)
         by_sid = {r["session_id"]: r for r in rows}
         self.assertTrue(by_sid["g"]["multi_turn"])
+        self.assertIn("interactive", by_sid["g"])
+        self.assertIsNone(by_sid["g"]["interactive"])
         self.assertFalse(by_sid["h"]["multi_turn"])
         self.assertEqual([t["text"] for t in turns if t["session_id"] == "g"],
                          ["ask one", "ask two"])
@@ -729,22 +890,59 @@ class DemoPipelineTests(unittest.TestCase):
              "grok": "GROK_LATER_TURN_MARKER"}
     ROWS = {"claude": "t.jsonl", "codex": "c.jsonl", "grok": "g.jsonl"}
 
-    def test_later_turns_of_every_source_are_in_their_turns_file_only(self):
-        for src, marker in self.LATER.items():
-            turns = (self.out / f"user-turns.{src}.jsonl").read_text(encoding="utf-8")
-            self.assertIn(marker, turns, src)
-            self.assertNotIn(marker, (self.out / self.ROWS[src]).read_text(encoding="utf-8"), src)
-            self.assertNotIn(marker, self.analysis_text, src)
+    PUBLIC = ("t.jsonl", "c.jsonl", "g.jsonl", "analysis-data.json")
 
-    def test_injected_text_and_first_prompt_marker(self):
+    def _public_text(self):
+        return {n: (self.out / n).read_text(encoding="utf-8") for n in self.PUBLIC}
+
+    def test_later_turns_of_every_source_are_in_their_turns_file_only(self):
+        public = self._public_text()
+        for src, marker in self.LATER.items():
+            for other in self.LATER:
+                turns = (self.out / f"user-turns.{other}.jsonl").read_text(encoding="utf-8")
+                self.assertEqual(marker in turns, other == src, (src, other))
+            for name, text in public.items():
+                self.assertNotIn(marker, text, (src, name))
+
+    def test_first_prompt_markers_reach_only_rows_and_turns(self):
+        # A first prompt already travels in its own tool's session rows
+        # (existing behaviour); it must go no further than that.
+        public = self._public_text()
         claude_turns = (self.out / "user-turns.claude.jsonl").read_text(encoding="utf-8")
         self.assertIn("TURN_PRIVATE_MARKER", claude_turns)
+        self.assertIn("GROK_PRIVATE_MARKER",
+                      (self.out / "user-turns.grok.jsonl").read_text(encoding="utf-8"))
+        for name, text in public.items():
+            if name != "t.jsonl":
+                self.assertNotIn("TURN_PRIVATE_MARKER", text, name)
+        # The demo plants the Grok marker as a first prompt, which other
+        # generators reuse across tools' session rows; what matters is
+        # that it stops there.
+        self.assertNotIn("GROK_PRIVATE_MARKER", public["analysis-data.json"])
+
+    def test_text_no_person_typed_stays_out_of_the_turns_files(self):
+        claude_turns = (self.out / "user-turns.claude.jsonl").read_text(encoding="utf-8")
         self.assertNotIn("injected, not typed", claude_turns)
         self.assertNotIn("/model", claude_turns)
         # Unlabelled prompts are never taken for the user's. The scheduled
         # run's prompts carry a label that is not a person's.
         self.assertNotIn("UNLABELLED_TURN_MARKER", claude_turns)
         self.assertNotIn("AUTOMATED_TURN_MARKER", claude_turns)
+        # The prompt Claude passed to `codex exec` is Claude's wording.
+        codex_turns = [json.loads(l) for l in (self.out / "user-turns.codex.jsonl")
+                       .read_text(encoding="utf-8").splitlines()]
+        written = {t["session_id"] for t in codex_turns}
+        self.assertNotIn(self.sid(2), written)      # header says exec
+        self.assertLessEqual({self.sid(3), self.sid(4)}, written)
+        self.assertNotIn("review the diff",
+                         [t["text"] for t in codex_turns])
+
+    def test_assistant_reply_tails_stay_in_the_turns_files(self):
+        tail = "Apply both fixes?"
+        self.assertIn(tail, (self.out / "user-turns.claude.jsonl")
+                      .read_text(encoding="utf-8"))
+        for name, text in self._public_text().items():
+            self.assertNotIn(tail, text, name)
 
     def test_aggregate_refuses_one_path_for_both_outputs(self):
         same = self.out / "clash.json"
@@ -757,9 +955,6 @@ class DemoPipelineTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("same file", proc.stderr)
         self.assertFalse(same.exists())
-        self.assertIn("GROK_PRIVATE_MARKER",
-                      (self.out / "user-turns.grok.jsonl").read_text(encoding="utf-8"))
-        self.assertNotIn("GROK_PRIVATE_MARKER", self.analysis_text)
 
     def test_working_files_are_owner_only(self):
         for name in ("user-turns.claude.jsonl", "user-turns.codex.jsonl",
@@ -787,9 +982,9 @@ class DemoPipelineTests(unittest.TestCase):
             self.assertEqual("c-source-card-origin" in html, expect, audience)
             self.assertEqual("launched by a tool" in html, expect, audience)
             self.assertNotIn("origin_counts", html)
-            self.assertNotIn("TURN_PRIVATE_MARKER", html)
-            for marker in self.LATER.values():
-                self.assertNotIn(marker, html, audience)
+            for marker in ("TURN_PRIVATE_MARKER", "GROK_PRIVATE_MARKER",
+                           "Apply both fixes?", *self.LATER.values()):
+                self.assertNotIn(marker, html, (audience, marker))
 
 
 if __name__ == "__main__":

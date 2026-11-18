@@ -20,7 +20,8 @@ Rule (spec 2026-11-18 findings-first, section 5.2), first match wins:
             prompt's source and the session's entrypoint; Codex names an
             interactive client in its header)
   launched  the session began while some tool's shell call naming this
-            tool's CLI was running
+            tool's CLI was running (after the request, and until its
+            result came back or 60 seconds, whichever is later)
   unknown   the transcript records a non-interactive run (`interactive`
             is False) and no launching call was seen: who started it — a
             script, a scheduler, a tool whose transcript is gone — is
@@ -45,8 +46,9 @@ _CAUTION = {"direct": 0, "unknown": 1, "launched": 2}
 # A session that starts while a shell call naming its tool's CLI is
 # running is treated as launched by that call. The call runs from the
 # moment it was requested until its result came back (a permission prompt
-# can hold the start for minutes); when the result time is unknown the
-# window is this many seconds. Time alone decides: the working directory
+# can hold the start for minutes). The window is never shorter than this
+# many seconds: the result time may be unknown, and a backgrounded call
+# returns at once while the run it started is still coming up. Time alone decides: the working directory
 # is not compared.
 LAUNCH_WINDOW_SECONDS = 60
 
@@ -79,7 +81,8 @@ def _row_start(row):
     """First activity instant of a row: the earliest start among its
     well-formed `segments`, else its start_time. None if unusable."""
     starts = []
-    for seg in row.get("segments") or []:
+    segments = row.get("segments")
+    for seg in segments if isinstance(segments, list) else []:
         if isinstance(seg, (list, tuple)) and len(seg) == 2:
             lo, hi = _ts(seg[0]), _ts(seg[1])
             if lo and hi and hi >= lo:
@@ -150,7 +153,8 @@ def classify(row, windows):
         return "direct"
     if _in_a_launch_window(row, windows):
         return "launched"
-    if interactive is False:
+    if interactive is not None:
+        # False, or a value that is neither: not a record of nothing.
         return "unknown"
     if row.get("multi_turn") is True:
         return "direct"

@@ -88,14 +88,33 @@ HUMAN_PROMPT_SOURCES = frozenset({"typed", "queued", "suggestion_accepted"})
 _PROGRAMMATIC_ENTRYPOINT_PREFIX = "sdk"
 
 # A typed prompt can arrive with harness text attached as further blocks,
-# and a slash command is recorded as its echo. Such a block is wholly
-# wrapped in lowercase hyphenated tags (<system-reminder>, <command-name>,
-# <local-command-stdout>, ...). This is a second, formatting-level filter
-# applied only inside records already attested as a person's; whose words
-# a record holds is decided by its provenance labels, never by this.
-_INJECTED_BLOCK_RE = re.compile(
-    r"\s*<[a-z]+(?:-[a-z]+)+[\s>].*</[a-z]+(?:-[a-z]+)+>\s*\Z", re.DOTALL)
+# and a slash command is recorded as its echo. Such a block is nothing but
+# elements with lowercase hyphenated names, each closed by its own name
+# (<system-reminder>…</system-reminder>, <command-name>…</command-name>).
+# This is a second, formatting-level filter applied only inside records
+# already attested as a person's; whose words a record holds is decided
+# by its provenance labels, never by this. The test is the convention,
+# not a list of today's tag names: a reminder tag the harness adds later
+# would otherwise repeat in every turn and read as the user's own words.
+# The cost, accepted: a prompt that consists of nothing but such an
+# element (a pasted custom element with no word outside it) is dropped.
+_HARNESS_OPEN_RE = re.compile(r"\s*<([a-z]+(?:-[a-z]+)+)(?:\s[^<>]*)?>")
 _INTERRUPT_MARK = "[Request interrupted by user"
+
+
+def _is_harness_block(text):
+    """Whether a text block is wholly harness elements (see above).
+    Linear: each element's end is found with one forward search."""
+    pos, seen = 0, False
+    while True:
+        m = _HARNESS_OPEN_RE.match(text, pos)
+        if not m:
+            break
+        end = text.find(f"</{m.group(1)}>", m.end())
+        if end < 0:
+            return False
+        pos, seen = end + len(m.group(1)) + 3, True
+    return seen and not text[pos:].strip()
 
 
 def _content(record):
@@ -124,28 +143,49 @@ def _provenance(record):
     """Who a user-role record's own labels say produced it: "human",
     "other", or None when it carries no label (tool results, and every
     record written by a Claude Code version that predates the labels).
-    All labels present must agree on a person; one that names anything
-    else wins."""
-    origin = record.get("origin")
-    kind = origin.get("kind") if isinstance(origin, dict) else None
-    source, turn = record.get("promptSource"), record.get("turnOrigin")
+    Every label present must name a person. A label that names anything
+    else, or is not the kind of value expected (a list where a word
+    should be), makes the record "other"."""
     votes = []
-    if isinstance(source, str) and source:
-        votes.append(source in HUMAN_PROMPT_SOURCES)
-    for label in (turn, kind):
-        if isinstance(label, str) and label:
-            votes.append(label == "human")
+    source = record.get("promptSource")
+    if source is not None:
+        votes.append(isinstance(source, str) and source in HUMAN_PROMPT_SOURCES)
+    turn = record.get("turnOrigin")
+    if turn is not None:
+        votes.append(turn == "human")
+    origin = record.get("origin")
+    if origin is not None:
+        votes.append(isinstance(origin, dict) and origin.get("kind") == "human")
     if not votes:
         return None
     return "human" if all(votes) else "other"
 
 
-def _is_human_prompt(record):
-    """A main-thread user record that its own labels attribute to a
-    person. Unlabelled records are never assumed to be the user's."""
-    return (record.get("type") == "user" and not record.get("isSidechain")
-            and not record.get("isMeta") and not record.get("isCompactSummary")
-            and _provenance(record) == "human")
+def _is_programmatic(entrypoint):
+    return isinstance(entrypoint, str) \
+        and entrypoint.lower().startswith(_PROGRAMMATIC_ENTRYPOINT_PREFIX)
+
+
+def _human_prompt_test(records):
+    """A predicate over this transcript's records: is this a main-thread
+    user record that its own labels attribute to a person, sent through
+    an interactive entrypoint? Unlabelled records are never assumed to be
+    the user's. The entrypoint is read per record, because a session can
+    be resumed through a different one; a record without the field is
+    trusted only when no record in the file names a programmatic one."""
+    any_programmatic = any(_is_programmatic(r.get("entrypoint")) for r in records)
+
+    def is_human_prompt(record):
+        if record.get("type") != "user" or record.get("isSidechain") \
+                or record.get("isMeta") or record.get("isCompactSummary") \
+                or _provenance(record) != "human":
+            return False
+        entrypoint = record.get("entrypoint")
+        if entrypoint is None:
+            return not any_programmatic
+        return isinstance(entrypoint, str) and not _is_programmatic(entrypoint)
+
+    return is_human_prompt
 
 
 def _typed_text(record):
@@ -164,34 +204,28 @@ def _typed_text(record):
         c["text"] for c in content
         if isinstance(c, dict) and c.get("type") == "text"
         and isinstance(c.get("text"), str) and c["text"].strip()
-        and not _INJECTED_BLOCK_RE.match(c["text"]))
+        and not _is_harness_block(c["text"]))
 
 
 def _interactive(records):
     """Whether the transcript itself records a person driving the session.
 
-    True   some prompt is labelled as a person's, and the session was not
-           opened through a programmatic entrypoint
-    False  the entrypoint is programmatic, or prompts are labelled and
-           none is a person's (a scheduled run, a peer-driven session)
+    True   some prompt is labelled as a person's and came through an
+           interactive entrypoint
+    False  no such prompt, and the transcript does say how it was run:
+           some record names a programmatic entrypoint, or prompts are
+           labelled and none is a person's (a scheduled run, a
+           peer-driven session)
     None   the transcript carries no such labels (older versions)"""
-    entrypoint = next(
-        (r["entrypoint"] for r in records
-         if isinstance(r.get("entrypoint"), str) and r["entrypoint"]), None)
-    if entrypoint and entrypoint.lower().startswith(_PROGRAMMATIC_ENTRYPOINT_PREFIX):
-        return False
-    labelled = human = False
+    is_human_prompt = _human_prompt_test(records)
+    labelled = False
     for r in records:
-        if r.get("type") != "user" or r.get("isSidechain"):
-            continue
-        who = _provenance(r)
-        if who is not None:
+        if is_human_prompt(r):
+            return True
+        if _is_programmatic(r.get("entrypoint")) or (
+                r.get("type") == "user" and not r.get("isSidechain")
+                and _provenance(r) is not None):
             labelled = True
-            if _is_human_prompt(r):
-                human = True
-                break
-    if human:
-        return True
     return False if labelled else None
 
 
@@ -237,14 +271,19 @@ def _cli_launches(records):
                     continue
                 inp = c.get("input")
                 cmd = inp.get("command", "") if isinstance(inp, dict) else ""
+                call_id = c.get("id")
                 for target in cli_launch_targets(cmd):
                     ev = make_cli_launch(target, r.get("timestamp") or "")
                     launches.append(ev)
-                    by_call_id.setdefault(c.get("id"), []).append(ev)
+                    # Without a usable id the result cannot be paired:
+                    # `until` stays None and the minimum window applies.
+                    if isinstance(call_id, str) and call_id:
+                        by_call_id.setdefault(call_id, []).append(ev)
         elif r.get("type") == "user" and by_call_id:
             for c in content:
-                if isinstance(c, dict) and c.get("type") == "tool_result":
-                    for ev in by_call_id.pop(c.get("tool_use_id"), []):
+                if isinstance(c, dict) and c.get("type") == "tool_result" \
+                        and isinstance(c.get("tool_use_id"), str):
+                    for ev in by_call_id.pop(c["tool_use_id"], []):
                         ev["until"] = r.get("timestamp") or None
     return launches
 
@@ -262,6 +301,7 @@ def _user_turns(records, sid, project_path):
     replied_since_turn = False
     interrupted = False
     multi_turn = False
+    is_human_prompt = _human_prompt_test(records)
     for r in records:
         rtype = r.get("type")
         sidechain = bool(r.get("isSidechain"))
@@ -273,10 +313,13 @@ def _user_turns(records, sid, project_path):
         elif rtype == "user" and not sidechain:
             if _has_interrupt(r):
                 interrupted = True
-            if not _is_human_prompt(r):
+            if not is_human_prompt(r):
                 continue
             text = _typed_text(r)
             if not text:
+                # A person's prompt with no text of its own (a slash
+                # command): it still was the answer to the last reply.
+                last_assistant = None
                 continue
             if turns and replied_since_turn:
                 multi_turn = True
@@ -288,7 +331,7 @@ def _user_turns(records, sid, project_path):
                 after_interrupt=interrupted,
                 prev_assistant="\n".join(_text_parts(last_assistant))
                 if last_assistant else None,
-                prompt_source=source if isinstance(source, str) else None))
+                prompt_source=source if isinstance(source, str) and source else None))
             # The next prompt answers the next reply, not this one again.
             last_assistant = None
             replied_since_turn = False

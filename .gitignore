@@ -19,6 +19,9 @@ samples.json
 # Raw prompt text and per-session origins (working files of the pipeline)
 user-turns*.jsonl
 origins.json
+# ...and the temp files they are written through (left only by a kill)
+.user-turns*.jsonl.*
+.origins.json.*
 peer-review.md
 peer-review-hr.md
 cc-user-autopsy.html

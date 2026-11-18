@@ -132,6 +132,7 @@ What it does:
 ```bash
 python3 scripts/aggregate.py \
   --transcript-rows /tmp/cc-autopsy/transcript-rows.jsonl \
+  --origins-output /tmp/cc-autopsy/origins.json \
   --output /tmp/cc-autopsy/analysis-data.json
 ```
 
@@ -141,6 +142,7 @@ What it does:
 - Reads every `~/.claude/usage-data/facets/*.json` if present (optional — report facets_coverage=0 if absent)
 - Computes: token distribution, tool counts, weekday×hour heatmap, project breakdown, friction/outcome crosstabs, interrupt × outcome correlation, weekly series, efficiency ratios, prompt-length vs outcome, extremes lists, **API-equivalent cost** (blended by model-share across `PRICING` table)
 - Writes `analysis-data.json` with every number the HTML needs
+- With `--origins-output`, writes the per-session hand-driven / launched / unknown verdicts (see Step 1c) to a working file. Pass it on every run, single-tool included: anything that later reads the user-turns file must keep only sessions this file marks `direct`.
 
 ### Methodology note: two token universes
 
@@ -176,7 +178,7 @@ python3 scripts/aggregate.py \
   --output /tmp/cc-autopsy/analysis-data.json
 ```
 
-**Hand-driven vs launched.** Every Claude Code, Codex and Grok session is classified as `direct` (the user drove it), `launched` (a tool started it — e.g. a review run started from a Claude Code session) or `unknown` (`scripts/origin.py` has the rule). `direct` needs positive evidence: the transcript records an interactive session, or, where it records nothing either way, the user typed, got an answer and typed again. Scheduled jobs, scripts and one-shot runs with no visible launcher are `unknown`, so expect large `unknown` counts for tools the user mostly automates. Each team-ledger source card shows the three counts. When writing the team-ledger book, do not describe a tool's launched sessions as the user's own use of that tool; the existing share and parallel-hours numbers still include them, so say so if you cite those numbers. `origins.json` maps `source:session_id` to its verdict under a top-level `sessions` key and is a working file like the user-turns files.
+**Hand-driven vs launched.** Every Claude Code, Codex and Grok session is classified as `direct` (the user drove it), `launched` (a tool started it — e.g. a review run started from a Claude Code session) or `unknown` (`scripts/origin.py` has the rule). `direct` needs positive evidence: the transcript records an interactive session, or, where it records nothing either way, the user typed, got an answer and typed again (Grok records no answers: two typed prompts in one session). Scheduled jobs, scripts and one-shot runs with no visible launcher are `unknown`, so expect large `unknown` counts for tools the user mostly automates. Each team-ledger source card with sessions to classify shows the three counts (Antigravity, which is presence-only, shows none). When writing the team-ledger book, do not describe a tool's launched sessions as the user's own use of that tool; the existing share and parallel-hours numbers still include them, so say so if you cite those numbers. `origins.json` maps `source:session_id` to its verdict under a top-level `sessions` key and is a working file like the user-turns files.
 
 Coverage tiers, one sentence each:
 - **Codex — full**: tokens, models, and transcript content are all read, same shape as Claude's own transcript pool.
