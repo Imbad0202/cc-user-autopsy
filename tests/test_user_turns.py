@@ -167,7 +167,6 @@ class ClaudeTurnTests(unittest.TestCase):
         self.assertEqual([t["turn_index"] for t in turns], [0, 1])
         self.assertIsNone(turns[0]["prev_assistant_tail"])
         self.assertEqual(turns[1]["prev_assistant_tail"], "Which file?")
-        self.assertTrue(row["multi_turn"])
 
     def test_pasted_html_is_still_the_users_text(self):
         kept = ["<div>why is this centered?</div>", "<b>bold</b> or not",
@@ -352,7 +351,6 @@ class ClaudeTurnTests(unittest.TestCase):
                               records[0]["message"]["content"])
             self.assertEqual(len(row["_user_turns"]), int(labelled_human),
                              records[0])
-            self.assertFalse(row["multi_turn"])
 
     def test_text_is_kept_exactly_as_typed(self):
         raw = "  indented first line\n\ttab\n"
@@ -393,7 +391,6 @@ class ClaudeTurnTests(unittest.TestCase):
                     "input": {"command": "ls"}}], _ts(1)),
             _typed("and then?", _ts(2))])
         self.assertEqual(len(row["_user_turns"]), 2)
-        self.assertFalse(row["multi_turn"])
 
     def test_records_without_a_message_object_do_not_stop_the_scan(self):
         row = self.scan([
@@ -403,11 +400,10 @@ class ClaudeTurnTests(unittest.TestCase):
             _typed("still here", _ts(3))])
         self.assertEqual([t["text"] for t in row["_user_turns"]], ["still here"])
 
-    def test_two_prompts_with_no_reply_between_is_not_multi_turn(self):
+    def test_two_prompts_with_no_reply_between_are_both_kept(self):
         row = self.scan([_typed("a", _ts(0)), _typed("b", _ts(1)),
                          _asst([{"type": "text", "text": "ok"}], _ts(2))])
         self.assertEqual(len(row["_user_turns"]), 2)
-        self.assertFalse(row["multi_turn"])
 
     def test_after_interrupt_flags_the_next_typed_turn_only(self):
         row = self.scan([
@@ -459,7 +455,6 @@ class ClaudeTurnTests(unittest.TestCase):
         side["isSidechain"] = True
         row = self.scan([_typed("go", _ts(0)), side, _typed("again", _ts(2))])
         self.assertEqual([e["target"] for e in row["cli_launches"]], ["codex"])
-        self.assertFalse(row["multi_turn"])
         self.assertIsNone(row["_user_turns"][1]["prev_assistant_tail"])
 
     def test_subagent_file_launches_merge_into_the_parent_row(self):
@@ -612,7 +607,6 @@ class CodexTurnTests(unittest.TestCase):
         self.assertIsNone(turns[0]["prev_assistant_tail"])
         self.assertEqual(turns[1]["prev_assistant_tail"], "Done. Keep order?")
         self.assertEqual(row["launch_source"], "cli")
-        self.assertTrue(row["multi_turn"])
         self.assertNotIn("_user_turns", row)
 
     def test_messages_of_a_run_a_program_started_are_not_written_out(self):
@@ -679,10 +673,9 @@ class CodexTurnTests(unittest.TestCase):
             return _codex_line(_ts(n), "event_msg",
                                {"type": "agent_message", "message": text})
         row, turns = self.scan({}, [user(1, "a"), agent(2, "  "), user(3, "b")])
-        self.assertFalse(row["multi_turn"])
+        self.assertEqual([t["prev_assistant_tail"] for t in turns], [None, None])
         row, turns = self.scan({}, [
             user(1, " a\n"), agent(2, "Which?"), user(3, "b"), user(4, "c")])
-        self.assertTrue(row["multi_turn"])
         self.assertEqual(turns[0]["text"], " a\n")
         self.assertEqual([t["prev_assistant_tail"] for t in turns],
                          [None, "Which?", None])
@@ -748,7 +741,6 @@ class CodexTurnTests(unittest.TestCase):
                 _codex_line(_ts(1), "event_msg",
                             {"type": "user_message", "message": "x"})]))
         self.assertEqual(errors, 0)
-        self.assertFalse(row["multi_turn"])
 
 
 class GrokTurnTests(unittest.TestCase):
@@ -775,10 +767,8 @@ class GrokTurnTests(unittest.TestCase):
             turns = []
             rows, _ = scan_grok.scan_sessions_dir(Path(td), turns)
         by_sid = {r["session_id"]: r for r in rows}
-        self.assertTrue(by_sid["g"]["multi_turn"])
         self.assertIn("interactive", by_sid["g"])
         self.assertIsNone(by_sid["g"]["interactive"])
-        self.assertFalse(by_sid["h"]["multi_turn"])
         self.assertEqual([t["text"] for t in turns if t["session_id"] == "g"],
                          ["ask one", "ask two"])
         self.assertEqual([t["text"] for t in turns if t["session_id"] == "h"],
@@ -863,7 +853,7 @@ class DemoPipelineTests(unittest.TestCase):
                   f"codex:{self.sid(4)}": "direct",
                   f"claude:{self.sid(5)}": "launched",
                   f"grok:{self.sid(6)}": "unknown",
-                  f"grok:{self.sid(7)}": "direct",
+                  f"grok:{self.sid(7)}": "unknown",
                   f"claude:{self.sid(8)}": "unknown",
                   f"claude:{self.sid(9)}": "unknown"}
         self.assertEqual({k: self.origins.get(k) for k in expect}, expect)

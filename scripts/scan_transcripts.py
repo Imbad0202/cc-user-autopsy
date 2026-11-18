@@ -289,18 +289,12 @@ def _cli_launches(records):
 
 
 def _user_turns(records, sid, project_path):
-    """(turns, multi_turn) for one session transcript.
-
-    turns: one row per prompt a person typed, in order. Only records the
-      transcript itself labels as a person's count; a transcript without
-      such labels yields no turns.
-    multi_turn: the user typed, the assistant answered in words, and the
-      user typed again. A tool call alone is not an answer."""
+    """One row per prompt a person typed in one session transcript, in
+    order. Only records the transcript itself labels as a person's count;
+    a transcript without such labels yields no turns."""
     turns = []
     last_assistant = None
-    replied_since_turn = False
     interrupted = False
-    multi_turn = False
     is_human_prompt = _human_prompt_test(records)
     for r in records:
         rtype = r.get("type")
@@ -309,7 +303,6 @@ def _user_turns(records, sid, project_path):
             if not sidechain and _text_parts(r):
                 # Only the main thread's replies are what the user read.
                 last_assistant = r
-                replied_since_turn = True
         elif rtype == "user" and not sidechain:
             if _has_interrupt(r):
                 interrupted = True
@@ -321,8 +314,6 @@ def _user_turns(records, sid, project_path):
                 # command): it still was the answer to the last reply.
                 last_assistant = None
                 continue
-            if turns and replied_since_turn:
-                multi_turn = True
             dt = _parse_ts(r.get("timestamp", ""))
             source = r.get("promptSource")
             turns.append(make_user_turn(
@@ -334,9 +325,8 @@ def _user_turns(records, sid, project_path):
                 prompt_source=source if isinstance(source, str) and source else None))
             # The next prompt answers the next reply, not this one again.
             last_assistant = None
-            replied_since_turn = False
             interrupted = False
-    return turns, multi_turn
+    return turns
 
 
 def _load_jsonl(path: Path):
@@ -726,7 +716,7 @@ def scan_one(path: Path):
     # non-subagent sessions is unchanged.
     token_accel = _compute_token_accel(assistant_output_pairs)
 
-    turns, multi_turn = _user_turns(lines, sid, project_path)
+    turns = _user_turns(lines, sid, project_path)
     cli_launches = _cli_launches(lines)
 
     return {
@@ -777,7 +767,6 @@ def scan_one(path: Path):
         "_all_ts": all_ts,
         # Origin evidence (findings-first Phase 1, read by origin.py).
         "interactive": _interactive(lines),
-        "multi_turn": multi_turn,
         "cli_launches": cli_launches,
         # Pipeline-internal only: the prompts the user typed. main() writes
         # them to --user-turns-output when asked and always strips them
@@ -796,7 +785,8 @@ def main():
                          "Default 0 (keep all). Use 3 to match session-meta-like "
                          "filtering that excludes warmup/interrupted-at-start sessions. "
                          "Dropped sessions take their user turns and their "
-                         "launch evidence with them.")
+                         "launch evidence with them: a session one of them "
+                         "started is then reported as unknown, not launched.")
     args = ap.parse_args()
     check_distinct_outputs(ap, args.output, args.user_turns_output)
 

@@ -77,7 +77,7 @@ These files hold raw prompt text. They are written to the working directory only
 
 Every session of a source whose content is read (Claude Code, Codex, Grok) gets `origin`: `direct`, `launched`, or `unknown`. Antigravity sessions are presence-only and get none, and neither do orphan subagent fragments, which are not sessions anyone opened.
 
-`direct` is given on positive evidence only. The first version of this rule also inferred it from absence: no launching call was seen, and one "would have been visible". Two review rounds kept finding ways that inference fails (a scheduler or a script leaves no transcript, transcripts rotate, a tool is not scanned, a session is known only from metadata), so the inference was removed rather than patched further.
+`direct` is given on one kind of evidence only: the transcript's own record of a person at the keyboard. Earlier versions of this rule also inferred it. One inference was from absence: no launching call was seen, and one "would have been visible". Review kept finding ways that fails (a scheduler or a script leaves no transcript, transcripts rotate, a tool is not scanned, a session is known only from metadata). The other was from behaviour: the user typed, the tool answered, and the user typed again. A script can do that too. Both inferences were removed instead of patched further.
 
 Each scanner reports what the transcript itself records about how the session was run, as a row field `interactive`:
 
@@ -90,13 +90,11 @@ The verdict, first match wins:
 1. `launched`: the session header says another session spawned it (Codex: a structured `source` naming a sub-agent).
 2. `direct`: `interactive` is true.
 3. `launched`: some transcript, of any tool, in the main thread or any subagent, contains a shell call that names this tool's CLI, and this session started while that call was running: after the call was requested, and no later than the call's result or 60 seconds after the request, whichever came later. Time alone decides; the working directory is not compared. This runs in every direction, including a tool calling its own CLI (`claude -p` from a Claude Code session).
-4. `unknown`: `interactive` is false (or holds a value that is neither true, false nor null). Nobody sat in the session, and nothing records who started it: the user at a shell, a script, a scheduler, or a tool whose transcript is gone.
-5. `direct`: `interactive` is null, and the user typed, the tool answered in words, and the user typed again. Grok records no replies, so for Grok this is two typed prompts in one session.
-6. `unknown`: everything else.
+4. `unknown`: everything else. That covers a run recorded as non-interactive with no launching call in sight (nothing records who started it: the user at a shell, a script, a scheduler, or a tool whose transcript is gone), and every session whose transcript does not say how it was run.
 
-Step 2 is placed above step 3 on purpose: a recorded interactive session that happens to start while an unrelated call mentioning the tool is running is still the user's. Step 5 is the one place a verdict rests on behaviour instead of a record, and applies only where no record exists.
+Step 2 is placed above step 3 on purpose: a recorded interactive session that happens to start while an unrelated call mentioning the tool is running is still the user's.
 
-Known limits, accepted: a wrapper that drives an interactive client through a pseudo-terminal would be recorded as interactive; a Codex or Grok session with no record and a single prompt is `unknown` even when the user did type it; Claude Code transcripts older than the labels are all `unknown`. Each errs toward leaving a session out.
+Known limits, accepted: a wrapper that drives an interactive client through a pseudo-terminal would be recorded as interactive; every Grok session is `unknown`, because Grok's prompt history records nothing about how a session was run, so a person who uses Grok by hand gets no findings from it; a Codex session without a header is `unknown`; Claude Code transcripts older than the prompt labels are `unknown`, so a user whose history is mostly from such versions gets few findings or none, and the report must say that the cause is missing labels, not an absence of problems (Phase 2, where the findings section is built). Each limit errs toward leaving a session out.
 
 Only `direct` sessions feed findings. `launched` and `unknown` counts are shown in the coverage line so the reader sees what was left out. This follows the existing lower-bound accounting rule: when in doubt, undercount.
 

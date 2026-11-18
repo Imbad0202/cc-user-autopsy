@@ -885,7 +885,8 @@ def gen_origin_fixtures(now):
                  starts claude
       claude E   launched: programmatic entrypoint, starts 4s after D's call
       grok   F   unknown: one prompt, nothing else recorded
-      grok   G   direct: two typed prompts
+      grok   G   unknown: two typed prompts, still nothing recorded about
+                 how the session was run
       claude H   unknown: programmatic entrypoint, two turns, and no call
                  anywhere that could have started it (a scheduled job)
       claude I   unknown: no labels at all (an older transcript format)
@@ -1016,7 +1017,8 @@ def gen_origin_fixtures(now):
             "timestamp": f_start.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "session_id": sid(6), "prompt": "one-off question",
             "is_bash": False}) + "\n")
-        # grok G: two typed prompts in one session (hand-driven).
+        # grok G: two typed prompts in one session. Still unknown: typing
+        # twice is something a script can do too.
         g_start = now - timedelta(days=4)
         for k, prompt in enumerate(
                 ["compare the two drafts",

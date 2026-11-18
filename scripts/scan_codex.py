@@ -115,8 +115,6 @@ def scan_one(path: Path, turns_out=None):
     cli_launches = []
     launches_by_call = {}
     last_assistant = None
-    replied_since_turn = False
-    multi_turn = False
     cwd = None
     model = None
     user_msgs = 0
@@ -160,11 +158,8 @@ def scan_one(path: Path, turns_out=None):
                     text = payload.get("message")
                     stripped = text.strip() if isinstance(text, str) else ""
                     if stripped:
-                        if turns and replied_since_turn:
-                            multi_turn = True
                         turns.append((ts, text, last_assistant, cwd or ""))
                         last_assistant = None
-                        replied_since_turn = False
                     if first_prompt is None:
                         if stripped:
                             # Hash the FULL prompt before truncating for
@@ -178,7 +173,6 @@ def scan_one(path: Path, turns_out=None):
                     if isinstance(reply, str) and reply.strip():
                         # An empty agent message is not an answer.
                         last_assistant = reply
-                        replied_since_turn = True
                     # Attribute to whichever model is currently active (the
                     # most recent turn_context seen so far), not the LAST
                     # turn_context in the whole file — sessions can switch
@@ -233,7 +227,6 @@ def scan_one(path: Path, turns_out=None):
         # Origin evidence (findings-first Phase 1, read by origin.py).
         "launch_source": launch_source,
         "interactive": _interactive(launch_source),
-        "multi_turn": multi_turn,
         "cli_launches": cli_launches,
     }
     # A Codex rollout does not say who wrote a user message. In a run its

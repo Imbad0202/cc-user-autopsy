@@ -13,12 +13,12 @@ from scripts.origin import (  # noqa: E402
     LAUNCH_WINDOW_SECONDS, classify_all, count_by_source)
 
 
-def row(source, sid, start, *, end=None, multi_turn=False, launches=(),
+def row(source, sid, start, *, end=None, launches=(),
         until=None, **extra):
     """A scanner row. `interactive` (True / False) is passed through
     **extra; leaving it out means the transcript does not say."""
     return {"source": source, "session_id": sid, "start_time": start,
-            "segments": [[start, end or start]], "multi_turn": multi_turn,
+            "segments": [[start, end or start]],
             "coverage": "partial" if source == "grok" else "full",
             "cli_launches": [{"target": t, "ts": ts, "until": until}
                              for t, ts in launches], **extra}
@@ -98,39 +98,29 @@ class ClassifyTests(unittest.TestCase):
             [got["codex:c1"], got["claude:old"], got["grok:g1"]],
             ["unknown"] * 3)
 
-    def test_nothing_recorded_but_a_real_back_and_forth_is_direct(self):
-        rows = [row("grok", "g1", at(0), multi_turn=True),
-                row("codex", "c1", at(0), multi_turn=True)]
-        self.assertEqual(set(classify_all(rows).values()), {"direct"})
+    def test_a_back_and_forth_is_not_evidence(self):
+        # A script can send two prompts and read two answers. A leftover
+        # `multi_turn` field from an older scanner run changes nothing.
+        rows = [dict(row("grok", "g1", at(0)), multi_turn=True),
+                dict(row("codex", "c1", at(0)), multi_turn=True)]
+        self.assertEqual(set(classify_all(rows).values()), {"unknown"})
 
     def test_recorded_non_interactive_is_never_direct(self):
-        # Not even with several turns: a script can feed a run more than
-        # one prompt.
         rows = [CLAUDE_SPAN,
                 row("codex", "c1", at(0), interactive=False),
-                row("codex", "c2", at(0), interactive=False, multi_turn=True),
-                row("claude", "s", at(0), interactive=False, multi_turn=True)]
+                row("claude", "s", at(0), interactive=False)]
         got = classify_all(rows)
-        self.assertEqual(
-            [got["codex:c1"], got["codex:c2"], got["claude:s"]],
-            ["unknown"] * 3)
+        self.assertEqual([got["codex:c1"], got["claude:s"]], ["unknown"] * 2)
 
-    def test_only_true_and_false_count_as_a_record(self):
-        for junk in ("yes", 1, 0, "", [], {}):
+    def test_only_true_counts_as_a_record_of_a_person(self):
+        for junk in ("yes", "true", 1, 0, "", [], {}):
             r = row("codex", "c", at(0), interactive=junk)
-            self.assertEqual(self.origin([r], "codex:c"), "unknown", junk)
-        r = row("codex", "c", at(0), multi_turn="yes")
-        self.assertEqual(self.origin([r], "codex:c"), "unknown")
-        # A malformed record is not "no record": the back-and-forth rule
-        # is for rows that say nothing at all.
-        for junk in ("false", "true", 0, 1, [], {}):
-            r = row("codex", "c", at(0), interactive=junk, multi_turn=True)
             self.assertEqual(self.origin([r], "codex:c"), "unknown", junk)
 
     # -- launched -------------------------------------------------------
 
     def test_spawned_header_marks_launched_over_everything(self):
-        rows = [row("codex", "c1", at(0), multi_turn=True, interactive=True,
+        rows = [row("codex", "c1", at(0), interactive=True,
                     launch_source="subagent"),
                 row("codex", "c2", at(0), launch_source="SubAgent")]
         self.assertEqual(set(classify_all(rows).values()), {"launched"})
@@ -139,8 +129,8 @@ class ClassifyTests(unittest.TestCase):
         rows = [launcher(), row("codex", "c1", at(5), interactive=False)]
         self.assertEqual(self.origin(rows, "codex:c1"), "launched")
 
-    def test_time_match_beats_multi_turn_when_nothing_is_recorded(self):
-        rows = [launcher(), row("codex", "c1", at(5), multi_turn=True)]
+    def test_unrecorded_run_with_a_matching_call_is_launched(self):
+        rows = [launcher(), row("codex", "c1", at(5))]
         self.assertEqual(self.origin(rows, "codex:c1"), "launched")
 
     def test_the_transcripts_own_record_beats_a_time_match(self):
@@ -295,7 +285,7 @@ class ClassifyTests(unittest.TestCase):
 class CountTests(unittest.TestCase):
     def test_counts_per_source(self):
         rows = [launcher(), row("codex", "c1", at(5)),
-                row("codex", "c2", at(300), multi_turn=True),
+                row("codex", "c2", at(300), interactive=True),
                 row("codex", "c3", at(300))]
         counts = count_by_source(classify_all(rows))
         self.assertEqual(counts["codex"],

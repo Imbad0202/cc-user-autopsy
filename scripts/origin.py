@@ -6,11 +6,13 @@ run that one tool starts inside another, a scheduled job, a script's
 one-shot call: these are automation, and counting them would misstate
 both how much the user uses a tool and what the user typed into it.
 
-`direct` is given on positive evidence only. An earlier design inferred
-it from absence ("no launch was seen, and one would have been visible");
-every way of arguing "would have been visible" turned out to have holes,
-so that inference is gone. What cannot be shown to be hand-driven is
-`unknown`, and only `direct` sessions feed the findings.
+`direct` is given on one kind of evidence only: the transcript's own
+record of a person at the keyboard. Earlier designs also inferred it,
+from absence ("no launch was seen, and one would have been visible") and
+from behaviour ("the user typed, got an answer, and typed again"). The
+first has holes wherever a launcher leaves no transcript; the second is
+something a script can do too. Both are gone. What is not recorded as
+hand-driven is `unknown`, and only `direct` sessions feed the findings.
 
 Rule (spec 2026-11-18 findings-first, section 5.2), first match wins:
 
@@ -22,13 +24,12 @@ Rule (spec 2026-11-18 findings-first, section 5.2), first match wins:
   launched  the session began while some tool's shell call naming this
             tool's CLI was running (after the request, and until its
             result came back or 60 seconds, whichever is later)
-  unknown   the transcript records a non-interactive run (`interactive`
-            is False) and no launching call was seen: who started it — a
-            script, a scheduler, a tool whose transcript is gone — is
-            not recorded
-  direct    the transcript does not say either way, but the user typed,
-            got an answer, and typed again (multi_turn)
-  unknown   everything else
+  unknown   everything else: a non-interactive run with no launching
+            call in sight (who started it — a script, a scheduler, a tool
+            whose transcript is gone — is not recorded), and any session
+            whose transcript does not say how it was run (every Grok
+            session, a Codex session without a header, a Claude Code
+            transcript older than the prompt labels)
 """
 from bisect import bisect_left
 from datetime import timedelta, timezone
@@ -148,16 +149,10 @@ def classify(row, windows):
     declared = row.get("launch_source")
     if isinstance(declared, str) and declared.lower() in SPAWNED_SOURCES:
         return "launched"
-    interactive = row.get("interactive")
-    if interactive is True:
+    if row.get("interactive") is True:
         return "direct"
     if _in_a_launch_window(row, windows):
         return "launched"
-    if interactive is not None:
-        # False, or a value that is neither: not a record of nothing.
-        return "unknown"
-    if row.get("multi_turn") is True:
-        return "direct"
     return "unknown"
 
 
