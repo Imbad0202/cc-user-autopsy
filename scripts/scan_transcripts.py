@@ -102,18 +102,34 @@ _HARNESS_OPEN_RE = re.compile(r"\s*<([a-z]+(?:-[a-z]+)+)(?:\s[^<>]*)?>")
 _INTERRUPT_MARK = "[Request interrupted by user"
 
 
+def _element_end(text, name, pos):
+    """Index just past the tag that closes the element `name` whose
+    opening tag ends at `pos`, or -1. An element of the same name inside
+    it is stepped over, so the outer one ends at its own closing tag."""
+    tag = re.compile(rf"<(/?){re.escape(name)}(?:\s[^<>]*)?>")
+    depth = 1
+    while True:
+        m = tag.search(text, pos)
+        if not m:
+            return -1
+        depth += -1 if m.group(1) else 1
+        pos = m.end()
+        if depth == 0:
+            return pos
+
+
 def _is_harness_block(text):
     """Whether a text block is wholly harness elements (see above).
-    Linear: each element's end is found with one forward search."""
+    Linear: every tag is visited once, moving forward."""
     pos, seen = 0, False
     while True:
         m = _HARNESS_OPEN_RE.match(text, pos)
         if not m:
             break
-        end = text.find(f"</{m.group(1)}>", m.end())
-        if end < 0:
+        pos = _element_end(text, m.group(1), m.end())
+        if pos < 0:
             return False
-        pos, seen = end + len(m.group(1)) + 3, True
+        seen = True
     return seen and not text[pos:].strip()
 
 
@@ -145,20 +161,26 @@ def _provenance(record):
     record written by a Claude Code version that predates the labels).
     Every label present must name a person. A label that names anything
     else, or is not the kind of value expected (a list where a word
-    should be), makes the record "other"."""
+    should be, an explicit null), makes the record "other"."""
     votes = []
-    source = record.get("promptSource")
-    if source is not None:
+    if "promptSource" in record:
+        source = record["promptSource"]
         votes.append(isinstance(source, str) and source in HUMAN_PROMPT_SOURCES)
-    turn = record.get("turnOrigin")
-    if turn is not None:
-        votes.append(turn == "human")
-    origin = record.get("origin")
-    if origin is not None:
+    if "turnOrigin" in record:
+        votes.append(record["turnOrigin"] == "human")
+    if "origin" in record:
+        origin = record["origin"]
         votes.append(isinstance(origin, dict) and origin.get("kind") == "human")
     if not votes:
         return None
     return "human" if all(votes) else "other"
+
+
+def _is_tool_result_only(record):
+    """A user-role record that only carries tool output back."""
+    content = _content(record)
+    return isinstance(content, list) and bool(content) and all(
+        isinstance(c, dict) and c.get("type") == "tool_result" for c in content)
 
 
 def _is_programmatic(entrypoint):
@@ -166,26 +188,26 @@ def _is_programmatic(entrypoint):
         and entrypoint.lower().startswith(_PROGRAMMATIC_ENTRYPOINT_PREFIX)
 
 
-def _human_prompt_test(records):
-    """A predicate over this transcript's records: is this a main-thread
-    user record that its own labels attribute to a person, sent through
-    an interactive entrypoint? Unlabelled records are never assumed to be
-    the user's. The entrypoint is read per record, because a session can
-    be resumed through a different one; a record without the field is
-    trusted only when no record in the file names a programmatic one."""
-    any_programmatic = any(_is_programmatic(r.get("entrypoint")) for r in records)
+def _is_human_prompt(record):
+    """Is this a main-thread user record that its own labels attribute to
+    a person, sent through an entrypoint the record itself names and that
+    is not a programmatic one? Unlabelled records are never assumed to be
+    the user's, and neither is a record that does not say how it arrived
+    (every labelled record seen in practice names its entrypoint). The
+    entrypoint is read per record, because a session can be resumed
+    through a different one. Tool output is not a prompt, whatever labels
+    it carries.
 
-    def is_human_prompt(record):
-        if record.get("type") != "user" or record.get("isSidechain") \
-                or record.get("isMeta") or record.get("isCompactSummary") \
-                or _provenance(record) != "human":
-            return False
-        entrypoint = record.get("entrypoint")
-        if entrypoint is None:
-            return not any_programmatic
-        return isinstance(entrypoint, str) and not _is_programmatic(entrypoint)
-
-    return is_human_prompt
+    Entrypoints are told apart by what marks a programmatic one (`sdk-*`),
+    not by a list of interactive clients: the editor and desktop clients
+    have names of their own, and a list would drop their users."""
+    if record.get("type") != "user" or record.get("isSidechain") \
+            or record.get("isMeta") or record.get("isCompactSummary") \
+            or _provenance(record) != "human" or _is_tool_result_only(record):
+        return False
+    entrypoint = record.get("entrypoint")
+    return isinstance(entrypoint, str) and bool(entrypoint.strip()) \
+        and not _is_programmatic(entrypoint)
 
 
 def _typed_text(record):
@@ -217,10 +239,9 @@ def _interactive(records):
            labelled and none is a person's (a scheduled run, a
            peer-driven session)
     None   the transcript carries no such labels (older versions)"""
-    is_human_prompt = _human_prompt_test(records)
     labelled = False
     for r in records:
-        if is_human_prompt(r):
+        if _is_human_prompt(r):
             return True
         if _is_programmatic(r.get("entrypoint")) or (
                 r.get("type") == "user" and not r.get("isSidechain")
@@ -295,7 +316,6 @@ def _user_turns(records, sid, project_path):
     turns = []
     last_assistant = None
     interrupted = False
-    is_human_prompt = _human_prompt_test(records)
     for r in records:
         rtype = r.get("type")
         sidechain = bool(r.get("isSidechain"))
@@ -304,9 +324,16 @@ def _user_turns(records, sid, project_path):
                 # Only the main thread's replies are what the user read.
                 last_assistant = r
         elif rtype == "user" and not sidechain:
-            if _has_interrupt(r):
-                interrupted = True
-            if not is_human_prompt(r):
+            if not _is_human_prompt(r):
+                # The harness writes the interrupt marker in a record of
+                # its own; a person quoting the marker is not one.
+                if _has_interrupt(r):
+                    interrupted = True
+                # A prompt something else sent (a program resuming the
+                # session, a notification) took the last reply's place:
+                # what the user types next is not an answer to it.
+                if _provenance(r) == "other" and not _is_tool_result_only(r):
+                    last_assistant = None
                 continue
             text = _typed_text(r)
             if not text:

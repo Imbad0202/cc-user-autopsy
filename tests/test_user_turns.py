@@ -1,5 +1,8 @@
 """User-turn capture (findings-first Phase 1): every prompt the user typed
 is written to a working file, and that text reaches no other output."""
+import argparse
+import contextlib
+import io
 import json
 import os
 import stat
@@ -15,7 +18,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from scripts import scan_codex, scan_grok, scan_transcripts  # noqa: E402
 from scripts.cross_llm_common import (  # noqa: E402
-    ASSISTANT_TAIL_CAP, TURN_TEXT_CAP, make_user_turn, write_private_text)
+    ASSISTANT_TAIL_CAP, TURN_TEXT_CAP, check_distinct_outputs, make_user_turn,
+    write_private_text)
 from scripts.report_render import _source_card_html  # noqa: E402
 
 SID = "11111111-2222-3333-4444-555555555555"
@@ -201,6 +205,15 @@ class ClaudeTurnTests(unittest.TestCase):
         self.assertTrue(scan_transcripts._is_harness_block(nested))
         self.assertLess(time.perf_counter() - start, 5)
 
+    def test_an_element_inside_one_of_the_same_name_does_not_end_it(self):
+        check = scan_transcripts._is_harness_block
+        self.assertTrue(check(
+            "<system-reminder><system-reminder>x</system-reminder>"
+            "</system-reminder>"))
+        self.assertTrue(check("<a-b>1<a-b k='v'>2</a-b>3</a-b>\n<c-d>4</c-d>"))
+        self.assertFalse(check("<a-b><a-b>x</a-b>"))
+        self.assertFalse(check("<a-b><a-b>x</a-b></a-b> and my own words"))
+
     def test_block_wholly_wrapped_in_hyphenated_tags_is_injected(self):
         row = self.scan([
             _typed("<command-message>x</command-message>\n"
@@ -234,7 +247,7 @@ class ClaudeTurnTests(unittest.TestCase):
                 extra["turnOrigin"] = turn
             if kind:
                 extra["origin"] = {"kind": kind}
-            return _user(f"text {i}", _ts(i), **extra)
+            return _user(f"text {i}", _ts(i), entrypoint="cli", **extra)
 
         row = self.scan([rec(i, l) for i, l in enumerate(human + other)])
         self.assertEqual([t["text"] for t in row["_user_turns"]],
@@ -244,10 +257,15 @@ class ClaudeTurnTests(unittest.TestCase):
 
     def test_malformed_labels_are_not_a_person(self):
         row = self.scan([
-            _user("a", _ts(0), promptSource=["typed"]),
-            _user("b", _ts(1), turnOrigin={"human": True}),
-            _user("c", _ts(2), origin="human"),
-            _user("d", _ts(3), origin={"kind": ["human"]})])
+            _user("a", _ts(0), entrypoint="cli", promptSource=["typed"]),
+            _user("b", _ts(1), entrypoint="cli", turnOrigin={"human": True}),
+            _user("c", _ts(2), entrypoint="cli", origin="human"),
+            _user("d", _ts(3), entrypoint="cli", origin={"kind": ["human"]}),
+            # A label that is present and null is a label, and not a
+            # person's.
+            _typed("e", _ts(4), turnOrigin=None),
+            _typed("f", _ts(5), promptSource=None),
+            _typed("g", _ts(6), origin=None)])
         self.assertEqual(row["_user_turns"], [])
         # Labelled, however badly: not "no record".
         self.assertIs(row["interactive"], False)
@@ -278,16 +296,56 @@ class ClaudeTurnTests(unittest.TestCase):
             _typed("scripted", _ts(2), entrypoint="sdk-cli")])
         self.assertIs(row["interactive"], False)
         self.assertEqual(row["_user_turns"], [])
-        # A record that does not name its entrypoint, in a file where
-        # another record names a programmatic one, is not trusted.
+        # A record that does not say how it arrived is not taken for an
+        # interactive one, whatever its other labels say.
         nameless = _typed("who", _ts(2))
         del nameless["entrypoint"]
+        for unnamed in (nameless, _typed("who", _ts(2), entrypoint=""),
+                        _typed("who", _ts(2), entrypoint="  "),
+                        _typed("who", _ts(2), entrypoint=None)):
+            row = self.scan([unnamed, reply])
+            self.assertIs(row["interactive"], False, unnamed)
+            self.assertEqual(row["_user_turns"], [])
+        # Another interactive client's name is not a programmatic one.
+        row = self.scan([_typed("mine", _ts(0), entrypoint="claude-vscode")])
+        self.assertIs(row["interactive"], True)
+
+    def test_tool_output_is_never_the_sign_of_a_person(self):
+        result = _typed([{"type": "tool_result", "tool_use_id": "t",
+                          "content": "out"}], _ts(1))
         row = self.scan([_user("go", _ts(0), entrypoint="sdk-cli",
-                               promptSource="sdk"), reply, nameless])
+                               promptSource="sdk"), result])
+        self.assertIs(row["interactive"], False)
+        row = self.scan([result])
         self.assertIs(row["interactive"], False)
         self.assertEqual(row["_user_turns"], [])
-        row = self.scan([nameless, reply])
-        self.assertIs(row["interactive"], True)
+
+    def test_a_reply_to_a_programs_prompt_is_not_attached_to_the_users(self):
+        row = self.scan([
+            _typed("mine", _ts(0)),
+            _user("resume", _ts(1), entrypoint="sdk-cli", promptSource="sdk"),
+            _asst([{"type": "text", "text": "Program, which file?"}], _ts(2)),
+            _user("the first", _ts(3), entrypoint="sdk-cli", promptSource="sdk"),
+            _typed("back again", _ts(4))])
+        self.assertEqual([t["prev_assistant_tail"] for t in row["_user_turns"]],
+                         [None, None])
+        # Tool output between a reply and the answer does not detach it.
+        row = self.scan([
+            _typed("mine", _ts(0)),
+            _asst([{"type": "text", "text": "Which file?"}], _ts(1)),
+            _user([{"type": "tool_result", "tool_use_id": "t",
+                    "content": "out"}], _ts(2)),
+            _typed("the first", _ts(3))])
+        self.assertEqual(row["_user_turns"][1]["prev_assistant_tail"],
+                         "Which file?")
+
+    def test_quoting_the_interrupt_marker_is_not_an_interrupt(self):
+        row = self.scan([
+            _typed("[Request interrupted by user] what does this mean?", _ts(0)),
+            _asst([{"type": "text", "text": "It means..."}], _ts(1)),
+            _typed("thanks", _ts(2))])
+        self.assertEqual([t["after_interrupt"] for t in row["_user_turns"]],
+                         [False, False])
 
     def test_a_slash_command_was_the_answer_to_the_last_reply(self):
         row = self.scan([
@@ -311,7 +369,9 @@ class ClaudeTurnTests(unittest.TestCase):
             _user([{"type": "tool_result", "tool_use_id": ["x"],
                     "content": "x"}], _ts(8)),
             _user([{"type": "tool_result", "tool_use_id": {"a": 1},
-                    "content": "x"}], _ts(9))])
+                    "content": "x"}], _ts(9)),
+            _user([{"type": "tool_result", "tool_use_id": "",
+                    "content": "x"}], _ts(10))])
         self.assertEqual([e["until"] for e in row["cli_launches"]], [None] * 5)
 
     def test_interactive_is_what_the_transcript_records(self):
@@ -390,7 +450,8 @@ class ClaudeTurnTests(unittest.TestCase):
             _asst([{"type": "tool_use", "id": "1", "name": "Bash",
                     "input": {"command": "ls"}}], _ts(1)),
             _typed("and then?", _ts(2))])
-        self.assertEqual(len(row["_user_turns"]), 2)
+        self.assertEqual([t["prev_assistant_tail"] for t in row["_user_turns"]],
+                         [None, None])
 
     def test_records_without_a_message_object_do_not_stop_the_scan(self):
         row = self.scan([
@@ -533,6 +594,16 @@ class ClaudeTurnTests(unittest.TestCase):
             self.assertIn("same file", proc.stderr)
             self.assertEqual([p.name for p in Path(td).iterdir()], ["projects"])
 
+    def test_two_unicode_spellings_of_one_name_are_refused(self):
+        # Composed and decomposed accents: one file on macOS volumes.
+        parser = argparse.ArgumentParser()
+        with tempfile.TemporaryDirectory() as td, \
+                contextlib.redirect_stderr(io.StringIO()) as err, \
+                self.assertRaises(SystemExit):
+            check_distinct_outputs(parser, str(Path(td) / "caf\u00e9.jsonl"),
+                                   str(Path(td) / "cafe\u0301.jsonl"))
+        self.assertIn("same file", err.getvalue())
+
     def test_filtered_out_sessions_leave_no_turns(self):
         other = "99999999-2222-3333-4444-555555555555"
         with tempfile.TemporaryDirectory() as td:
@@ -674,6 +745,10 @@ class CodexTurnTests(unittest.TestCase):
                                {"type": "agent_message", "message": text})
         row, turns = self.scan({}, [user(1, "a"), agent(2, "  "), user(3, "b")])
         self.assertEqual([t["prev_assistant_tail"] for t in turns], [None, None])
+        # A blank message still was what came after the reply.
+        row, turns = self.scan({}, [
+            user(1, "a"), agent(2, "Which?"), user(3, "  "), user(4, "b")])
+        self.assertEqual([t["prev_assistant_tail"] for t in turns], [None, None])
         row, turns = self.scan({}, [
             user(1, " a\n"), agent(2, "Which?"), user(3, "b"), user(4, "c")])
         self.assertEqual(turns[0]["text"], " a\n")
@@ -702,6 +777,8 @@ class CodexTurnTests(unittest.TestCase):
             call(json.dumps({"cmd": "claude -p hi"}), name="exec_command"),
             call(json.dumps({"command": "cd /w\nclaude -p hi"})),
             call("claude -p not-json"),
+            # Nested too deeply to decode: read as plain text, not fatal.
+            call("[" * 5000 + '"claude -p hi"' + "]" * 5000),
         ]
         misses = [
             # File content, not a command line.
@@ -711,12 +788,49 @@ class CodexTurnTests(unittest.TestCase):
             call(json.dumps({"command": "ls ~/.claude/projects"})),
             _codex_line(_ts(2), "response_item",
                         {"type": "function_call", "name": "shell"}),
+            # Only the command field is the command line.
+            call(json.dumps({"cmd": "pwd", "prefix_rule": ["claude", "-p"]})),
+            # A tool whose name merely contains "exec".
+            call(json.dumps({"query": "select 'claude -p'"}), name="execute_sql"),
         ]
-        row, _ = self.scan({}, [
-            _codex_line(_ts(1), "event_msg",
-                        {"type": "user_message", "message": "x"})] + hits + misses)
-        self.assertEqual([e["target"] for e in row["cli_launches"]],
-                         ["claude"] * len(hits))
+        for line, expected in [(h, ["claude"]) for h in hits] + \
+                [(m, []) for m in misses]:
+            row, _ = self.scan({}, [line])
+            self.assertEqual([e["target"] for e in row["cli_launches"]],
+                             expected, line)
+
+    def test_each_header_governs_the_messages_under_it(self):
+        def header(n, source):
+            return _codex_line(_ts(n), "session_meta", {"id": "cx", "source": source})
+        def user(n, text):
+            return _codex_line(_ts(n), "event_msg",
+                               {"type": "user_message", "message": text})
+        # Started by a program, resumed by hand: the program's prompt is
+        # not written out, and the session is not hand-driven.
+        row, turns = self.scan({"source": "exec"}, [
+            user(1, "scripted"), header(2, "cli"), user(3, "mine")])
+        self.assertEqual([t["text"] for t in turns], ["mine"])
+        self.assertEqual([t["turn_index"] for t in turns], [0])
+        self.assertEqual((row["launch_source"], row["interactive"]),
+                         ("exec", False))
+        # The other way round.
+        row, turns = self.scan({"source": "cli"}, [
+            user(1, "mine"), header(2, "exec"), user(3, "scripted")])
+        self.assertEqual([t["text"] for t in turns], ["mine"])
+        self.assertIs(row["interactive"], False)
+        # Spawned at any point: the row says so.
+        row, turns = self.scan({"source": "cli"}, [
+            user(1, "mine"), header(2, {"subagent": "r"}), user(3, "task")])
+        self.assertEqual([t["text"] for t in turns], ["mine"])
+        self.assertEqual(row["launch_source"], "subagent")
+        # Interactive throughout.
+        row, turns = self.scan({"source": "cli"}, [
+            user(1, "a"), header(2, "vscode"), user(3, "b")])
+        self.assertIs(row["interactive"], True)
+        self.assertEqual(len(turns), 2)
+        # A header that names something unknown settles nothing.
+        row, _ = self.scan({"source": "cli"}, [header(2, "something-new")])
+        self.assertIsNone(row["interactive"])
 
     def test_launch_window_closes_at_the_call_output(self):
         row, _ = self.scan({}, [
@@ -923,9 +1037,15 @@ class DemoPipelineTests(unittest.TestCase):
                        .read_text(encoding="utf-8").splitlines()]
         written = {t["session_id"] for t in codex_turns}
         self.assertNotIn(self.sid(2), written)      # header says exec
+        # A header that names no source rules nothing out, so that
+        # session's messages are written as candidates; its `launched`
+        # verdict in origins.json is what keeps them out of the findings.
         self.assertLessEqual({self.sid(3), self.sid(4)}, written)
+        origins = json.loads((self.out / "origins.json")
+                             .read_text(encoding="utf-8"))["sessions"]
+        self.assertEqual(origins[f"codex:{self.sid(3)}"], "launched")
         self.assertNotIn("review the diff",
-                         [t["text"] for t in codex_turns])
+                         "\n".join(t["text"] for t in codex_turns))
 
     def test_assistant_reply_tails_stay_in_the_turns_files(self):
         tail = "Apply both fixes?"

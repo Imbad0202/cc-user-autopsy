@@ -8,6 +8,7 @@ source/coverage/segments. Missing signals stay null, never imputed.
 """
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -46,13 +47,30 @@ INTERACTIVE_SOURCES = frozenset({"cli", "vscode"})
 NON_INTERACTIVE_SOURCES = frozenset({"exec", "mcp"})
 
 
-def _interactive(launch_source):
-    """True / False when the header names how the session was run, None
-    when it does not say (or names something this scanner does not know)."""
-    if launch_source in INTERACTIVE_SOURCES:
-        return True
-    if launch_source in NON_INTERACTIVE_SOURCES:
+SPAWNED_SOURCE = "subagent"
+_PROGRAM_SOURCES = NON_INTERACTIVE_SOURCES | {SPAWNED_SOURCE}
+
+
+def _session_source(sources):
+    """One launch source for the row from every header's: the spawned
+    mark if any header carries it, else the first non-interactive one,
+    else the last one named. None when no header names a source."""
+    if SPAWNED_SOURCE in sources:
+        return SPAWNED_SOURCE
+    for src in sources:
+        if src in NON_INTERACTIVE_SOURCES:
+            return src
+    return sources[-1] if sources else None
+
+
+def _session_interactive(sources):
+    """True when every header that names a source names an interactive
+    client; False when any names a non-interactive run; None when none
+    says, or one names something this scanner does not know."""
+    if any(src in NON_INTERACTIVE_SOURCES for src in sources):
         return False
+    if sources and all(src in INTERACTIVE_SOURCES for src in sources):
+        return True
     return None
 
 
@@ -63,7 +81,17 @@ def _is_shell_tool(name):
     whose arguments are file content (apply_patch) where a CLI's name is
     only a word."""
     low = name.lower() if isinstance(name, str) else ""
-    return any(part in low for part in ("shell", "exec", "bash", "command"))
+    return not _SHELL_WORDS.isdisjoint(re.split(r"[^a-z]+", low))
+
+
+# Whole words of a tool name, so `exec_command` and `local_shell` match
+# and a database tool called `execute_sql` does not.
+_SHELL_WORDS = frozenset({"shell", "exec", "bash", "command"})
+
+# Argument fields that hold the command line. When a call has any of
+# them, only they are read; other fields (an approval rule, a note) can
+# name a CLI without running it.
+_COMMAND_KEYS = frozenset({"command", "cmd", "commands", "script", "argv", "args"})
 
 
 # Argument fields of a shell call that are not part of the command line:
@@ -101,16 +129,23 @@ def _call_text(payload):
         return ""
     try:
         decoded = json.loads(args)
-    except ValueError:
+        if isinstance(decoded, dict) and not _COMMAND_KEYS.isdisjoint(decoded):
+            decoded = [v for k, v in decoded.items() if k in _COMMAND_KEYS]
+        return "\n".join(_strings(decoded))
+    except (ValueError, RecursionError):
+        # Not JSON, or nested too deeply to walk: read it as plain text.
         return args
-    return "\n".join(_strings(decoded))
 
 
 def scan_one(path: Path, turns_out=None):
     """Returns (row, parse_errors). When turns_out is a list, the prompts
-    the user typed are appended to it (raw text — see cross_llm_common)."""
+    that may be the user's own are appended to it (raw text; candidates
+    only — see cross_llm_common)."""
     session_id = None
-    launch_source = None
+    # A rollout can be resumed, and each resume writes a header of its
+    # own: the sources are kept in order, and each message remembers the
+    # one in force when it was sent.
+    sources = []
     turns = []
     cli_launches = []
     launches_by_call = {}
@@ -147,7 +182,9 @@ def scan_one(path: Path, turns_out=None):
             if rtype == "session_meta":
                 session_id = payload.get("id")
                 cwd = payload.get("cwd") or cwd
-                launch_source = _launch_source(payload) or launch_source
+                src = _launch_source(payload)
+                if src:
+                    sources.append(src)
             elif rtype == "turn_context":
                 model = payload.get("model") or model
                 cwd = payload.get("cwd") or cwd
@@ -158,8 +195,10 @@ def scan_one(path: Path, turns_out=None):
                     text = payload.get("message")
                     stripped = text.strip() if isinstance(text, str) else ""
                     if stripped:
-                        turns.append((ts, text, last_assistant, cwd or ""))
-                        last_assistant = None
+                        turns.append((ts, text, last_assistant, cwd or "",
+                                      sources[-1] if sources else None))
+                    # Whatever was sent, the last reply has been answered.
+                    last_assistant = None
                     if first_prompt is None:
                         if stripped:
                             # Hash the FULL prompt before truncating for
@@ -225,18 +264,18 @@ def scan_one(path: Path, turns_out=None):
         "source": "codex",
         "coverage": "full",
         # Origin evidence (findings-first Phase 1, read by origin.py).
-        "launch_source": launch_source,
-        "interactive": _interactive(launch_source),
+        "launch_source": _session_source(sources),
+        "interactive": _session_interactive(sources),
         "cli_launches": cli_launches,
     }
-    # A Codex rollout does not say who wrote a user message. In a run its
-    # own header marks as non-interactive or spawned, the "user" is the
-    # program that started it, so those messages are not written out as
-    # anything a person typed.
-    from_a_program = row["interactive"] is False \
-        or launch_source == "subagent"
-    if turns_out is not None and not from_a_program:
-        for i, (tts, text, prev, turn_cwd) in enumerate(turns):
+    # A Codex rollout does not say who wrote a user message. Under a
+    # header that marks the run as non-interactive or spawned, the "user"
+    # is the program that started it, so those messages are left out. The
+    # rest are candidates: only origin.py's `direct` verdict for the
+    # session makes them the user's own.
+    if turns_out is not None:
+        kept = [t for t in turns if t[4] not in _PROGRAM_SOURCES]
+        for i, (tts, text, prev, turn_cwd, _) in enumerate(kept):
             turns_out.append(make_user_turn(
                 "codex", session_id, turn_cwd,
                 to_local_iso(tts) if tts else "", i, text,

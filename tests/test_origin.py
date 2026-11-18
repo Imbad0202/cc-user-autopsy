@@ -39,9 +39,9 @@ CLAUDE_SPAN = row("claude", "span", at(-3600), end=at(7200), interactive=True)
 
 class LaunchCommandTests(unittest.TestCase):
     def test_any_wrapper_around_the_cli_is_caught(self):
-        # Recall over precision: a missed launch would make the session it
-        # started read as hand-driven. origin.py's time window is what
-        # keeps a stray mention from mattering.
+        # Recall over precision: a missed launch loses the one record of
+        # who started that session. origin.py's time window is what keeps
+        # a stray mention from mattering.
         for cmd in ('codex exec "x"',
                     "cd /a && FOO=1 timeout 600 codex review",
                     "nohup codex exec x &", "time codex review",
@@ -59,7 +59,8 @@ class LaunchCommandTests(unittest.TestCase):
         for cmd in ("cat ./codex-notes.md", "ls ~/.codex/sessions",
                     "cat ~/.claude/settings.json", "pip install codex_tools",
                     "open https://claude.ai/x", "cd codex/src && ls",
-                    "echo Codex", "vim grok.md"):
+                    "echo Codex", "vim grok.md",
+                    r"dir C:\work\codex\src", r"type C:\Users\u\.claude\x"):
             self.assertEqual(cli_launch_targets(cmd), [], cmd)
 
     def test_every_cli_named_is_reported_once_in_order(self):
@@ -103,7 +104,8 @@ class ClassifyTests(unittest.TestCase):
         # `multi_turn` field from an older scanner run changes nothing.
         rows = [dict(row("grok", "g1", at(0)), multi_turn=True),
                 dict(row("codex", "c1", at(0)), multi_turn=True)]
-        self.assertEqual(set(classify_all(rows).values()), {"unknown"})
+        self.assertEqual(classify_all(rows),
+                         {"grok:g1": "unknown", "codex:c1": "unknown"})
 
     def test_recorded_non_interactive_is_never_direct(self):
         rows = [CLAUDE_SPAN,
@@ -123,7 +125,8 @@ class ClassifyTests(unittest.TestCase):
         rows = [row("codex", "c1", at(0), interactive=True,
                     launch_source="subagent"),
                 row("codex", "c2", at(0), launch_source="SubAgent")]
-        self.assertEqual(set(classify_all(rows).values()), {"launched"})
+        self.assertEqual(classify_all(rows),
+                         {"codex:c1": "launched", "codex:c2": "launched"})
 
     def test_non_interactive_run_with_a_matching_call_is_launched(self):
         rows = [launcher(), row("codex", "c1", at(5), interactive=False)]
@@ -182,6 +185,15 @@ class ClassifyTests(unittest.TestCase):
         rows = [launcher(target="grok"), row("codex", "c1", at(5))]
         self.assertEqual(self.origin(rows, "codex:c1"), "unknown")
 
+    def test_a_session_with_nothing_recorded_can_still_be_seen_launched(self):
+        # Grok records nothing about how a session was run, so it is
+        # never direct; a call that started it is still evidence.
+        rows = [launcher(target="grok"), row("grok", "g1", at(5)),
+                row("grok", "g2", at(LAUNCH_WINDOW_SECONDS + 5))]
+        got = classify_all(rows)
+        self.assertEqual((got["grok:g1"], got["grok:g2"]),
+                         ("launched", "unknown"))
+
     def test_reverse_direction_codex_launches_claude(self):
         rows = [launcher(source="codex", target="claude", sid="d"),
                 row("claude", "e", at(4), interactive=False)]
@@ -209,7 +221,9 @@ class ClassifyTests(unittest.TestCase):
             None, "x", {"target": "codex"}, {"target": ["codex"], "ts": at(0)},
             {"target": {"a": 1}, "ts": at(0)}, {"target": "emacs", "ts": at(0)},
             {"target": "codex", "ts": "junk"},
-            {"target": "codex", "ts": at(0), "until": "junk"}]
+            {"target": "codex", "ts": at(0), "until": "junk"},
+            # The last minute of the calendar: no room for a window.
+            {"target": "codex", "ts": "9999-12-31T23:59:30+00:00"}]
         worse = row("claude", "b", at(-600), interactive=True)
         worse["cli_launches"] = "codex"
         rows = [bad, worse, row("codex", "c1", at(5)),

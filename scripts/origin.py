@@ -27,9 +27,10 @@ Rule (spec 2026-11-18 findings-first, section 5.2), first match wins:
   unknown   everything else: a non-interactive run with no launching
             call in sight (who started it — a script, a scheduler, a tool
             whose transcript is gone — is not recorded), and any session
-            whose transcript does not say how it was run (every Grok
-            session, a Codex session without a header, a Claude Code
-            transcript older than the prompt labels)
+            whose transcript does not say how it was run and that no call
+            was seen to start (Grok sessions, a Codex session whose
+            header names no source, a Claude Code transcript older than
+            the prompt labels: none of these can ever be `direct`)
 """
 from bisect import bisect_left
 from datetime import timedelta, timezone
@@ -119,8 +120,13 @@ def launch_windows(rows):
             # started is still coming up, so the window never ends sooner
             # than the floor.
             until = _ts(ev.get("until"))
-            if until is None or until < ts + floor:
-                until = ts + floor
+            try:
+                earliest_end = ts + floor
+            except OverflowError:
+                # A timestamp at the very end of the calendar: corrupt.
+                continue
+            if until is None or until < earliest_end:
+                until = earliest_end
             by_target.setdefault(target, []).append((ts, until))
     out = {}
     for target, spans in by_target.items():

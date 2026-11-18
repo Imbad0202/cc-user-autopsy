@@ -12,6 +12,7 @@ import json
 import os
 import re
 import tempfile
+import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -119,9 +120,11 @@ def write_rows(rows, output) -> None:
 
 # --- user turns + CLI launch detection (findings-first Phase 1) -----------
 #
-# Every scanner can emit a second file of the turns the user typed by hand
-# (--user-turns-output). That file holds raw prompt text: it stays in the
-# working directory and never flows into analysis-data.json or any HTML.
+# Every scanner can emit a second file of prompts that may be the user's
+# own (--user-turns-output); a row is the user's only when origin.py calls
+# its session `direct`. That file holds raw prompt text and the end of the
+# reply each prompt answered: it stays in the working directory and never
+# flows into analysis-data.json or any HTML.
 
 # A prompt longer than TURN_TEXT_CAP keeps its head and its tail (pasted
 # material tends to sit in the middle; the instruction is at one end).
@@ -131,22 +134,24 @@ ASSISTANT_TAIL_CAP = 300
 # A shell command that mentions another AI CLI as a word of its own:
 # `codex exec`, `/opt/bin/codex review`, `nohup codex ... &`, `bash -lc
 # 'claude -p x'`, `codex.exe exec`. Deliberately loose. Parsing for
-# "command position" would miss every wrapper nobody listed, and a miss is
-# the costly error: the session it launched would then read as
-# hand-driven. The tight filter is elsewhere — origin.py only counts a
-# mention when a session of that tool also starts while the call is
-# running. A stray mention (`command -v codex`) can therefore mark an
-# unrelated session that happens to start in that window as launched;
-# that errs on the side the design chooses (undercount hand-driven use).
-# Names inside a longer word or a path component do not match
-# (`codex-notes.md`, `~/.claude/settings.json`).
+# "command position" would miss every wrapper nobody listed, and a miss
+# loses the one record of who started that session (it is then reported
+# as unknown instead of launched). The tight filter is elsewhere —
+# origin.py only counts a mention when a session of that tool also starts
+# while the call is running. A stray mention (`command -v codex`) can
+# therefore mark an unrelated non-interactive session that happens to
+# start in that window as launched instead of unknown; neither feeds the
+# findings. Names inside a longer word or a path component do not match
+# (`codex-notes.md`, `~/.claude/settings.json`, `C:\work\codex\src`).
 _CLI_MENTION_RE = re.compile(
-    r"(?<![\w.\-])(codex|grok|claude)(?:\.exe)?(?![\w.\-/])")
+    r"(?<![\w.\-])(codex|grok|claude)(?:\.exe)?(?![\w.\-/\\])")
 
-USER_TURNS_HELP = ("Also write one row per prompt the user typed to this "
-                   "JSONL file (created owner-readable only). It holds raw "
-                   "prompt text: keep it out of version control and out of "
-                   "any report.")
+USER_TURNS_HELP = ("Also write one row per prompt that may be the user's own "
+                   "to this JSONL file (created owner-readable only; a row "
+                   "counts only when its session is classified direct). It holds raw "
+                   "prompt text and the end of the reply each prompt "
+                   "answered: keep it out of version control and out of any "
+                   "report.")
 
 
 def add_user_turns_arg(parser):
@@ -171,8 +176,10 @@ def check_distinct_outputs(parser, *paths):
             identity = None
         # Most macOS and Windows volumes ignore case, and a file that does
         # not exist yet has no inode to compare: two spellings that differ
-        # only in case are refused everywhere rather than probed for.
-        folded = str(resolved).casefold()
+        # only in case are refused everywhere rather than probed for. The
+        # same goes for two Unicode spellings of one name (composed and
+        # decomposed accents), which macOS volumes also treat as one file.
+        folded = unicodedata.normalize("NFC", str(resolved)).casefold()
         if resolved in seen or folded in seen \
                 or (identity is not None and identity in seen):
             parser.error(f"two output flags point at the same file: {p}")
@@ -246,8 +253,13 @@ def write_private_text(text, output) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{out.name}.", dir=out.parent)
     try:
-        os.fchmod(fd, 0o600)   # exactly 0600, whatever the umask
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        try:
+            os.fchmod(fd, 0o600)   # exactly 0600, whatever the umask
+            fh = os.fdopen(fd, "w", encoding="utf-8")
+        except BaseException:
+            os.close(fd)
+            raise
+        with fh:
             fh.write(text)
         os.replace(tmp, out)
     except BaseException:

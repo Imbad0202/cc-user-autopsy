@@ -1168,7 +1168,8 @@ def main():
 
     print(f"Generated {len(sessions_meta)} meta, {len(sessions_facets)} facets, "
           f"{len(pick_sids) + engineered_count} transcripts "
-          f"({engineered_count} engineered blind-spot fixtures)")
+          f"({engineered_count} engineered blind-spot fixtures), "
+          f"plus the origin fixtures (see gen_origin_fixtures)")
     print(f"Output dirs:\n  {META_DIR}\n  {FACETS_DIR}\n  {PROJECTS_DIR}\n"
           f"  {CODEX_DIR}\n  {GROK_DIR}\n  {ANTIGRAVITY_DIR}\n  {history_path}")
 
