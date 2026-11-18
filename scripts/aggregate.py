@@ -541,7 +541,9 @@ def merge_scoring_metas(meta_raw, activity_metas):
             # Only the subagent runs survived: the row says nothing about
             # the parent session itself, so session-meta wins wherever it
             # has a value and the row adds only what meta lacks (cache
-            # tokens, models).
+            # tokens, models, and uses_subagent=True: subagent runs exist,
+            # so the session did delegate even if the tail-only meta did
+            # not see the Agent call).
             merged = dict(row)
             merged.pop("active_minutes", None)
             merged.update({k: v for k, v in m.items() if v is not None})
@@ -3318,6 +3320,10 @@ def main():
     if args.transcript_rows:
         tr_path = Path(args.transcript_rows).expanduser()
         activity_metas, _ = load_transcript_rows(tr_path)
+        # Counting method of this run: transcript-first only when the scan
+        # supplied rows. Decided before --extra-redacted rows (always
+        # counted the old way) join activity_metas below.
+        method_version = METHOD_VERSION if activity_metas else 1
         _, facets = load_all(Path("/dev/null"), facets_dir)
         meta_raw, _ = load_all(meta_dir, Path("/dev/null"))
         scoring_metas = merge_scoring_metas(meta_raw, activity_metas)
@@ -3328,6 +3334,7 @@ def main():
     else:
         metas, facets = load_all(meta_dir, facets_dir)
         activity_metas = None  # fall back to metas in compute_activity
+        method_version = 1
         print(f"loaded {len(metas)} session-meta, {len(facets)} facets", file=sys.stderr)
     source_by_sid = {sid: "local" for sid in metas}
 
@@ -3386,9 +3393,7 @@ def main():
         },
         "tz_offset_hours": tz.utcoffset(datetime.now()).total_seconds() / 3600,
         "data_thin_warning": len(rated) < 20,
-        # Without transcript rows the pool is session-meta only, which is
-        # still the method-1 count, so the trend ledger keeps it apart.
-        "method_version": METHOD_VERSION if args.transcript_rows else 1,
+        "method_version": method_version,
     }
     aggregates = compute_aggregates(sessions, rated, facets_coverage)
     # When transcript-rows mode supplied a wider universe, recompute the

@@ -153,6 +153,16 @@ class MergeTests(unittest.TestCase):
         # scanner-only extras still come through
         self.assertEqual(m["cache_read_input_tokens"], 900)
 
+    def test_orphan_subagent_row_counts_as_delegation(self):
+        # Subagent runs survived for this session, so it did delegate, even
+        # when the tail-only session-meta did not see the Agent call.
+        orphan = {"session_id": SID, "start_time": "2026-11-01T06:00:00Z",
+                  "uses_subagent": True, "orphan_subagent_only": True}
+        merged = aggregate.merge_scoring_metas(
+            {SID: self._tail_only_meta()}, {SID: orphan})
+        s = aggregate.build_sessions(merged, {}, timezone.utc)[0]
+        self.assertTrue(s["uses_task_agent"])
+
     def test_meta_only_session_is_kept(self):
         merged = aggregate.merge_scoring_metas({SID: self._tail_only_meta()}, {})
         self.assertEqual(merged[SID]["user_message_count"], 8)
@@ -219,6 +229,19 @@ class MethodVersionTests(unittest.TestCase):
             self.assertEqual(
                 [e["date"] for e in read_history_snapshots(hist, method_version=1)],
                 ["2026-07-16"])
+        # An unknown method (0, negative, or not an int) is never comparable,
+        # not even with history lines that are unknown the same way.
+        with tempfile.TemporaryDirectory() as td:
+            hist = Path(td) / "h.jsonl"
+            hist.write_text("\n".join([
+                json.dumps({"date": "2026-07-14", "method_version": True}),
+                json.dumps({"date": "2026-07-15", "method_version": 0}),
+                json.dumps({"date": "2026-07-16", "method_version": "2"}),
+                json.dumps({"date": "2026-07-17", "method_version": -1}),
+            ]) + "\n")
+            for v in (0, -1):
+                self.assertEqual(read_history_snapshots(hist, method_version=v), [])
+        self.assertEqual(report_render.method_version_of({"method_version": -1}), 0)
 
     def test_reader_keeps_only_same_method_snapshots(self):
         with tempfile.TemporaryDirectory() as td:
@@ -249,7 +272,7 @@ class MethodStampTests(unittest.TestCase):
     """analysis-data.json is stamped method 2 only when the run read full
     transcripts; a session-meta-only run is still counted the old way."""
 
-    def _run(self, with_transcripts):
+    def _run(self, with_transcripts, rows_text=None, redacted=False):
         import subprocess
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
@@ -264,8 +287,13 @@ class MethodStampTests(unittest.TestCase):
                    "--data-dir", str(td / "usage-data"),
                    "--output", str(td / "a.json")]
             if with_transcripts:
-                (td / "tr.jsonl").write_text(json.dumps(row) + "\n")
+                (td / "tr.jsonl").write_text(
+                    json.dumps(row) + "\n" if rows_text is None else rows_text)
                 cmd += ["--transcript-rows", str(td / "tr.jsonl")]
+            if redacted:
+                other = dict(row, session_id=SID.replace("1", "9"))
+                (td / "red.jsonl").write_text(json.dumps(other) + "\n")
+                cmd += ["--extra-redacted", str(td / "red.jsonl")]
             r = subprocess.run(cmd, capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             return json.loads((td / "a.json").read_text())["meta"]["method_version"]
@@ -275,6 +303,12 @@ class MethodStampTests(unittest.TestCase):
 
     def test_session_meta_only_run_is_method_one(self):
         self.assertEqual(self._run(False), 1)
+
+    def test_empty_transcript_rows_file_is_method_one(self):
+        self.assertEqual(self._run(True, rows_text=""), 1)
+
+    def test_empty_transcript_rows_plus_redacted_rows_is_method_one(self):
+        self.assertEqual(self._run(True, rows_text="", redacted=True), 1)
 
     def test_redacted_rows_are_counted_the_old_way(self):
         import subprocess

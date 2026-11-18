@@ -883,12 +883,12 @@ def _entry_leak_cost(entry):
 def method_version_of(record):
     """The counting method a history line or analysis `meta` dict records
     (aggregate.METHOD_VERSION). Missing means 1, from before the field.
-    A value that is present but not a plain int is unknown: 0, which
-    matches no method, so it is never compared."""
+    A value that is present but not a positive int is unknown: 0, which
+    read_history_snapshots never compares."""
     if "method_version" not in record:
         return 1
     v = record["method_version"]
-    return v if type(v) is int else 0
+    return v if type(v) is int and v >= 1 else 0
 
 
 def analysis_method_version(analysis):

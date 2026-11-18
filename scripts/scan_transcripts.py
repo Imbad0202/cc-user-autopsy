@@ -603,10 +603,9 @@ def scan_one(path: Path):
     # still count.
     first_prompt = ""
     for r in user_msgs:
-        entrypoint = r.get("entrypoint")
         if (r.get("isMeta") or r.get("isCompactSummary")
                 or _provenance(r) == "other"
-                or (isinstance(entrypoint, str) and _is_programmatic(entrypoint))):
+                or _is_programmatic(r.get("entrypoint"))):
             continue
         text = _first_text(r)
         if text and not text.lstrip().startswith(_INJECTED_PREFIXES):

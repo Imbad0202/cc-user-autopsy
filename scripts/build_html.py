@@ -124,6 +124,9 @@ def read_history_snapshots(history_path, method_version=None):
     p = Path(history_path).expanduser()
     if not p.exists():
         return []
+    if method_version is not None and report_render.method_version_of(
+            {"method_version": method_version}) == 0:
+        return []  # unknown method: nothing is comparable
     by_date = {}
     try:
         text = p.read_text(encoding="utf-8")

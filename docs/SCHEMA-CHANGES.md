@@ -54,16 +54,17 @@ for dim, metrics in scores.items():
   `build_html.read_history_snapshots(path, method_version=N)` keeps only
   lines of method N, and the report passes the current file's method, so
   the trend ledger never compares scores counted differently. A
-  `method_version` that is present but not an integer matches no method.
+  `method_version` that is present but not a positive integer is unknown
+  and matches nothing, not even another unknown one.
 - **Additive (transcript rows):** `active_minutes` (int): the session span
   with idle gaps over 30 minutes removed.
 - **Meaning changed, no rename or removal:**
-  - `sessions[].uses_task_agent` now means "dispatched an `Agent`/`Task`
+  - `_sessions[].uses_task_agent` now means "dispatched an `Agent`/`Task`
     subagent" (the transcript row's `uses_subagent`). Task-list tools no
     longer count. Session-meta-only sessions keep session-meta's flag.
     Every aggregate derived from it (D1, `delegation` badge, weekly
     `uses_task_agent`, `sessions_using_task_agent`) follows.
-  - `sessions[].duration_min` and every sum of it (projects, weekly,
+  - `_sessions[].duration_min` and every sum of it (projects, weekly,
     usage hours) is active time when the transcript row has
     `active_minutes`, else the full span as before.
   - For scoring-pool sessions with a transcript row, message counts, tool
