@@ -5,8 +5,8 @@ Claude Code writes two parallel sources of usage data:
   - ~/.claude/usage-data/session-meta/*.json — summary per session (~14% coverage)
   - ~/.claude/projects/<encoded-path>/<sid>.jsonl — raw transcript (~100% coverage)
 
-session-meta is richer (has LLM-derived `uses_task_agent` etc.) but only gets
-written under conditions this tool doesn't control. Transcripts are the ground
+session-meta only gets written under conditions this tool doesn't control,
+and now covers only the tail of a long session. Transcripts are the ground
 truth for everything that can be derived deterministically.
 
 This scanner walks transcripts and emits one JSONL row per session with all
@@ -30,12 +30,12 @@ from pathlib import Path
 try:
     from cross_llm_common import (cli_launch_targets, make_cli_launch,
                                    prompt_identity, segments_and_duration,
-                                   split_segments, to_local_iso)
+                                   to_local_iso)
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_transcripts
     from scripts.cross_llm_common import (cli_launch_targets, make_cli_launch,
                                            prompt_identity,
                                            segments_and_duration,
-                                           split_segments, to_local_iso)
+                                           to_local_iso)
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
@@ -86,6 +86,25 @@ def _content(record):
     object (a malformed or truncated line must not stop the scan)."""
     message = record.get("message")
     return message.get("content") if isinstance(message, dict) else None
+
+
+# Text that opens a user-role record Claude Code wrote for a slash command
+# (`/clear`, `!cmd` output), not a prompt a person typed.
+_INJECTED_PREFIXES = ("<command-name>", "<command-message>", "<local-command-",
+                      "<bash-input>", "<bash-stdout>", "<bash-stderr>")
+
+
+def _first_text(record):
+    """The record's first non-empty text: the whole string content, or the
+    first non-empty text block of a list content."""
+    content = _content(record)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        for c in content:
+            if isinstance(c, dict) and c.get("type") == "text" and c.get("text"):
+                return c["text"]
+    return ""
 
 
 def _provenance(record):
@@ -490,15 +509,13 @@ def scan_one(path: Path):
     if len(all_ts) >= 2:
         duration_minutes = round((all_ts[-1] - all_ts[0]).total_seconds() / 60)
 
-    # Additive activity-window field for cross-LLM concurrency math: split
-    # the same record timestamps at idle gaps > 30 minutes so a resumed
-    # session's multi-day idle stretch doesn't get counted as active time
-    # by _row_windows (which would fabricate switch-tax overlaps against
-    # other sources active inside the gap). Does NOT affect duration_minutes
-    # above, which existing panels depend on.
+    # Split the same timestamps at idle gaps > 30 minutes: `segments` feeds
+    # cross-LLM concurrency math, `active_minutes` is the report's work time.
+    # duration_minutes above stays the full span.
     segments = None
+    active_minutes = 0
     if all_ts:
-        segments = [[to_local_iso(s), to_local_iso(e)] for s, e in split_segments(all_ts)]
+        segments, active_minutes = segments_and_duration(all_ts)
 
     in_tok = out_tok = cache_create = cache_read = 0
     model_counts = Counter()
@@ -570,29 +587,27 @@ def scan_one(path: Path):
             if re.search(r"\bgit\s+push\b", cmd):
                 git_pushes += 1
 
-    # session-meta defines uses_task_agent broadly — any use of Task-family
-    # tools including TaskCreate/TaskUpdate/TaskList (the TODO system), not
-    # just Agent dispatch. Match that definition so scores are comparable.
-    # uses_subagent is the stricter "actually delegated a subagent" signal.
+    # uses_task_agent is broad (any Task-family tool, including the
+    # TaskCreate/TaskUpdate/TaskList TODO system); uses_subagent is the
+    # stricter "actually delegated a subagent" signal that scoring reads.
     # Computed here from parent-only tool_counts; main()'s Pass 3 recomputes
     # these (Fix 2, round 12) once subagent tool_counts are merged in.
     tool_flags = _derive_tool_flags(tool_counts)
 
+    # The first prompt a person typed. Skip text Claude Code injects
+    # (/clear caveats and skill bodies are isMeta; slash-command records
+    # start with a command tag), compaction summaries, and records whose
+    # own labels say a person did not type them. Unlabelled records from
+    # older transcripts still count.
     first_prompt = ""
     for r in user_msgs:
-        content = _content(r)
-        if isinstance(content, str):
-            first_prompt = content
+        if (r.get("isMeta") or r.get("isCompactSummary")
+                or _provenance(r) == "other"):
+            continue
+        text = _first_text(r)
+        if text and not text.lstrip().startswith(_INJECTED_PREFIXES):
+            first_prompt = text
             break
-        if isinstance(content, list):
-            for c in content:
-                if isinstance(c, dict) and c.get("type") == "text":
-                    t = c.get("text", "")
-                    if t:
-                        first_prompt = t
-                        break
-            if first_prompt:
-                break
 
     response_times = []
     prev_asst_ts = None
@@ -626,6 +641,8 @@ def scan_one(path: Path):
         "project_path": project_path,
         "start_time": start_time,
         "duration_minutes": duration_minutes,
+        # Work time: the same span with idle gaps > 30 min removed.
+        "active_minutes": active_minutes,
         "segments": segments,
         "user_message_count": len(user_msgs),
         "assistant_message_count": len(asst_msgs),
@@ -732,8 +749,8 @@ def main():
     #
     # Fix 1 (round 12): subagent record_timestamps are merged into the
     # parent's own timestamp sequence (_all_ts) and `segments` is rebuilt
-    # from the merged, sorted sequence using the same split_segments call
-    # the parent path uses. Without this, a >30-min delegated run with no
+    # from the merged, sorted sequence using the same segments_and_duration
+    # call the parent path uses. Without this, a >30-min delegated run with no
     # parent-transcript records during it would idle-gap-split into two
     # segments even though the subagent was active throughout, which
     # confuses _row_windows-based concurrency/switch-tax classification.
@@ -851,8 +868,8 @@ def main():
     # (parent timestamps + any subagent record_timestamps merged in Pass 2)
     # via the same segments_and_duration() helper cross_llm_common already
     # provides for "sort, split on idle gaps, format as local-iso pairs".
-    # Parent rows use only its segments half; their duration_minutes keeps
-    # scan_one's full-span semantics (first/last timestamp). Orphan rows
+    # Every row gets segments and active_minutes from it; parent rows'
+    # duration_minutes keeps scan_one's full-span semantics. Orphan rows
     # (no parent transcript) get BOTH: segments from their subagent record
     # timestamps and duration_minutes from the summed active-segment time.
     # Rows without subagent_usages entries have a single-source _all_ts
@@ -877,6 +894,7 @@ def main():
                 segs, active_min = (segments_and_duration(all_ts)
                                     if all_ts else (None, 0))
                 row["segments"] = segs
+                row["active_minutes"] = active_min
                 # Orphan rows have no parent transcript to define a
                 # full-span duration, so their duration IS the summed
                 # active-segment time (otherwise a multi-hour delegated

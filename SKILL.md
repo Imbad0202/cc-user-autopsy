@@ -56,7 +56,7 @@ Step 1c  → scripts/scan_codex.py / scan_grok.py / scan_antigravity.py  (option
 Step 2   → scripts/sample_sessions.py      (picks 15-24 representative sessions)
 Step 3   → Claude writes peer-review.{locale}.md  (SELF only, V4 story format — HR needs no peer-review file, see Step 3 HR note below)
 Step 3b  → Claude writes ledger-narration.md (SELF only, V5 addition; opening/output/team/leak)
-           (SELF only; books: opening/output-ledger/team-ledger/leak-ledger/trend-ledger — write the trend-ledger book ONLY if ~/.claude/usage-data/autopsy-history.jsonl has ≥3 snapshot lines; check with wc -l)
+           (SELF only; books: opening/output-ledger/team-ledger/leak-ledger/trend-ledger — write the trend-ledger book ONLY if ~/.claude/usage-data/autopsy-history.jsonl has ≥3 snapshot lines of the current counting method; count them with the one-liner under Step 3b)
 Step 3.5 → Claude writes try-this-week.{locale}.md (SELF only)
            Claude writes case-study.{self|hr}.{locale}.md (BOTH audiences, two files)
 Step 4.5 → (zh_TW only) rewrite the EN peer review natively into zh_TW
@@ -346,9 +346,10 @@ valid run. When it is, do NOT invent a leak. Instead:
 # trend-ledger
 
 <Only write this book if ~/.claude/usage-data/autopsy-history.jsonl has
->= 3 snapshot lines (check with `wc -l`) — below that the renderer shows
-a locked one-liner regardless of what you write here, so writing it early
-is wasted tokens.
+>= 3 snapshots of the current counting method — below that the renderer
+shows a locked one-liner regardless of what you write here, so writing it
+early is wasted tokens. Count them (run from the skill directory):
+`python3 -c "import sys; sys.path.insert(0,'scripts'); from build_html import read_history_snapshots as r; from aggregate import METHOD_VERSION as v; print(len(r('~/.claude/usage-data/autopsy-history.jsonl', v)))"`
 
 First line: the opener claim compares a key ledger number across
 snapshots (e.g. "Commits per run rose from 20 to 44 across three runs.") —
