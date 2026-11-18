@@ -12,7 +12,8 @@ from absence ("no launch was seen, and one would have been visible") and
 from behaviour ("the user typed, got an answer, and typed again"). The
 first has holes wherever a launcher leaves no transcript; the second is
 something a script can do too. Both are gone. What is not recorded as
-hand-driven is `unknown`, and only `direct` sessions feed the findings.
+hand-driven is never `direct` (it is `launched` or `unknown`), and only
+`direct` sessions feed the findings.
 
 Rule (spec 2026-11-18 findings-first, section 5.2), first match wins:
 

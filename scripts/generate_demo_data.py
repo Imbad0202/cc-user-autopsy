@@ -854,19 +854,20 @@ def gen_grok_sessions(now, n=16):
             fh.write("\n".join(lines) + "\n")
 
 
-# Marker planted in a hand-typed demo prompt. Tests assert it appears in the
-# user-turns working file and in no report or analysis output.
+# Marker planted in a hand-typed demo prompt (a session's first). Tests
+# assert it reaches no report.
 DEMO_TURN_MARKER = "TURN_PRIVATE_MARKER"
 # One marker per source, each planted in a turn AFTER the session's first:
-# first prompts already travel in session rows (existing behaviour), so
-# only a later turn proves the new capture path keeps text to its own file.
+# first prompts already travel in session rows (existing behaviour), so a
+# later turn is what proves no scanner output carries prompt text beyond
+# that.
 DEMO_LATER_TURN_MARKERS = {"claude": "CLAUDE_LATER_TURN_MARKER",
                            "codex": "CODEX_LATER_TURN_MARKER",
                            "grok": "GROK_LATER_TURN_MARKER"}
 
 
 # Prompts that no person typed (a scheduled SDK run) and prompts whose
-# transcript does not say who typed them: neither may reach a turns file.
+# transcript does not say who typed them.
 DEMO_AUTOMATED_TURN_MARKER = "AUTOMATED_TURN_MARKER"
 DEMO_UNLABELLED_TURN_MARKER = "UNLABELLED_TURN_MARKER"
 

@@ -58,20 +58,24 @@ The user chose 1: half of the problem is layout, the other half is that what the
 
 ### 5.1 Capture: user turns
 
-Each scanner gains a second output (`--user-turns-output`, one file per scanner), one row per prompt that may be the user's own. The rows are candidates: a row is the user's own only when its session is `direct` (5.2). For Claude Code every row is also labelled as a person's by the transcript; Codex and Grok transcripts carry no such label per message. The row fields:
+**Status: not built in Phase 1. It is built in Phase 2, together with the code that reads it.** A first version was written and reviewed in Phase 1 with no reader in place. Three review rounds kept producing edge cases that nobody could weigh, because nothing yet showed which of them matter. The origin evidence below (5.2) shipped alone; the capture code is kept on a side branch as a starting point.
+
+Each scanner gains a second output (`--user-turns-output`, one file per scanner), one row per prompt the user typed:
 
 `source, session_id, project_path, ts, turn_index, text, text_len, after_interrupt, prev_assistant_tail, prompt_source`
 
-A row carries no origin. Origin needs every tool's rows at once (5.2), so it is computed afterwards and written to `origins.json` as `{"schema_version": 1, "sessions": {"source:session_id": origin}}`; a consumer joins on that key, uses only the rows of `direct` sessions, and treats a session with no entry as not hand-driven. `text` is the prompt as typed, leading and trailing whitespace included; one longer than 4,000 characters keeps its first and last 2,000 with a marker between, and `text_len` records the original length.
+`text` is the prompt as typed; one longer than 4,000 characters keeps its first and last 2,000 with a marker between, and `text_len` records the original length. `prev_assistant_tail` is the length-capped end of the assistant message the user was answering, where the source records one. `prompt_source` is the transcript's own label for how the prompt arrived, where it has one.
 
-`prev_assistant_tail` is the length-capped end of the assistant message the user was answering, where the source records one (Claude Code and Codex; null for Grok). It lets the analysis see what the user was asked before they ruled. A reply is attached to the next prompt only: whatever is sent next (a person's prompt, a slash command, a program's prompt, a blank message) uses it up, while tool output passing back does not. `prompt_source` is the transcript's own label for how the prompt arrived, where it has one (Claude Code: `typed`, `queued`, `suggestion_accepted`); null otherwise.
+Rules the Phase 2 build must keep. Each one comes from a defect the Phase 1 reviews found or from a decision the user made:
 
-- Claude Code: main-thread user records that the transcript itself labels as a person's. Claude Code writes on each prompt how it arrived (`promptSource`) and who started the turn (`turnOrigin`, `origin.kind`); a record counts when it carries at least one of these labels, every label present names a person (`typed`, `queued`, `suggestion_accepted`; `human`), and the record itself names an `entrypoint` that is not a programmatic one (`sdk-*`). A label of an unexpected type, an explicit null included, counts against. A record with no `entrypoint`, or an empty one, does not count: every labelled record seen in practice names it. Entrypoints are told apart by what marks a programmatic one, not by a list of interactive clients, because the editor and desktop clients have names of their own; the cost, accepted, is that a programmatic client whose name does not start with `sdk` and which also labels its prompts as typed would pass. Records labelled as anything else (task notifications, messages from peer sessions, scheduled runs, SDK prompts, system text), meta and compaction-summary records, tool results, sidechain and `agent-*` subagent records are excluded. So is every unlabelled record: a transcript from a version that predates the labels yields no turns, because nothing in it shows which text a person typed. Inside a counted record, a block that is nothing but elements with lowercase hyphenated names (a slash-command echo, an attached reminder) is dropped (an element of the same name nested inside it does not end it early); the cost is that a prompt consisting only of such an element, a pasted custom element with no word outside it, is dropped too. The interrupt marker sets `after_interrupt` only when it arrives in a record of its own, which is how the harness writes it; a person quoting the marker in a prompt does not.
-- Codex: user messages from the rollout stream, except those sent under a header that marks the run as non-interactive or spawned. A rollout does not say who wrote a user message, and in such a run the "user" is the program that started it. A resumed rollout has one header per resume, and each message is judged by the header in force when it was sent. Messages of a session whose header names no source are written too; that session is not `direct`, so they are never used. Each row carries the working directory in force when the prompt was sent, in `project_path`. A rollout with no header at all has no session id and produces no row and no turns (unchanged from before this work).
-- Grok: rows from `prompt_history.jsonl` whose `is_bash` is explicitly false. No Grok session can be `direct` (5.2), so today these rows are never used; they are kept so that a later version of Grok's history that does record how a session was run needs no new capture.
-- Antigravity: none.
-
-These files hold raw prompt text and, beside each prompt, the end of the reply it answered. They are written to the working directory only, readable by the owner alone (mode 0600: the usual working directory is under `/tmp`, which other local accounts can list), never committed, never copied into `analysis-data.json`, and never reach HR output. They are git-ignored; `origins.json`, which holds session ids, gets the same treatment. Each is written to a fresh owner-only file beside the target, which then replaces the target in one step, so an earlier file at that path (whatever its mode, a symlink, a file someone holds open) is swapped out and never written into. Where the file goes is the caller's choice.
+1. **Write only text that can be used.** A prompt is written only when its session can be `direct` (5.2). Today that is Claude Code sessions with labelled prompts and Codex stretches under a header that names an interactive client. No Grok prompt is written (no Grok session can be `direct`), and no Codex message sent under a header that names no source. Raw text that no finding can use is not copied out of the tool's own store.
+2. **Delete when done.** The pipeline removes the user-turns files at the end of the run that produced them. They are also git-ignored, owner-only (mode 0600), written through a fresh file that replaces the target in one step, never copied into `analysis-data.json`, and never reach HR output.
+3. **Claude Code: a prompt is a person's only on the record's own word.** Every provenance label present names a person, an explicit null or a wrong type counts against, the record names an entrypoint that is not programmatic, and the record is not tool output. Unlabelled records are never taken.
+4. **A resumed session is judged stretch by stretch.** Claude Code reads the entrypoint per record. Codex reads each header for the messages under it, and a header that names no source starts a stretch of its own.
+5. **A reply belongs to the next thing sent, whoever sent it.** A person's prompt, a slash command, a program's prompt or a blank message uses the reply up; tool output passing back does not. A reply produced under a program's stretch is never attached to a person's prompt.
+6. **Harness text inside a person's record is dropped by shape, not by a list of tag names:** a block that is nothing but elements with lowercase hyphenated names, including nested and self-closing ones.
+7. **The interrupt marker counts only as a whole record of its own,** which is how the harness writes it. A prompt that quotes or starts with the marker text is not an interrupt.
+8. **Text is written so that any character survives,** including half of a surrogate pair cut by another tool.
 
 ### 5.2 Origin: hand-driven versus launched
 
@@ -81,8 +85,8 @@ Every session of a source whose content is read (Claude Code, Codex, Grok) gets 
 
 Each scanner reports what the transcript itself records about how the session was run, as a row field `interactive`:
 
-- Claude Code: true when some record counts as a person's prompt under 5.1 (labelled as a person's, naming a non-programmatic entrypoint, and not tool output); otherwise false when the transcript does say how it was run (some record names a programmatic entrypoint, `sdk-*`: `claude -p`, the Agent SDK; or main-thread user records are labelled and none counts: a scheduled run, a session driven by a peer, labelled prompts that do not name their entrypoint); null when the transcript carries no labels. The entrypoint is read per record, since a session can be resumed through a different one.
-- Codex: true when every header that names a `source` names an interactive client (`cli`, `vscode`); false when any header names `exec` or `mcp`; null otherwise (no header names a source, or one names something unknown).
+- Claude Code: true when some main-thread user record is a person's prompt by its own labels. Claude Code writes on each prompt how it arrived (`promptSource`) and who started the turn (`turnOrigin`, `origin.kind`). A record counts when it carries at least one of these labels, every label present names a person (`typed`, `queued`, `suggestion_accepted`; `human`), the record itself names an `entrypoint` that is not a programmatic one (`sdk-*`), and it is not tool output, a meta record or a compaction summary. A label of an unexpected type, an explicit null included, counts against. A record with no `entrypoint`, or an empty one, does not count: every labelled record seen in practice names it. Entrypoints are told apart by what marks a programmatic one, not by a list of interactive clients, because the editor and desktop clients have names of their own; the cost, accepted, is that a programmatic client whose name does not start with `sdk` and which also labels its prompts as typed would pass. Otherwise the field is false when the transcript does say how it was run (some record names a programmatic entrypoint, `sdk-*`: `claude -p`, the Agent SDK; or main-thread user records are labelled and none counts: a scheduled run, a session driven by a peer, labelled prompts that do not name their entrypoint); null when the transcript carries no labels. The entrypoint is read per record, since a session can be resumed through a different one.
+- Codex: false when any header names `exec` or `mcp`; true only when every header names an interactive client (`cli`, `vscode`); null otherwise. A resumed rollout has one header per resume. A header that names no source, or names one this scanner does not know, leaves the session null even when the other headers name an interactive client: the stretches that say how they were run cannot vouch for one that does not. A rollout with no header at all has no session id and produces no row (unchanged from before this work).
 - Grok: always null. The prompt history records nothing about how a session was run.
 
 The verdict, first match wins:
@@ -91,6 +95,8 @@ The verdict, first match wins:
 2. `direct`: `interactive` is true.
 3. `launched`, whatever `interactive` says short of true (Grok sessions and unlabelled Claude Code transcripts included): some transcript, of any tool, in the main thread or any subagent, contains a shell call that names this tool's CLI, and this session started while that call was running: strictly after the call was requested, and no later than the call's result or 60 seconds after the request, whichever came later (60 seconds when no result was recorded). Time alone decides; the working directory is not compared. This runs in every direction, including a tool calling its own CLI (`claude -p` from a Claude Code session).
 4. `unknown`: everything else. That covers a run recorded as non-interactive with no launching call in sight (nothing records who started it: the user at a shell, a script, a scheduler, or a tool whose transcript is gone), and every session whose transcript does not say how it was run.
+
+The verdicts are written to `origins.json` as `{"schema_version": 1, "sessions": {"source:session_id": origin}}`, a working file that holds session ids: owner-only (mode 0600), git-ignored, written through a fresh file that replaces the target in one step, and never copied into `analysis-data.json`, which gets the per-source counts only. A consumer joins on that key and treats a session with no entry as not hand-driven.
 
 Step 2 is placed above step 3 on purpose: a recorded interactive session that happens to start while an unrelated call mentioning the tool is running is still the user's.
 
@@ -216,8 +222,8 @@ The SELF report and the profile may show verbatim text the user typed into any t
 
 ### 5.9 Testing
 
-- `generate_demo_data.py` gains synthetic cross-tool user turns, including launched sessions and injected context blocks.
-- Origin classifier: direct on a recorded interactive session or a real back-and-forth, launched by header or time match, unknown otherwise.
+- `generate_demo_data.py` gains synthetic cross-tool sessions: hand-driven, launched, scheduled and unlabelled ones, with later-turn markers that must reach no output.
+- Origin classifier: direct only on a recorded interactive session, launched by header or time match, unknown otherwise; one planted demo session per verdict.
 - Verifier: fabricated `turn_refs` dropped; counts recomputed; each gate at its boundary; ranking; zero-findings path.
 - Renderer: first-screen structure, escaping, offline safety, HR leak test, locale key parity.
 - `promo_lint` word list.
@@ -226,8 +232,8 @@ The SELF report and the profile may show verbatim text the user typed into any t
 
 ## 6. Phasing
 
-1. Capture and origin: `user-turns.jsonl`, origin classification, team-ledger split.
-2. Verify and show: verifier, new SKILL.md step, first screen, appendix collapse, promo lint.
+1. Origin: what each transcript records about how the session was run, origin classification, `origins.json`, team-ledger split.
+2. Capture, verify and show: `user-turns.jsonl` under the rules of 5.1, verifier, new SKILL.md step, first screen, appendix collapse, promo lint.
 3. Profile: the profile file, incremental runs, follow-up labels, the "how to work with me" card.
 4. Reference practices, in two steps: (a) candidate list researched and drafted with sources, reviewed and settled by the maintainer; (b) the gap table and practice references on fixes. The closed list of measures is built in phases 2 and 3, so (b) does not wait on new detectors.
 

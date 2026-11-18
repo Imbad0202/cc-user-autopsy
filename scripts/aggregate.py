@@ -3401,8 +3401,9 @@ def main():
     activity_rows = activity_metas if activity_metas is not None else metas
     cross_rows, cross_errors = load_cross_llm_rows(args.cross_llm_rows)
     # Per-session origins carry session ids, so they go to their own
-    # working file (read by the findings verifier); analysis-data.json
-    # only ever gets the per-source counts.
+    # working file; analysis-data.json only ever gets the per-source
+    # counts. Written as plain ASCII, so an id holding half a surrogate
+    # pair cannot stop the write.
     claude_rows = list(activity_rows.values())
     session_origins = classify_all(claude_rows + cross_rows)
     cross_llm = compute_cross_llm(claude_rows, cross_rows,
@@ -3410,7 +3411,7 @@ def main():
     if args.origins_output:
         write_private_text(json.dumps(
             {"schema_version": 1, "sessions": session_origins},
-            ensure_ascii=False, indent=1), args.origins_output)
+            indent=1), args.origins_output)
     for card in cross_llm["sources"]:
         card["parse_errors"] = cross_errors.get(card["source"], 0)
     # Errors bucketed under "(unknown)" (malformed JSON, or a row missing

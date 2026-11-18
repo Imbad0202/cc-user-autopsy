@@ -114,9 +114,7 @@ Self version does not need any of this; it shows raw data to the user themselves
 ### Step 1a — Scan transcripts (recommended; enables accurate tokens/models/cost)
 
 ```bash
-python3 scripts/scan_transcripts.py \
-  --output /tmp/cc-autopsy/transcript-rows.jsonl \
-  --user-turns-output /tmp/cc-autopsy/user-turns.claude.jsonl
+python3 scripts/scan_transcripts.py --output /tmp/cc-autopsy/transcript-rows.jsonl
 ```
 
 What it does:
@@ -124,7 +122,6 @@ What it does:
 - Emits one row per real session (UUID-named jsonl)
 - **Critically: merges `agent-*.jsonl` (subagent runs) into the parent session's row.** Parent sid comes from the `sessionId` field inside each subagent record. Without this, haiku/sonnet usage from subagent dispatches is invisible and cache tokens undercount by ~2x.
 - Orphan subagents (parent transcript already cleaned up by Claude Code's rotation) produce a synthetic row marked `orphan_subagent_only=true` so their tokens still count in the activity pool.
-- With `--user-turns-output`, also writes one row per prompt the user typed. Only prompts the transcript itself labels as a person's are taken (Claude Code records how each prompt arrived); task notifications, peer and scheduled messages, SDK prompts, tool results, slash-command echoes, subagent threads and every unlabelled record are excluded, so transcripts from older Claude Code versions yield no turns. **This file holds raw prompt text, and beside each prompt the last few hundred characters of the reply it answered.** It is a working file: never paste it into the report, never commit it. The same flag exists on `scan_codex.py` and `scan_grok.py`; their transcripts do not label each message, so their rows are candidates, and a row counts as the user's own only when `origins.json` (Step 1b) calls its session `direct`.
 - Records every shell call (parent or subagent) that starts another AI CLI, as evidence for the hand-driven / launched split that `aggregate.py` makes (described under Step 1c).
 
 ### Step 1b — Aggregate
@@ -142,7 +139,7 @@ What it does:
 - Reads every `~/.claude/usage-data/facets/*.json` if present (optional — report facets_coverage=0 if absent)
 - Computes: token distribution, tool counts, weekday×hour heatmap, project breakdown, friction/outcome crosstabs, interrupt × outcome correlation, weekly series, efficiency ratios, prompt-length vs outcome, extremes lists, **API-equivalent cost** (blended by model-share across `PRICING` table)
 - Writes `analysis-data.json` with every number the HTML needs
-- With `--origins-output`, writes the per-session hand-driven / launched / unknown verdicts (see Step 1c) to a working file. Pass it on every run, single-tool included: anything that later reads the user-turns file must keep only sessions this file marks `direct`.
+- With `--origins-output`, writes the per-session hand-driven / launched / unknown verdicts (see Step 1c) to a working file. Pass it on every run, single-tool included. It holds session ids: a working file, never pasted into the report and never committed.
 
 ### Methodology note: two token universes
 
@@ -157,10 +154,8 @@ If both numbers disagree (e.g. activity shows 150 sessions, scoring shows 420), 
 If the user works across multiple AI coding tools (Codex CLI, Grok CLI, Antigravity), run the three adapters before re-aggregating. Each adapter is safe to run even if its source directory doesn't exist — it just emits zero rows, don't skip the step to "check first."
 
 ```bash
-python3 scripts/scan_codex.py --output /tmp/cc-autopsy/codex-rows.jsonl \
-  --user-turns-output /tmp/cc-autopsy/user-turns.codex.jsonl
-python3 scripts/scan_grok.py --output /tmp/cc-autopsy/grok-rows.jsonl \
-  --user-turns-output /tmp/cc-autopsy/user-turns.grok.jsonl
+python3 scripts/scan_codex.py --output /tmp/cc-autopsy/codex-rows.jsonl
+python3 scripts/scan_grok.py --output /tmp/cc-autopsy/grok-rows.jsonl
 python3 scripts/scan_antigravity.py --output /tmp/cc-autopsy/anti-rows.jsonl
 ```
 
@@ -178,7 +173,7 @@ python3 scripts/aggregate.py \
   --output /tmp/cc-autopsy/analysis-data.json
 ```
 
-**Hand-driven vs launched.** Every Claude Code, Codex and Grok session is classified as `direct` (the user drove it), `launched` (a tool started it — e.g. a review run started from a Claude Code session) or `unknown` (`scripts/origin.py` has the rule). `direct` needs the transcript's own record of an interactive session; nothing else earns it. Scheduled jobs, scripts and one-shot runs with no visible launcher are `unknown`. A session whose transcript does not say how it was run can never be `direct`; it is `launched` when a call that started it is seen and `unknown` otherwise. That covers all Grok sessions (the prompt history records nothing about it), Codex sessions whose header names no source, and Claude Code transcripts older than the prompt labels. Expect large `unknown` counts for tools the user mostly automates, and do not read `unknown` as "automated": it means "not recorded". Each team-ledger source card with sessions to classify shows the three counts (Antigravity, which is presence-only, shows none). When writing the team-ledger book, do not describe a tool's launched sessions as the user's own use of that tool; the existing share and parallel-hours numbers still include them, so say so if you cite those numbers. `origins.json` maps `source:session_id` to its verdict under a top-level `sessions` key and is a working file like the user-turns files.
+**Hand-driven vs launched.** Every Claude Code, Codex and Grok session is classified as `direct` (the user drove it), `launched` (a tool started it — e.g. a review run started from a Claude Code session) or `unknown` (`scripts/origin.py` has the rule). `direct` needs the transcript's own record of an interactive session; nothing else earns it. Scheduled jobs, scripts and one-shot runs with no visible launcher are `unknown`. A session whose transcript does not say how it was run can never be `direct`; it is `launched` when a call that started it is seen and `unknown` otherwise. That covers all Grok sessions (the prompt history records nothing about it), Codex sessions whose header names no source, and Claude Code transcripts older than the prompt labels. Expect large `unknown` counts for tools the user mostly automates, and do not read `unknown` as "automated": it means "not recorded". Each team-ledger source card with sessions to classify shows the three counts (Antigravity, which is presence-only, shows none). When writing the team-ledger book, do not describe a tool's launched sessions as the user's own use of that tool; the existing share and parallel-hours numbers still include them, so say so if you cite those numbers. `origins.json` maps `source:session_id` to its verdict under a top-level `sessions` key and is a working file.
 
 Coverage tiers, one sentence each:
 - **Codex — full**: tokens, models, and transcript content are all read, same shape as Claude's own transcript pool.

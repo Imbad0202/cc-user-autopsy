@@ -519,11 +519,13 @@ def _source_card_html(s: dict, locale: str) -> str:
             span = f'{esc(s["first_date"])} – {esc(s["last_date"])}'
         origin_html = ""
         oc = s.get("origin_counts")
-        if isinstance(oc, dict):
+        keys = ("direct", "launched", "unknown")
+        # analysis-data.json is read from disk: anything but three plain
+        # counts shows no line rather than a wrong one.
+        if isinstance(oc, dict) and all(
+                type(oc.get(k)) is int and oc[k] >= 0 for k in keys):
             origin_line = t(locale, "ledger_origin_template").format(
-                direct=int(oc.get("direct") or 0),
-                launched=int(oc.get("launched") or 0),
-                unknown=int(oc.get("unknown") or 0))
+                **{k: oc[k] for k in keys})
             origin_html = f'<br><span class="c-source-card-origin">{esc(origin_line)}</span>'
         body = (f'{esc(label)}<br>{int(s.get("session_count") or 0)} · {span}'
                 f'{origin_html}{err_line_html}')

@@ -53,6 +53,8 @@ for dim, metrics in scores.items():
   (rule in `scripts/origin.py`; `direct` is given on positive evidence
   only, so `unknown` includes scheduled and scripted runs). `null` for sources with nothing to
   classify (`antigravity`, and any undetected source).
+- Readers should show the split only when all three values are
+  non-negative integers (the report renderer skips the line otherwise).
 - The three counts sum to the sessions that were classified, which can be
   below `session_count` (orphan subagent fragments are not classified).
 - No existing field changes meaning: `session_count`, weekly share,

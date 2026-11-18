@@ -28,20 +28,14 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from cross_llm_common import (add_user_turns_arg, check_distinct_outputs,
-                                   cli_launch_targets, make_cli_launch,
-                                   make_user_turn, prompt_identity,
-                                   segments_and_duration, split_segments,
-                                   to_local_iso, write_user_turns)
+    from cross_llm_common import (cli_launch_targets, make_cli_launch,
+                                   prompt_identity, segments_and_duration,
+                                   split_segments, to_local_iso)
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_transcripts
-    from scripts.cross_llm_common import (add_user_turns_arg,
-                                           check_distinct_outputs,
-                                           cli_launch_targets,
-                                           make_cli_launch, make_user_turn,
+    from scripts.cross_llm_common import (cli_launch_targets, make_cli_launch,
                                            prompt_identity,
                                            segments_and_duration,
-                                           split_segments, to_local_iso,
-                                           write_user_turns)
+                                           split_segments, to_local_iso)
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
@@ -87,72 +81,11 @@ HUMAN_PROMPT_SOURCES = frozenset({"typed", "queued", "suggestion_accepted"})
 # the Agent SDK). Matched by prefix.
 _PROGRAMMATIC_ENTRYPOINT_PREFIX = "sdk"
 
-# A typed prompt can arrive with harness text attached as further blocks,
-# and a slash command is recorded as its echo. Such a block is nothing but
-# elements with lowercase hyphenated names, each closed by its own name
-# (<system-reminder>…</system-reminder>, <command-name>…</command-name>).
-# This is a second, formatting-level filter applied only inside records
-# already attested as a person's; whose words a record holds is decided
-# by its provenance labels, never by this. The test is the convention,
-# not a list of today's tag names: a reminder tag the harness adds later
-# would otherwise repeat in every turn and read as the user's own words.
-# The cost, accepted: a prompt that consists of nothing but such an
-# element (a pasted custom element with no word outside it) is dropped.
-_HARNESS_OPEN_RE = re.compile(r"\s*<([a-z]+(?:-[a-z]+)+)(?:\s[^<>]*)?>")
-_INTERRUPT_MARK = "[Request interrupted by user"
-
-
-def _element_end(text, name, pos):
-    """Index just past the tag that closes the element `name` whose
-    opening tag ends at `pos`, or -1. An element of the same name inside
-    it is stepped over, so the outer one ends at its own closing tag."""
-    tag = re.compile(rf"<(/?){re.escape(name)}(?:\s[^<>]*)?>")
-    depth = 1
-    while True:
-        m = tag.search(text, pos)
-        if not m:
-            return -1
-        depth += -1 if m.group(1) else 1
-        pos = m.end()
-        if depth == 0:
-            return pos
-
-
-def _is_harness_block(text):
-    """Whether a text block is wholly harness elements (see above).
-    Linear: every tag is visited once, moving forward."""
-    pos, seen = 0, False
-    while True:
-        m = _HARNESS_OPEN_RE.match(text, pos)
-        if not m:
-            break
-        pos = _element_end(text, m.group(1), m.end())
-        if pos < 0:
-            return False
-        seen = True
-    return seen and not text[pos:].strip()
-
-
 def _content(record):
     """A record's message content, or None when the record has no message
     object (a malformed or truncated line must not stop the scan)."""
     message = record.get("message")
     return message.get("content") if isinstance(message, dict) else None
-
-
-def _text_parts(record):
-    """The stripped, non-empty text blocks of a record's message."""
-    content = _content(record)
-    if isinstance(content, str):
-        content = [{"type": "text", "text": content}]
-    if not isinstance(content, list):
-        return []
-    parts = []
-    for c in content:
-        if isinstance(c, dict) and c.get("type") == "text" \
-                and isinstance(c.get("text"), str) and c["text"].strip():
-            parts.append(c["text"].strip())
-    return parts
 
 
 def _provenance(record):
@@ -210,25 +143,6 @@ def _is_human_prompt(record):
         and not _is_programmatic(entrypoint)
 
 
-def _typed_text(record):
-    """The text of a human prompt record, exactly as recorded (no
-    trimming), with harness-wrapped blocks dropped; "" if nothing is left.
-
-    Stricter on purpose than _is_text_user / first_prompt in scan_one,
-    which count any text block: those feed existing metrics that are
-    cross-validated against session-meta and must not move."""
-    content = _content(record)
-    if isinstance(content, str):
-        content = [{"type": "text", "text": content}]
-    if not isinstance(content, list):
-        return ""
-    return "\n".join(
-        c["text"] for c in content
-        if isinstance(c, dict) and c.get("type") == "text"
-        and isinstance(c.get("text"), str) and c["text"].strip()
-        and not _is_harness_block(c["text"]))
-
-
 def _interactive(records):
     """Whether the transcript itself records a person driving the session.
 
@@ -248,27 +162,6 @@ def _interactive(records):
                 and _provenance(r) is not None):
             labelled = True
     return False if labelled else None
-
-
-def _is_interrupt_result(block):
-    """An errored tool_result whose text says the user cancelled it."""
-    if not (isinstance(block, dict) and block.get("type") == "tool_result"
-            and block.get("is_error")):
-        return False
-    txt = block.get("content", "")
-    if not isinstance(txt, str):
-        txt = json.dumps(txt, ensure_ascii=False)
-    return bool(_INTERRUPT_RE.search(txt))
-
-
-def _has_interrupt(record):
-    """The user stopped the assistant: the interrupt marker as text, or a
-    cancelled tool call."""
-    if any(t.startswith(_INTERRUPT_MARK) for t in _text_parts(record)):
-        return True
-    content = _content(record)
-    return isinstance(content, list) and any(
-        _is_interrupt_result(c) for c in content)
 
 
 def _cli_launches(records):
@@ -307,53 +200,6 @@ def _cli_launches(records):
                     for ev in by_call_id.pop(c["tool_use_id"], []):
                         ev["until"] = r.get("timestamp") or None
     return launches
-
-
-def _user_turns(records, sid, project_path):
-    """One row per prompt a person typed in one session transcript, in
-    order. Only records the transcript itself labels as a person's count;
-    a transcript without such labels yields no turns."""
-    turns = []
-    last_assistant = None
-    interrupted = False
-    for r in records:
-        rtype = r.get("type")
-        sidechain = bool(r.get("isSidechain"))
-        if rtype == "assistant":
-            if not sidechain and _text_parts(r):
-                # Only the main thread's replies are what the user read.
-                last_assistant = r
-        elif rtype == "user" and not sidechain:
-            if not _is_human_prompt(r):
-                # The harness writes the interrupt marker in a record of
-                # its own; a person quoting the marker is not one.
-                if _has_interrupt(r):
-                    interrupted = True
-                # A prompt something else sent (a program resuming the
-                # session, a notification) took the last reply's place:
-                # what the user types next is not an answer to it.
-                if _provenance(r) == "other" and not _is_tool_result_only(r):
-                    last_assistant = None
-                continue
-            text = _typed_text(r)
-            if not text:
-                # A person's prompt with no text of its own (a slash
-                # command): it still was the answer to the last reply.
-                last_assistant = None
-                continue
-            dt = _parse_ts(r.get("timestamp", ""))
-            source = r.get("promptSource")
-            turns.append(make_user_turn(
-                "claude", sid, project_path,
-                to_local_iso(dt) if dt else "", len(turns), text,
-                after_interrupt=interrupted,
-                prev_assistant="\n".join(_text_parts(last_assistant))
-                if last_assistant else None,
-                prompt_source=source if isinstance(source, str) and source else None))
-            # The next prompt answers the next reply, not this one again.
-            last_assistant = None
-            interrupted = False
-    return turns
 
 
 def _load_jsonl(path: Path):
@@ -673,7 +519,10 @@ def scan_one(path: Path):
                 continue
             if c.get("is_error"):
                 tool_errors += 1
-                if _is_interrupt_result(c):
+                txt = c.get("content", "")
+                if not isinstance(txt, str):
+                    txt = json.dumps(txt, ensure_ascii=False)
+                if _INTERRUPT_RE.search(txt):
                     user_interruptions += 1
 
     git_commits = git_pushes = 0
@@ -743,9 +592,6 @@ def scan_one(path: Path):
     # non-subagent sessions is unchanged.
     token_accel = _compute_token_accel(assistant_output_pairs)
 
-    turns = _user_turns(lines, sid, project_path)
-    cli_launches = _cli_launches(lines)
-
     return {
         "session_id": sid,
         "project_path": project_path,
@@ -794,11 +640,7 @@ def scan_one(path: Path):
         "_all_ts": all_ts,
         # Origin evidence (findings-first Phase 1, read by origin.py).
         "interactive": _interactive(lines),
-        "cli_launches": cli_launches,
-        # Pipeline-internal only: the prompts the user typed. main() writes
-        # them to --user-turns-output when asked and always strips them
-        # here, so raw prompt text never lands in transcript-rows.jsonl.
-        "_user_turns": turns,
+        "cli_launches": _cli_launches(lines),
     }
 
 
@@ -806,16 +648,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--projects-dir", default=str(DEFAULT_PROJECTS_DIR))
     ap.add_argument("--output", required=True)
-    add_user_turns_arg(ap)
     ap.add_argument("--min-assistant-msgs", type=int, default=0,
                     help="Drop sessions with fewer than N assistant messages. "
                          "Default 0 (keep all). Use 3 to match session-meta-like "
                          "filtering that excludes warmup/interrupted-at-start sessions. "
-                         "Dropped sessions take their user turns and their "
-                         "launch evidence with them: a session one of them "
-                         "started is then reported as unknown, not launched.")
+                         "Dropped sessions take their launch evidence with "
+                         "them: a session one of them started is then "
+                         "reported as unknown, not launched.")
     args = ap.parse_args()
-    check_distinct_outputs(ap, args.output, args.user_turns_output)
 
     projects_dir = Path(args.projects_dir).expanduser()
     out = Path(args.output).expanduser()
@@ -997,10 +837,8 @@ def main():
     # scan_one uses.
     n_emitted = 0
     n_filtered = 0
-    user_turns = []
     with out.open("w", encoding="utf-8") as fh:
         for row in rows_by_sid.values():
-            turns = row.pop("_user_turns", None) or []
             pairs = row.pop("_assistant_output_pairs", None)
             if pairs is not None:
                 pairs.sort(key=lambda p: p[0] or "")
@@ -1028,15 +866,8 @@ def main():
                     row["assistant_message_count"] < args.min_assistant_msgs:
                 n_filtered += 1
                 continue
-            # Turns follow their row: a session filtered out above has no
-            # row for origin.py to classify, so its prompts could never be
-            # told apart from launched ones.
-            user_turns.extend(turns)
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             n_emitted += 1
-
-    if args.user_turns_output:
-        write_user_turns(user_turns, args.user_turns_output)
 
     msg = (f"scanned {n_scanned} jsonl files, emitted {n_emitted} session rows "
            f"to {out} (merged {n_merged} subagent runs into parents, "

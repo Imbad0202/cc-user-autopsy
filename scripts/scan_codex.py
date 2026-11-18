@@ -14,30 +14,26 @@ from pathlib import Path
 
 try:
     from cross_llm_common import (
-        add_user_turns_arg, check_distinct_outputs, cli_launch_targets,
-        make_cli_launch, make_user_turn, parse_jsonl_object, parse_ts,
-        prompt_identity, segments_and_duration, to_local_iso, write_rows,
-        write_user_turns)
+        cli_launch_targets, make_cli_launch, parse_jsonl_object, parse_ts,
+        prompt_identity, segments_and_duration, to_local_iso, write_rows)
 except ImportError:  # pragma: no cover - exercised when imported as scripts.scan_codex
     from scripts.cross_llm_common import (
-        add_user_turns_arg, check_distinct_outputs, cli_launch_targets,
-        make_cli_launch, make_user_turn, parse_jsonl_object, parse_ts,
-        prompt_identity, segments_and_duration, to_local_iso, write_rows,
-        write_user_turns)
+        cli_launch_targets, make_cli_launch, parse_jsonl_object, parse_ts,
+        prompt_identity, segments_and_duration, to_local_iso, write_rows)
 
 DEFAULT_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
 
 def _launch_source(payload):
     """How the session header says the session was started, as one
-    lowercase word, or None when the header does not say. A spawned
-    sub-session's header carries an object naming the sub-agent instead
-    of a word."""
+    lowercase word, or None when the header does not say (or says it in
+    a form this scanner does not know). A spawned sub-session's header
+    carries an object naming the sub-agent instead of a word."""
     src = payload.get("source")
     if isinstance(src, str) and src.strip():
         return src.strip().lower()
     if isinstance(src, dict) and "subagent" in src:
-        return "subagent"
+        return SPAWNED_SOURCE
     return None
 
 
@@ -48,25 +44,26 @@ NON_INTERACTIVE_SOURCES = frozenset({"exec", "mcp"})
 
 
 SPAWNED_SOURCE = "subagent"
-_PROGRAM_SOURCES = NON_INTERACTIVE_SOURCES | {SPAWNED_SOURCE}
 
 
 def _session_source(sources):
     """One launch source for the row from every header's: the spawned
     mark if any header carries it, else the first non-interactive one,
     else the last one named. None when no header names a source."""
-    if SPAWNED_SOURCE in sources:
+    named = [src for src in sources if src]
+    if SPAWNED_SOURCE in named:
         return SPAWNED_SOURCE
-    for src in sources:
+    for src in named:
         if src in NON_INTERACTIVE_SOURCES:
             return src
-    return sources[-1] if sources else None
+    return named[-1] if named else None
 
 
 def _session_interactive(sources):
-    """True when every header that names a source names an interactive
-    client; False when any names a non-interactive run; None when none
-    says, or one names something this scanner does not know."""
+    """False when any header names a non-interactive run. True only when
+    every header names an interactive client: a rollout with one stretch
+    whose header does not say how it was run is not vouched for as a
+    whole by the stretches that do. None otherwise."""
     if any(src in NON_INTERACTIVE_SOURCES for src in sources):
         return False
     if sources and all(src in INTERACTIVE_SOURCES for src in sources):
@@ -85,51 +82,50 @@ def _is_shell_tool(name):
 
 
 # Whole words of a tool name, so `exec_command` and `local_shell` match
-# and a database tool called `execute_sql` does not.
+# and `execute_sql` does not.
 _SHELL_WORDS = frozenset({"shell", "exec", "bash", "command"})
 
-# Argument fields that hold the command line. When a call has any of
-# them, only they are read; other fields (an approval rule, a note) can
-# name a CLI without running it.
+# Argument fields that hold the command line. Only they are read: other
+# fields (the working directory, an approval rule, a note, a query) can
+# name a CLI without running it, and a tool that merely has "exec" in
+# its name has none of them.
 _COMMAND_KEYS = frozenset({"command", "cmd", "commands", "script", "argv", "args"})
 
 
-# Argument fields of a shell call that are not part of the command line:
-# where it runs and why. A directory named after a CLI is not a call to it.
-_NOT_COMMAND_KEYS = frozenset({
-    "workdir", "cwd", "working_dir", "working_directory", "dir",
-    "justification", "description", "explanation", "reason"})
+_JSON_ESCAPE_RE = re.compile(r"\\.")
 
 
 def _strings(value):
-    """Every string inside a decoded JSON value, depth-first, leaving out
-    the fields that are not command text."""
+    """Every string inside a decoded JSON value, depth-first."""
     if isinstance(value, str):
         yield value
     elif isinstance(value, dict):
-        for k, v in value.items():
-            if k not in _NOT_COMMAND_KEYS:
-                yield from _strings(v)
+        for v in value.values():
+            yield from _strings(v)
     elif isinstance(value, list):
         for v in value:
             yield from _strings(v)
 
 
 def _call_text(payload):
-    """The text of a function_call's arguments, or "". Tools name their
-    command field differently (`command` as a string or argv list, `cmd`,
-    ...), so every string in the arguments is read rather than one key.
-    The raw JSON is decoded first — inside it, a newline before a command
-    is the two characters backslash-n, which would glue onto the word —
-    but only when it names an AI CLI at all: most calls do not, and
-    decoding every one would double the JSON work per call."""
+    """The command line of a function_call, or "". Tools name the field
+    differently (`command` as a string or an argv list, `cmd`, ...), so
+    the fields in _COMMAND_KEYS are read; arguments that are not a JSON
+    object (a bare string, a list) are read whole.
+
+    The arguments are decoded only when they can name an AI CLI at all:
+    most calls do not, and decoding every one would double the JSON work
+    per call. That first look is at the raw JSON text with every escape
+    sequence blanked, so an escaped newline or quote next to a name
+    (`\ncodex`, `codex\"`) does not hide it; the decoded text is what
+    is matched for real."""
     args = payload.get("arguments")
-    if not isinstance(args, str) or not cli_launch_targets(
-            args.replace("\\n", " ").replace("\\t", " ").replace("\\r", " ")):
+    if not isinstance(args, str) \
+            or not cli_launch_targets(_JSON_ESCAPE_RE.sub(" ", args)):
         return ""
     try:
         decoded = json.loads(args)
-        if isinstance(decoded, dict) and not _COMMAND_KEYS.isdisjoint(decoded):
+        if isinstance(decoded, dict):
             decoded = [v for k, v in decoded.items() if k in _COMMAND_KEYS]
         return "\n".join(_strings(decoded))
     except (ValueError, RecursionError):
@@ -137,19 +133,13 @@ def _call_text(payload):
         return args
 
 
-def scan_one(path: Path, turns_out=None):
-    """Returns (row, parse_errors). When turns_out is a list, the prompts
-    that may be the user's own are appended to it (raw text; candidates
-    only — see cross_llm_common)."""
+def scan_one(path: Path):
     session_id = None
     # A rollout can be resumed, and each resume writes a header of its
-    # own: the sources are kept in order, and each message remembers the
-    # one in force when it was sent.
+    # own: one entry per header, None for a header that names no source.
     sources = []
-    turns = []
     cli_launches = []
     launches_by_call = {}
-    last_assistant = None
     cwd = None
     model = None
     user_msgs = 0
@@ -182,9 +172,7 @@ def scan_one(path: Path, turns_out=None):
             if rtype == "session_meta":
                 session_id = payload.get("id")
                 cwd = payload.get("cwd") or cwd
-                src = _launch_source(payload)
-                if src:
-                    sources.append(src)
+                sources.append(_launch_source(payload))
             elif rtype == "turn_context":
                 model = payload.get("model") or model
                 cwd = payload.get("cwd") or cwd
@@ -192,15 +180,10 @@ def scan_one(path: Path, turns_out=None):
                 ptype = payload.get("type")
                 if ptype == "user_message":
                     user_msgs += 1
-                    text = payload.get("message")
-                    stripped = text.strip() if isinstance(text, str) else ""
-                    if stripped:
-                        turns.append((ts, text, last_assistant, cwd or "",
-                                      sources[-1] if sources else None))
-                    # Whatever was sent, the last reply has been answered.
-                    last_assistant = None
                     if first_prompt is None:
-                        if stripped:
+                        text = payload.get("message")
+                        if isinstance(text, str) and text.strip():
+                            stripped = text.strip()
                             # Hash the FULL prompt before truncating for
                             # display (Fix 3) — identity must survive the
                             # 500-char display cap below.
@@ -208,10 +191,6 @@ def scan_one(path: Path, turns_out=None):
                             first_prompt = stripped[:500]
                 elif ptype == "agent_message":
                     asst_msgs += 1
-                    reply = payload.get("message")
-                    if isinstance(reply, str) and reply.strip():
-                        # An empty agent message is not an answer.
-                        last_assistant = reply
                     # Attribute to whichever model is currently active (the
                     # most recent turn_context seen so far), not the LAST
                     # turn_context in the whole file — sessions can switch
@@ -268,18 +247,6 @@ def scan_one(path: Path, turns_out=None):
         "interactive": _session_interactive(sources),
         "cli_launches": cli_launches,
     }
-    # A Codex rollout does not say who wrote a user message. Under a
-    # header that marks the run as non-interactive or spawned, the "user"
-    # is the program that started it, so those messages are left out. The
-    # rest are candidates: only origin.py's `direct` verdict for the
-    # session makes them the user's own.
-    if turns_out is not None:
-        kept = [t for t in turns if t[4] not in _PROGRAM_SOURCES]
-        for i, (tts, text, prev, turn_cwd, _) in enumerate(kept):
-            turns_out.append(make_user_turn(
-                "codex", session_id, turn_cwd,
-                to_local_iso(tts) if tts else "", i, text,
-                prev_assistant=prev))
     return row, parse_errors
 
 
@@ -287,16 +254,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sessions-dir", default=str(DEFAULT_SESSIONS_DIR))
     ap.add_argument("--output", required=True)
-    add_user_turns_arg(ap)
     args = ap.parse_args()
-    check_distinct_outputs(ap, args.output, args.user_turns_output)
     root = Path(args.sessions_dir).expanduser()
     rows = []
     total_errors = 0
-    user_turns = [] if args.user_turns_output else None
     if root.is_dir():
         for p in sorted(root.glob("*/*/*/rollout-*.jsonl")):
-            row, errors = scan_one(p, user_turns)
+            row, errors = scan_one(p)
             total_errors += errors
             if row:
                 rows.append(row)
@@ -306,8 +270,6 @@ def main():
     # instead of treating them as sessions.
     rows.append({"_meta": True, "source": "codex", "parse_errors": total_errors})
     write_rows(rows, args.output)
-    if user_turns is not None:
-        write_user_turns(user_turns, args.user_turns_output)
     print(f"codex: {len(rows) - 1} sessions, {total_errors} parse errors",
           file=sys.stderr)
 

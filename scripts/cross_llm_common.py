@@ -118,18 +118,8 @@ def write_rows(rows, output) -> None:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-# --- user turns + CLI launch detection (findings-first Phase 1) -----------
-#
-# Every scanner can emit a second file of prompts that may be the user's
-# own (--user-turns-output); a row is the user's only when origin.py calls
-# its session `direct`. That file holds raw prompt text and the end of the
-# reply each prompt answered: it stays in the working directory and never
-# flows into analysis-data.json or any HTML.
-
-# A prompt longer than TURN_TEXT_CAP keeps its head and its tail (pasted
-# material tends to sit in the middle; the instruction is at one end).
-TURN_TEXT_CAP = 4000
-ASSISTANT_TAIL_CAP = 300
+# --- CLI launch detection and private working files (findings-first
+# Phase 1) ---------------------------------------------------------------
 
 # A shell command that mentions another AI CLI as a word of its own:
 # `codex exec`, `/opt/bin/codex review`, `nohup codex ... &`, `bash -lc
@@ -146,23 +136,9 @@ ASSISTANT_TAIL_CAP = 300
 _CLI_MENTION_RE = re.compile(
     r"(?<![\w.\-])(codex|grok|claude)(?:\.exe)?(?![\w.\-/\\])")
 
-USER_TURNS_HELP = ("Also write one row per prompt that may be the user's own "
-                   "to this JSONL file (created owner-readable only; a row "
-                   "counts only when its session is classified direct). It holds raw "
-                   "prompt text and the end of the reply each prompt "
-                   "answered: keep it out of version control and out of any "
-                   "report.")
-
-
-def add_user_turns_arg(parser):
-    parser.add_argument("--user-turns-output", default=None,
-                        help=USER_TURNS_HELP)
-
-
 def check_distinct_outputs(parser, *paths):
     """Refuse two output flags that resolve to one file: the second write
-    would silently replace the first (and put raw prompt text where
-    session rows were expected)."""
+    would silently replace the first."""
     seen = set()
     for p in paths:
         if not p:
@@ -179,7 +155,10 @@ def check_distinct_outputs(parser, *paths):
         # only in case are refused everywhere rather than probed for. The
         # same goes for two Unicode spellings of one name (composed and
         # decomposed accents), which macOS volumes also treat as one file.
-        folded = unicodedata.normalize("NFC", str(resolved)).casefold()
+        # Folding happens between two normalisations because case-folding
+        # a composed letter can itself produce a decomposed one.
+        folded = unicodedata.normalize("NFC", unicodedata.normalize(
+            "NFD", str(resolved)).casefold())
         if resolved in seen or folded in seen \
                 or (identity is not None and identity in seen):
             parser.error(f"two output flags point at the same file: {p}")
@@ -207,43 +186,9 @@ def make_cli_launch(target, ts, until=None):
     return {"target": target, "ts": ts, "until": until}
 
 
-def clip_turn_text(text):
-    if len(text) <= TURN_TEXT_CAP:
-        return text
-    half = TURN_TEXT_CAP // 2
-    omitted = len(text) - 2 * half
-    return f"{text[:half]}\n[... {omitted} characters omitted ...]\n{text[-half:]}"
-
-
-def make_user_turn(source, session_id, project_path, ts, turn_index, text,
-                   after_interrupt=False, prev_assistant=None,
-                   prompt_source=None):
-    """One user-turns row. `text` is kept as typed, leading and trailing
-    whitespace included; text longer than the cap is clipped in the middle
-    and text_len keeps the original length. prev_assistant_tail is the end
-    of the reply the user was answering, or None when there was none (or
-    the source records no assistant text). prompt_source is the
-    transcript's own label for how the prompt arrived, where it has one."""
-    tail = None
-    if isinstance(prev_assistant, str) and prev_assistant.strip():
-        tail = prev_assistant.strip()[-ASSISTANT_TAIL_CAP:]
-    return {
-        "source": source,
-        "session_id": session_id,
-        "project_path": project_path,
-        "ts": ts,
-        "turn_index": turn_index,
-        "text": clip_turn_text(text),
-        "text_len": len(text),
-        "after_interrupt": bool(after_interrupt),
-        "prev_assistant_tail": tail,
-        "prompt_source": prompt_source,
-    }
-
-
 def write_private_text(text, output) -> None:
-    """Write a working file that holds prompt text or session ids so that
-    only the current user can ever read it. The content goes to a fresh
+    """Write a working file that holds session ids so that only the
+    current user can ever read it. The content goes to a fresh
     0600 file beside the target, which then replaces the target in one
     step: an earlier file at that path — whatever its mode, whoever has
     it open, symlink or hard link — is swapped out, never written into.
@@ -257,7 +202,10 @@ def write_private_text(text, output) -> None:
             os.fchmod(fd, 0o600)   # exactly 0600, whatever the umask
             fh = os.fdopen(fd, "w", encoding="utf-8")
         except BaseException:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except OSError:   # fdopen had already closed it
+                pass
             raise
         with fh:
             fh.write(text)
@@ -268,8 +216,3 @@ def write_private_text(text, output) -> None:
         except OSError:
             pass
         raise
-
-
-def write_user_turns(turns, output) -> None:
-    write_private_text(
-        "".join(json.dumps(t, ensure_ascii=False) + "\n" for t in turns), output)

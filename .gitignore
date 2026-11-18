@@ -16,11 +16,9 @@ venv/
 # Output artifacts (user-generated, never commit these specific filenames)
 analysis-data.json
 samples.json
-# Raw prompt text and per-session origins (working files of the pipeline)
-user-turns*.jsonl
+# Per-session origins (a working file of the pipeline; holds session ids)
 origins.json
-# ...and the temp files they are written through (left only by a kill)
-.user-turns*.jsonl.*
+# ...and the temp file it is written through (left only by a kill)
 .origins.json.*
 peer-review.md
 peer-review-hr.md
