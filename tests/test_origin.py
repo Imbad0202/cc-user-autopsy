@@ -114,6 +114,14 @@ class ClassifyTests(unittest.TestCase):
         got = classify_all(rows)
         self.assertEqual([got["codex:c1"], got["claude:s"]], ["unknown"] * 2)
 
+    def test_a_grok_row_is_never_direct_whatever_it_says(self):
+        rows = [row("grok", "g1", at(0), interactive=True),
+                row("antigravity", "a1", at(0), interactive=True),
+                row("codex", "c1", at(0), interactive=True)]
+        self.assertEqual(classify_all(rows), {"grok:g1": "unknown",
+                                              "antigravity:a1": "unknown",
+                                              "codex:c1": "direct"})
+
     def test_only_true_counts_as_a_record_of_a_person(self):
         for junk in ("yes", "true", 1, 0, "", [], {}):
             r = row("codex", "c", at(0), interactive=junk)

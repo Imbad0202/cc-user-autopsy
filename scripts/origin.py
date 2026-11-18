@@ -61,6 +61,11 @@ SPAWNED_SOURCES = frozenset({"subagent"})
 
 KNOWN_TARGETS = frozenset({"claude", "codex", "grok"})
 
+# Sources whose transcripts can record a person at the keyboard. A row
+# from any other source is never `direct`, whatever its `interactive`
+# field says (Grok's history records nothing of the kind).
+RECORDING_SOURCES = frozenset({"claude", "codex"})
+
 
 def _source(row):
     """Claude rows from the activity pool carry no `source` field."""
@@ -156,7 +161,7 @@ def classify(row, windows):
     declared = row.get("launch_source")
     if isinstance(declared, str) and declared.lower() in SPAWNED_SOURCES:
         return "launched"
-    if row.get("interactive") is True:
+    if row.get("interactive") is True and _source(row) in RECORDING_SOURCES:
         return "direct"
     if _in_a_launch_window(row, windows):
         return "launched"

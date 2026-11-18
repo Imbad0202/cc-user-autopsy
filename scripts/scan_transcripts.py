@@ -109,11 +109,39 @@ def _provenance(record):
     return "human" if all(votes) else "other"
 
 
-def _is_tool_result_only(record):
-    """A user-role record that only carries tool output back."""
+def _carries_input(record):
+    """Whether a user-role record holds something a person could have sent:
+    non-blank text (a slash command included) or a non-text block such as
+    an image. Tool output, blank text and a missing message do not count."""
     content = _content(record)
-    return isinstance(content, list) and bool(content) and all(
-        isinstance(c, dict) and c.get("type") == "tool_result" for c in content)
+    if isinstance(content, str):
+        return bool(content.strip())
+    if not isinstance(content, list):
+        return False
+    for c in content:
+        if not isinstance(c, dict):
+            continue
+        kind = c.get("type")
+        if kind == "text":
+            if isinstance(c.get("text"), str) and c["text"].strip():
+                return True
+        elif isinstance(kind, str) and kind and kind != "tool_result":
+            return True
+    return False
+
+
+def _launch_time(value):
+    """A record's timestamp as the local ISO string the session segments
+    use, or None when it is not a usable time. Converting it the same way
+    keeps a launch and the session it started on one clock, and keeps any
+    other value out of the rows file."""
+    dt = _parse_ts(value) if isinstance(value, str) else None
+    if dt is None:
+        return None
+    try:
+        return to_local_iso(dt)
+    except (OverflowError, ValueError, OSError):
+        return None
 
 
 def _is_programmatic(entrypoint):
@@ -128,15 +156,16 @@ def _is_human_prompt(record):
     the user's, and neither is a record that does not say how it arrived
     (every labelled record seen in practice names its entrypoint). The
     entrypoint is read per record, because a session can be resumed
-    through a different one. Tool output is not a prompt, whatever labels
-    it carries.
+    through a different one. A record with nothing a person could have
+    sent (tool output, blank text, no message) is not a prompt, whatever
+    labels it carries.
 
     Entrypoints are told apart by what marks a programmatic one (`sdk-*`),
     not by a list of interactive clients: the editor and desktop clients
     have names of their own, and a list would drop their users."""
     if record.get("type") != "user" or record.get("isSidechain") \
             or record.get("isMeta") or record.get("isCompactSummary") \
-            or _provenance(record) != "human" or _is_tool_result_only(record):
+            or _provenance(record) != "human" or not _carries_input(record):
         return False
     entrypoint = record.get("entrypoint")
     return isinstance(entrypoint, str) and bool(entrypoint.strip()) \
@@ -187,7 +216,7 @@ def _cli_launches(records):
                 cmd = inp.get("command", "") if isinstance(inp, dict) else ""
                 call_id = c.get("id")
                 for target in cli_launch_targets(cmd):
-                    ev = make_cli_launch(target, r.get("timestamp") or "")
+                    ev = make_cli_launch(target, _launch_time(r.get("timestamp")))
                     launches.append(ev)
                     # Without a usable id the result cannot be paired:
                     # `until` stays None and the minimum window applies.
@@ -198,7 +227,7 @@ def _cli_launches(records):
                 if isinstance(c, dict) and c.get("type") == "tool_result" \
                         and isinstance(c.get("tool_use_id"), str):
                     for ev in by_call_id.pop(c["tool_use_id"], []):
-                        ev["until"] = r.get("timestamp") or None
+                        ev["until"] = _launch_time(r.get("timestamp"))
     return launches
 
 

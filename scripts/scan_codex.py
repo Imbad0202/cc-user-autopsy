@@ -25,13 +25,14 @@ DEFAULT_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
 
 def _launch_source(payload):
-    """How the session header says the session was started, as one
-    lowercase word, or None when the header does not say (or says it in
-    a form this scanner does not know). A spawned sub-session's header
-    carries an object naming the sub-agent instead of a word."""
+    """How the session header says the session was started: one of the
+    known words, SPAWNED_SOURCE for the structured object a spawned
+    sub-session carries, OTHER_SOURCE for any other word, None when the
+    header does not say. Only known words reach the rows file."""
     src = payload.get("source")
     if isinstance(src, str) and src.strip():
-        return src.strip().lower()
+        low = src.strip().lower()
+        return low if low in KNOWN_SOURCES else OTHER_SOURCE
     if isinstance(src, dict) and "subagent" in src:
         return SPAWNED_SOURCE
     return None
@@ -43,7 +44,11 @@ INTERACTIVE_SOURCES = frozenset({"cli", "vscode"})
 NON_INTERACTIVE_SOURCES = frozenset({"exec", "mcp"})
 
 
+# Only the structured header object marks a spawned sub-session; a plain
+# word "subagent" is not that record, and is read as an unknown word.
 SPAWNED_SOURCE = "subagent"
+OTHER_SOURCE = "other"
+KNOWN_SOURCES = INTERACTIVE_SOURCES | NON_INTERACTIVE_SOURCES
 
 
 def _session_source(sources):
@@ -85,10 +90,11 @@ def _is_shell_tool(name):
 # and `execute_sql` does not.
 _SHELL_WORDS = frozenset({"shell", "exec", "bash", "command"})
 
-# Argument fields that hold the command line. Only they are read: other
-# fields (the working directory, an approval rule, a note, a query) can
-# name a CLI without running it, and a tool that merely has "exec" in
-# its name has none of them.
+# Argument fields that hold the command line. Only they are read, and only
+# from arguments that decode to a JSON object (every Codex shell tool
+# sends one): other fields (the working directory, an approval rule, a
+# note, a query) can name a CLI without running it, and a tool that merely
+# has "exec" in its name has none of them.
 _COMMAND_KEYS = frozenset({"command", "cmd", "commands", "script", "argv", "args"})
 
 
@@ -110,27 +116,32 @@ def _strings(value):
 def _call_text(payload):
     """The command line of a function_call, or "". Tools name the field
     differently (`command` as a string or an argv list, `cmd`, ...), so
-    the fields in _COMMAND_KEYS are read; arguments that are not a JSON
-    object (a bare string, a list) are read whole.
+    the fields in _COMMAND_KEYS of the decoded JSON object are read.
+    Arguments that are not a JSON object, or are nested too deeply to
+    decode, give "": a missed launch leaves that session unknown, while a
+    false one would mark it launched.
 
     The arguments are decoded only when they can name an AI CLI at all:
     most calls do not, and decoding every one would double the JSON work
     per call. That first look is at the raw JSON text with every escape
     sequence blanked, so an escaped newline or quote next to a name
-    (`\ncodex`, `codex\"`) does not hide it; the decoded text is what
-    is matched for real."""
+    (`\ncodex`, `codex\"`) does not hide it; text with a \\u escape,
+    which can spell the name itself, is always decoded. The decoded text
+    is what is matched for real."""
     args = payload.get("arguments")
-    if not isinstance(args, str) \
-            or not cli_launch_targets(_JSON_ESCAPE_RE.sub(" ", args)):
+    if not isinstance(args, str):
+        return ""
+    if "\\u" not in args \
+            and not cli_launch_targets(_JSON_ESCAPE_RE.sub(" ", args)):
         return ""
     try:
         decoded = json.loads(args)
-        if isinstance(decoded, dict):
-            decoded = [v for k, v in decoded.items() if k in _COMMAND_KEYS]
-        return "\n".join(_strings(decoded))
+        if not isinstance(decoded, dict):
+            return ""
+        return "\n".join(_strings(
+            [v for k, v in decoded.items() if k in _COMMAND_KEYS]))
     except (ValueError, RecursionError):
-        # Not JSON, or nested too deeply to walk: read it as plain text.
-        return args
+        return ""
 
 
 def scan_one(path: Path):
@@ -166,6 +177,10 @@ def scan_one(path: Path):
             payload = rec.get("payload")
             if payload is not None and not isinstance(payload, dict):
                 parse_errors += 1
+                if rec.get("type") == "session_meta":
+                    # A header that cannot be read is a stretch nobody
+                    # can vouch for, not one that never happened.
+                    sources.append(None)
                 continue
             payload = payload or {}
             rtype = rec.get("type")

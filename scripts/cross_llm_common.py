@@ -137,8 +137,9 @@ _CLI_MENTION_RE = re.compile(
     r"(?<![\w.\-])(codex|grok|claude)(?:\.exe)?(?![\w.\-/\\])")
 
 def check_distinct_outputs(parser, *paths):
-    """Refuse two output flags that resolve to one file: the second write
-    would silently replace the first."""
+    """Refuse two file flags that resolve to one file: a later write
+    would silently replace the earlier file (an output, or an input the
+    run has read)."""
     seen = set()
     for p in paths:
         if not p:
@@ -161,7 +162,7 @@ def check_distinct_outputs(parser, *paths):
             "NFD", str(resolved)).casefold())
         if resolved in seen or folded in seen \
                 or (identity is not None and identity in seen):
-            parser.error(f"two output flags point at the same file: {p}")
+            parser.error(f"two file flags point at the same file: {p}")
         seen.add(resolved)
         seen.add(folded)
         if identity is not None:
@@ -200,15 +201,12 @@ def write_private_text(text, output) -> None:
     try:
         try:
             os.fchmod(fd, 0o600)   # exactly 0600, whatever the umask
-            fh = os.fdopen(fd, "w", encoding="utf-8")
-        except BaseException:
-            try:
-                os.close(fd)
-            except OSError:   # fdopen had already closed it
-                pass
-            raise
-        with fh:
-            fh.write(text)
+            # closefd=False: the descriptor is closed once, below, whether
+            # or not the wrapper was ever built.
+            with os.fdopen(fd, "w", encoding="utf-8", closefd=False) as fh:
+                fh.write(text)
+        finally:
+            os.close(fd)
         os.replace(tmp, out)
     except BaseException:
         try:

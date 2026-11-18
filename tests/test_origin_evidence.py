@@ -59,6 +59,11 @@ def _ts(n):
     return f"2026-04-01T10:{n:02d}:00.000Z"
 
 
+def _local(n):
+    """_ts(n) as the scanners write times: local ISO, like the segments."""
+    return to_local_iso(parse_ts(_ts(n)))
+
+
 REPLY = _asst([{"type": "text", "text": "ok"}], _ts(1))
 SDK = dict(entrypoint="sdk-cli", promptSource="sdk", turnOrigin="sdk")
 
@@ -126,6 +131,30 @@ class PrivateFileTests(unittest.TestCase):
             self.assertEqual([p.name for p in Path(td).iterdir()],
                              ["origins.json"])
             self.assertEqual(out.read_text(encoding="utf-8"), "x")
+
+
+class PrivateFileFailureTests(unittest.TestCase):
+    def test_a_failure_before_the_write_closes_the_descriptor_once(self):
+        from unittest import mock
+        from scripts import cross_llm_common
+        closed = []
+        real_close = os.close
+
+        def counting_close(fd):
+            closed.append(fd)
+            real_close(fd)
+
+        def broken_fdopen(fd, *a, **k):
+            raise LookupError("no such codec")
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "origins.json"
+            with mock.patch.object(cross_llm_common.os, "close", counting_close), \
+                    mock.patch.object(cross_llm_common.os, "fdopen", broken_fdopen), \
+                    self.assertRaises(LookupError):
+                write_private_text("x", out)
+            self.assertEqual(len(closed), 1)
+            self.assertEqual(list(Path(td).iterdir()), [])
 
 
 class DistinctOutputTests(unittest.TestCase):
@@ -267,11 +296,22 @@ class ClaudeEvidenceTests(unittest.TestCase):
                   turnOrigin="scheduled"), REPLY,
             _typed("scripted", _ts(2), entrypoint="sdk-cli")), False)
 
-    def test_tool_output_is_never_the_sign_of_a_person(self):
+    def test_a_record_with_nothing_a_person_sent_is_not_a_prompt(self):
         result = _typed([{"type": "tool_result", "tool_use_id": "t",
                           "content": "out"}], _ts(1))
         self.assertIs(self.interactive(_user("go", _ts(0), **SDK), result), False)
-        self.assertIs(self.interactive(result), False)
+        for empty in (result,
+                      _typed([{"type": "tool_result", "content": "out"},
+                              {"type": "text", "text": "  "}], _ts(1)),
+                      _typed("   ", _ts(1)), _typed([], _ts(1)),
+                      dict(_typed("x", _ts(1)), message=None),
+                      dict(_typed("x", _ts(1)), message={"content": None})):
+            self.assertIs(self.interactive(empty), False, empty)
+        # An image, or text beside tool output, is something a person sent.
+        for sent in (_typed([{"type": "image", "source": {}}], _ts(1)),
+                     _typed([{"type": "tool_result", "content": "out"},
+                             {"type": "text", "text": "and this"}], _ts(1))):
+            self.assertIs(self.interactive(sent), True, sent)
 
     def test_malformed_lines_and_records_do_not_stop_the_scan(self):
         with tempfile.TemporaryDirectory() as td:
@@ -297,7 +337,7 @@ class ClaudeEvidenceTests(unittest.TestCase):
                     "input": {"command": "grok -p x"}}], _ts(1)),
         ])
         self.assertEqual(row["cli_launches"],
-                         [{"target": "codex", "ts": _ts(1), "until": None}])
+                         [{"target": "codex", "ts": _local(1), "until": None}])
 
     def test_own_cli_call_is_recorded_too(self):
         row = self.scan([
@@ -319,7 +359,7 @@ class ClaudeEvidenceTests(unittest.TestCase):
                     "content": "review text"}], _ts(7)),
         ])
         self.assertEqual(row["cli_launches"],
-                         [{"target": "codex", "ts": _ts(1), "until": _ts(7)}])
+                         [{"target": "codex", "ts": _local(1), "until": _local(7)}])
 
     def test_launch_without_a_usable_call_id_is_never_paired(self):
         def call(i, **ident):
@@ -342,7 +382,32 @@ class ClaudeEvidenceTests(unittest.TestCase):
             _user([{"type": "tool_result", "tool_use_id": "good",
                     "content": "x"}], _ts(12))])
         self.assertEqual([e["until"] for e in row["cli_launches"]],
-                         [None] * 5 + [_ts(12)])
+                         [None] * 5 + [_local(12)])
+
+    def test_launch_times_are_kept_only_as_times_on_the_segments_clock(self):
+        def call(ts, call_id="c"):
+            return {"type": "assistant", "timestamp": ts, "message": {
+                "role": "assistant", "content": [{
+                    "type": "tool_use", "id": call_id, "name": "Bash",
+                    "input": {"command": "codex review"}}]}}
+        def result(ts, call_id="c"):
+            return {"type": "user", "timestamp": ts, "message": {"content": [
+                {"type": "tool_result", "tool_use_id": call_id, "content": "x"}]}}
+        local = lambda s: to_local_iso(parse_ts(s))
+        # A time without an offset is read the way the segments read it.
+        row = self.scan([_typed("go", "2026-04-01T10:00:00"),
+                         call("2026-04-01T10:00:01"),
+                         result("2026-04-01T10:00:09")])
+        self.assertEqual(row["cli_launches"], [{
+            "target": "codex", "ts": local("2026-04-01T10:00:01"),
+            "until": local("2026-04-01T10:00:09")}])
+        self.assertEqual(row["segments"][0][0], local("2026-04-01T10:00:00"))
+        # Anything else is not copied into the row.
+        for junk in ({"k": "<script>x</script>"}, ["t"], 7, "", "not a time",
+                     "2026-04-01T10:00:00\ud800"):
+            row = self.scan([_typed("go", _ts(0)), call(junk), result(junk)])
+            self.assertEqual(row["cli_launches"],
+                             [{"target": "codex", "ts": None, "until": None}], junk)
 
     def test_shell_calls_in_a_subagent_thread_count(self):
         side = _asst([{"type": "tool_use", "id": "1", "name": "Bash",
@@ -377,7 +442,7 @@ class ClaudeEvidenceTests(unittest.TestCase):
                 _asst([{"type": "text", "text": "delegating"}], _ts(1))]})
         self.assertEqual(len(got), 1)
         self.assertEqual(got[0]["cli_launches"],
-                         [{"target": "codex", "ts": _ts(2), "until": None}])
+                         [{"target": "codex", "ts": _local(2), "until": None}])
 
     def test_rows_carry_the_evidence_and_no_text_beyond_the_first_prompt(self):
         with tempfile.TemporaryDirectory() as td:
@@ -456,6 +521,19 @@ class CodexEvidenceTests(unittest.TestCase):
         for other in ({}, {"something": "else"}, 7, "  "):
             self.assertIsNone(self.scan({"source": other}, body)["launch_source"])
         self.assertIsNone(self.scan({}, body)["launch_source"])
+        # Only known words reach the row; the plain word "subagent" is not
+        # the structured record of a spawned session.
+        for word in ("something-new", "subagent", "cli\ud800"):
+            row = self.scan({"source": word}, body)
+            self.assertEqual((row["launch_source"], row["interactive"]),
+                             ("other", None), word)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "c.jsonl"
+            _rollout(td, [_codex_header(0, source="cli\ud800"), _codex_user(1, "x")])
+            subprocess.run([sys.executable, str(REPO_ROOT / "scripts" / "scan_codex.py"),
+                            "--sessions-dir", td, "--output", str(out)],
+                           check=True, capture_output=True)
+            self.assertIn('"launch_source": "other"', out.read_text(encoding="utf-8"))
 
     def test_every_header_of_a_resumed_rollout_must_vouch_for_it(self):
         def verdict(*sources):
@@ -475,11 +553,17 @@ class CodexEvidenceTests(unittest.TestCase):
         # cannot vouch for the whole.
         self.assertEqual(verdict(None, "cli"), (None, "cli"))
         self.assertEqual(verdict("cli", None), (None, "cli"))
-        self.assertEqual(verdict("cli", "something-new"), (None, "something-new"))
+        self.assertEqual(verdict("cli", "something-new"), (None, "other"))
         self.assertEqual(verdict("cli", {"other": 1}), (None, "cli"))
         # Spawned at any point: the row says so.
         self.assertEqual(verdict("cli", {"subagent": "r"})[1], "subagent")
         self.assertEqual(verdict(None, "exec"), (False, "exec"))
+        # A header whose payload cannot be read vouches for nothing.
+        row = self.scan_lines([
+            json.dumps({"timestamp": _ts(0), "type": "session_meta",
+                        "payload": ["bad"]}),
+            _codex_header(1, source="cli"), _codex_user(2, "x")])
+        self.assertIsNone(row["interactive"])
 
     def test_only_a_shell_tools_command_field_is_a_command_line(self):
         def call(args, name="shell"):
@@ -494,10 +578,8 @@ class CodexEvidenceTests(unittest.TestCase):
             # right after the name.
             call(json.dumps({"cmd": '"/opt/bin/claude" -p hi'})),
             call(json.dumps({"cmd": "C:\\bin\\claude.exe -p hi"})),
-            call(json.dumps(["bash", "-lc", "claude -p hi"]), name="local_shell"),
-            call("claude -p not-json"),
-            # Nested too deeply to decode: read as plain text, not fatal.
-            call("[" * 5000 + '"claude -p hi"' + "]" * 5000),
+            # The name spelled with a JSON \\u escape.
+            call('{"cmd": "\\u0063laude -p hi"}'),
         ]
         misses = [
             # File content, not a command line.
@@ -516,6 +598,14 @@ class CodexEvidenceTests(unittest.TestCase):
             # Tools that are not a shell, whatever their name contains.
             call(json.dumps({"query": "select 'claude -p'"}), name="execute_sql"),
             call(json.dumps({"query": "select 'claude -p'"}), name="exec_sql"),
+            call(json.dumps("select 'claude -p'"), name="exec_sql"),
+            call(json.dumps(["select 'claude -p'"]), name="exec_sql"),
+            # Arguments that are not a JSON object are not read at all.
+            call(json.dumps(["bash", "-lc", "claude -p hi"]), name="local_shell"),
+            call("claude -p not-json"),
+            # Nested too deeply to decode: not fatal, and not read.
+            call("[" * 5000 + '"claude -p hi"' + "]" * 5000),
+            call('{"cmd": ' + "[" * 5000 + '"claude -p hi"' + "]" * 5000 + "}"),
         ]
         for line, expected in [(h, ["claude"]) for h in hits] + \
                 [(m, []) for m in misses]:
@@ -704,6 +794,23 @@ class DemoPipelineTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("same file", proc.stderr)
         self.assertFalse(same.exists())
+
+    def test_aggregate_refuses_origins_over_an_input(self):
+        for flag, src in (("--transcript-rows", "t.jsonl"),
+                          ("--cross-llm-rows", "c.jsonl")):
+            before = (self.out / src).read_bytes()
+            proc = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "scripts" / "aggregate.py"),
+                 "--transcript-rows", str(self.out / "t.jsonl"),
+                 "--cross-llm-rows", str(self.out / "c.jsonl"),
+                 "--data-dir", str(DEMO / "usage-data"),
+                 "--origins-output", str(self.out / src),
+                 "--output", str(self.out / "other.json")],
+                cwd=REPO_ROOT, capture_output=True, text=True)
+            self.assertNotEqual(proc.returncode, 0, flag)
+            self.assertIn("same file", proc.stderr)
+            self.assertEqual((self.out / src).read_bytes(), before)
+            self.assertFalse((self.out / "other.json").exists())
 
     def test_origins_file_is_owner_only(self):
         mode = stat.S_IMODE((self.out / "origins.json").stat().st_mode)

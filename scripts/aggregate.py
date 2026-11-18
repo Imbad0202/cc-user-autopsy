@@ -3236,6 +3236,10 @@ def main():
                              "only — never the 9-dim scoring pool.")
     args = parser.parse_args()
     check_distinct_outputs(parser, args.output, args.origins_output)
+    # The origins file is written after the inputs are read: pointing it
+    # at one of them would replace that input without a word.
+    for source_file in [args.transcript_rows, *args.cross_llm_rows]:
+        check_distinct_outputs(parser, args.origins_output, source_file)
 
     data_dir = Path(args.data_dir).expanduser()
     meta_dir = data_dir / "session-meta"
