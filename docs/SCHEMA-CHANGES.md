@@ -49,8 +49,9 @@ for dim, metrics in scores.items():
 
 - Each source card gains `origin_counts`: `{"direct": int, "launched": int,
   "unknown": int}` — how many of that source's sessions the user drove by
-  hand, how many another tool started, and how many could not be told
-  apart (rule in `scripts/origin.py`). `null` for sources with nothing to
+  hand, how many a tool started, and how many could not be told apart
+  (rule in `scripts/origin.py`; `direct` is given on positive evidence
+  only, so `unknown` includes scheduled and scripted runs). `null` for sources with nothing to
   classify (`antigravity`, and any undetected source).
 - The three counts sum to the sessions that were classified, which can be
   below `session_count` (orphan subagent fragments are not classified).

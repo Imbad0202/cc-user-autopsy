@@ -13,12 +13,14 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 try:
-    from cross_llm_common import (normalize_prompt, parse_jsonl_object,
-                                   prompt_identity, write_private_text)
+    from cross_llm_common import (check_distinct_outputs, normalize_prompt,
+                                   parse_jsonl_object, prompt_identity,
+                                   write_private_text)
     from origin import classify_all, count_by_source
 except ImportError:  # pragma: no cover - exercised when imported as scripts.aggregate
-    from scripts.cross_llm_common import (normalize_prompt, parse_jsonl_object,
-                                           prompt_identity, write_private_text)
+    from scripts.cross_llm_common import (
+        check_distinct_outputs, normalize_prompt, parse_jsonl_object,
+        prompt_identity, write_private_text)
     from scripts.origin import classify_all, count_by_source
 
 DEFAULT_DATA_DIR = Path.home() / ".claude/usage-data"
@@ -3221,17 +3223,19 @@ def main():
                              "Can be given multiple times. Each row augments the session pool. "
                              "Local sessions take precedence on session_id collisions.")
     parser.add_argument("--origins-output", default=None,
-                        help="Write {source:session_id -> direct|launched|"
-                             "unknown} to this JSON file (created owner-"
-                             "readable only). Session-level, so it stays a "
-                             "working file outside analysis-data. Sources "
-                             "with nothing to classify (antigravity) and "
-                             "orphan subagent fragments have no entry.")
+                        help="Write {\"schema_version\": 1, \"sessions\": "
+                             "{\"source:session_id\": direct|launched|"
+                             "unknown}} to this JSON file (owner-readable "
+                             "only). Session-level, so it stays a working "
+                             "file outside analysis-data. Sources with "
+                             "nothing to classify (antigravity) and orphan "
+                             "subagent fragments have no entry.")
     parser.add_argument("--cross-llm-rows", action="append", default=[],
                         help="Path to scan_codex/grok/antigravity output jsonl. "
                              "Repeatable. Rows feed the cross_llm/ledger blocks "
                              "only — never the 9-dim scoring pool.")
     args = parser.parse_args()
+    check_distinct_outputs(parser, args.output, args.origins_output)
 
     data_dir = Path(args.data_dir).expanduser()
     meta_dir = data_dir / "session-meta"
@@ -3400,16 +3404,7 @@ def main():
     # working file (read by the findings verifier); analysis-data.json
     # only ever gets the per-source counts.
     claude_rows = list(activity_rows.values())
-    # Which tools were actually scanned for shell calls: Claude when its
-    # transcripts were (session-meta alone carries none), and each adapter
-    # that ran — an adapter's output always ends with a _meta line, which
-    # load_cross_llm_rows records under its source even at zero rows. A
-    # tool missing here is "not looked at", never "launched nothing".
-    scanned_sources = {s for s in cross_errors if s != "(unknown)"}
-    scanned_sources.update(r["source"] for r in cross_rows)
-    if activity_metas is not None:
-        scanned_sources.add("claude")
-    session_origins = classify_all(claude_rows + cross_rows, scanned_sources)
+    session_origins = classify_all(claude_rows + cross_rows)
     cross_llm = compute_cross_llm(claude_rows, cross_rows,
                                   origins=session_origins)
     if args.origins_output:

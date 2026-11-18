@@ -60,38 +60,45 @@ The user chose 1: half of the problem is layout, the other half is that what the
 
 Each scanner gains a second output (`--user-turns-output`, one file per scanner), one row per turn the user typed:
 
-`source, session_id, project_path, ts, turn_index, text, text_len, after_interrupt, prev_assistant_tail`
+`source, session_id, project_path, ts, turn_index, text, text_len, after_interrupt, prev_assistant_tail, prompt_source`
 
-A row carries no origin. Origin needs every tool's rows at once (5.2), so it is computed afterwards and written to `origins.json`, keyed `source:session_id`; a consumer joins on that key and treats a session with no entry as not hand-driven. `text` is the prompt as typed up to 4,000 characters; a longer one keeps its first and last 2,000 with a marker between, and `text_len` records the original length.
+A row carries no origin. Origin needs every tool's rows at once (5.2), so it is computed afterwards and written to `origins.json` as `{"schema_version": 1, "sessions": {"source:session_id": origin}}`; a consumer joins on that key and treats a session with no entry as not hand-driven. `text` is the prompt as typed, leading and trailing whitespace included, up to 4,000 characters; a longer one keeps its first and last 2,000 with a marker between, and `text_len` records the original length.
 
-`prev_assistant_tail` is the length-capped end of the assistant message the user was answering, where the source records one (Claude Code and Codex; null for Grok). It lets the analysis see what the user was asked before they ruled.
+`prev_assistant_tail` is the length-capped end of the assistant message the user was answering, where the source records one (Claude Code and Codex; null for Grok). It lets the analysis see what the user was asked before they ruled. A reply is attached to the next prompt only. `prompt_source` is the transcript's own label for how the prompt arrived, where it has one (Claude Code: `typed`, `queued`, `suggestion_accepted`); null otherwise.
 
-- Claude Code: text user records only. Tool results, system-injected records, sidechain and `agent-*` subagent records are excluded.
+- Claude Code: main-thread user records that the transcript itself labels as a person's. Claude Code writes on each prompt how it arrived (`promptSource`) and who started the turn (`turnOrigin`, `origin.kind`); a record counts when every label present names a person (`typed`, `queued`, `suggestion_accepted`; `human`). Records labelled as anything else (task notifications, messages from peer sessions, scheduled runs, SDK prompts, system text), meta and compaction-summary records, tool results, sidechain and `agent-*` subagent records are excluded. So is every unlabelled record: a transcript from a version that predates the labels yields no turns, because nothing in it shows which text a person typed. Inside a counted record, a block wholly wrapped in harness tags (a slash-command echo, an attached reminder) is dropped.
 - Codex: user messages from the rollout stream. Harness-injected context blocks (environment and instruction-file dumps) are excluded.
 - Grok: rows from `prompt_history.jsonl` whose `is_bash` is explicitly false.
 - Antigravity: none.
 
-These files hold raw prompt text. They are written to the working directory only, readable by the owner alone (mode 0600: the usual working directory is under `/tmp`, which other local accounts can list), never committed, never copied into `analysis-data.json`, and never reach HR output. They are git-ignored; `origins.json`, which holds session ids, gets the same treatment.
+These files hold raw prompt text. They are written to the working directory only, readable by the owner alone (mode 0600: the usual working directory is under `/tmp`, which other local accounts can list), never committed, never copied into `analysis-data.json`, and never reach HR output. They are git-ignored; `origins.json`, which holds session ids, gets the same treatment. Each is written to a fresh owner-only file beside the target, which then replaces the target in one step, so an earlier file at that path (whatever its mode, a symlink, a file someone holds open) is swapped out and never written into. Where the file goes is the caller's choice.
 
 ### 5.2 Origin: hand-driven versus launched
 
 Every session of a source whose content is read (Claude Code, Codex, Grok) gets `origin`: `direct`, `launched`, or `unknown`. Antigravity sessions are presence-only and get none, and neither do orphan subagent fragments, which are not sessions anyone opened.
 
-- `launched`, signal 1: the launch-source field in the session header says another session spawned this one (observed in Codex headers as a structured `source` naming a sub-agent).
-- `launched`, signal 2: another tool's transcript, in the main thread or in any subagent, contains a shell call that invokes this tool's CLI, and this session started while that call was running: from the moment the call was requested until its result came back, and never less than 60 seconds. Time alone decides; the working directory is not compared, so a launched run that changed directory cannot pass as hand-driven. This runs in both directions, so a Claude Code session started from a Codex session is caught the same way as the reverse.
-- `unknown`, by header: the header says the run was non-interactive (Codex `source: exec`) and no launching call was seen. Nobody sat in that session, but the header does not say who started it: the user at a shell, a script, or a tool whose transcript has rotated away. It is never `direct`.
-- `direct`: none of the above, and either (a) the user typed, the tool answered in words, and the user typed again, or (b) a launch would have been visible. Grok records no replies, so for Grok (a) is two typed prompts in one session.
-- `unknown`: everything else.
+`direct` is given on positive evidence only. The first version of this rule also inferred it from absence: no launching call was seen, and one "would have been visible". Two review rounds kept finding ways that inference fails (a scheduler or a script leaves no transcript, transcripts rotate, a tool is not scanned, a session is known only from metadata), so the inference was removed rather than patched further.
 
-"Would have been visible" in (b) is judged narrowly, for every other tool that can launch one (Claude Code and Codex; Grok's history has no tool calls):
+Each scanner reports what the transcript itself records about how the session was run, as a row field `interactive`:
 
-- The tool's adapter ran. A tool that was not scanned is "not looked at", never "launched nothing".
-- The session's start lies inside that tool's retained run of scanned transcripts. Transcripts rotate by age, so what is retained is the recent unbroken run: walking back from the latest session, the run ends at the first gap longer than seven days. An older straggler that survived rotation does not vouch for the weeks after it.
-- No session of that tool active at that moment is known only from a row without scanned shell calls (a session-meta row, for instance).
+- Claude Code: true when some prompt is labelled as a person's (5.1) and the session's `entrypoint` is not programmatic; false when the entrypoint is programmatic (`sdk-*`: `claude -p`, the Agent SDK) or prompts are labelled and none is a person's (a scheduled run, a session driven by a peer); null when the transcript carries no labels.
+- Codex: true when the header's `source` names an interactive client (`cli`, `vscode`); false for `exec` and `mcp`; null otherwise.
+- Grok: always null. The prompt history records nothing about how a session was run.
 
-A call that names the launching tool's own CLI (`claude -p` from a Claude Code session) counts too; the session it starts is `launched`.
+The verdict, first match wins:
 
-Absence of a launch counts as evidence only where a launch could have been seen. Only `direct` sessions feed findings. `launched` and `unknown` counts are shown in the coverage line so the reader sees what was left out. This follows the existing lower-bound accounting rule: when in doubt, undercount.
+1. `launched`: the session header says another session spawned it (Codex: a structured `source` naming a sub-agent).
+2. `direct`: `interactive` is true.
+3. `launched`: some transcript, of any tool, in the main thread or any subagent, contains a shell call that names this tool's CLI, and this session started while that call was running: after the call was requested and before its result came back, and never less than 60 seconds after the request. Time alone decides; the working directory is not compared. This runs in every direction, including a tool calling its own CLI (`claude -p` from a Claude Code session).
+4. `unknown`: `interactive` is false. Nobody sat in the session, and nothing records who started it: the user at a shell, a script, a scheduler, or a tool whose transcript is gone.
+5. `direct`: `interactive` is null, and the user typed, the tool answered in words, and the user typed again. Grok records no replies, so for Grok this is two typed prompts in one session.
+6. `unknown`: everything else.
+
+Step 2 is placed above step 3 on purpose: a recorded interactive session that happens to start while an unrelated call mentioning the tool is running is still the user's. Step 5 is the one place a verdict rests on behaviour instead of a record, and applies only where no record exists.
+
+Known limits, accepted: a wrapper that drives an interactive client through a pseudo-terminal would be recorded as interactive; a Codex or Grok session with no record and a single prompt is `unknown` even when the user did type it; Claude Code transcripts older than the labels are all `unknown`. Each errs toward leaving a session out.
+
+Only `direct` sessions feed findings. `launched` and `unknown` counts are shown in the coverage line so the reader sees what was left out. This follows the existing lower-bound accounting rule: when in doubt, undercount.
 
 `aggregate.py` adds per-source `direct` / `launched` / `unknown` session counts to the `cross_llm` block, and the team ledger shows them beside the existing share numbers. Existing share, parallel-hours, switch-tax and badge computations are not changed in this round, so trend snapshots stay comparable. Whether those should later exclude launched sessions is a follow-up (section 8).
 
@@ -212,7 +219,7 @@ The SELF report and the profile may show verbatim text the user typed into any t
 ### 5.9 Testing
 
 - `generate_demo_data.py` gains synthetic cross-tool user turns, including launched sessions and injected context blocks.
-- Origin classifier: direct, launched by time-and-directory match, unknown.
+- Origin classifier: direct on a recorded interactive session or a real back-and-forth, launched by header or time match, unknown otherwise.
 - Verifier: fabricated `turn_refs` dropped; counts recomputed; each gate at its boundary; ranking; zero-findings path.
 - Renderer: first-screen structure, escaping, offline safety, HR leak test, locale key parity.
 - `promo_lint` word list.
@@ -238,7 +245,7 @@ Each phase is a separate PR and leaves the report buildable.
 ## 8. Calls made without asking (flag at review if wrong)
 
 - HR version, badges and 9-dimension scoring are untouched this round. Reworking D6 and the `tool_breadth` badge so they stop rewarding feature adoption is a follow-up, not part of this design.
-- `unknown` origin sessions are excluded from findings rather than included. A session with no sign of being launched counts as `direct` only where a launch could have been seen.
+- `unknown` origin sessions are excluded from findings rather than included. A session counts as `direct` only on positive evidence (5.2); the absence of a launching call is never evidence.
 - Existing share, parallel-hours and badge numbers still include launched sessions this round. The cross-tool badge may therefore be earned partly by launched runs; fixing that belongs with the D6 follow-up.
 - "Wrong tool for this work" is not a finding. The work map is descriptive.
 - Written rules are read by Claude during the run from instruction files and Claude Code memory directories; only the matched sentence is kept.

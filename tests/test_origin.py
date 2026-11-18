@@ -10,22 +10,18 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from scripts.cross_llm_common import cli_launch_targets  # noqa: E402
 from scripts.origin import (  # noqa: E402
-    COVERAGE_GAP_DAYS, LAUNCH_WINDOW_SECONDS, classify_all, count_by_source,
-    launcher_coverage)
-
-BOTH = {"claude", "codex"}  # both launcher tools were scanned
-DAY = 86400
+    LAUNCH_WINDOW_SECONDS, classify_all, count_by_source)
 
 
 def row(source, sid, start, *, end=None, multi_turn=False, launches=(),
-        scanned=True, until=None, **extra):
-    r = {"source": source, "session_id": sid, "start_time": start,
-         "segments": [[start, end or start]], "multi_turn": multi_turn,
-         "coverage": "partial" if source == "grok" else "full", **extra}
-    if scanned:
-        r["cli_launches"] = [{"target": t, "ts": ts, "until": until}
-                             for t, ts in launches]
-    return r
+        until=None, **extra):
+    """A scanner row. `interactive` (True / False) is passed through
+    **extra; leaving it out means the transcript does not say."""
+    return {"source": source, "session_id": sid, "start_time": start,
+            "segments": [[start, end or start]], "multi_turn": multi_turn,
+            "coverage": "partial" if source == "grok" else "full",
+            "cli_launches": [{"target": t, "ts": ts, "until": until}
+                             for t, ts in launches], **extra}
 
 
 T0 = "2026-04-01T10:00:00+00:00"
@@ -36,10 +32,9 @@ def at(seconds):
     return (datetime.fromisoformat(T0) + timedelta(seconds=seconds)).isoformat()
 
 
-# A long hand-driven Claude session whose transcript spans every test
-# timestamp, so "a launch would have been visible" holds unless a test
-# removes it.
-CLAUDE_SPAN = row("claude", "span", at(-3600), end=at(7200), multi_turn=True)
+# A long hand-driven Claude session spanning every test timestamp and
+# launching nothing. Its presence must never make another session direct.
+CLAUDE_SPAN = row("claude", "span", at(-3600), end=at(7200), interactive=True)
 
 
 class LaunchCommandTests(unittest.TestCase):
@@ -76,244 +71,220 @@ class LaunchCommandTests(unittest.TestCase):
         self.assertEqual(cli_launch_targets(["codex"]), [])
 
 
-def classify_all_both(rows):
-    return classify_all(rows, BOTH)
+def launcher(source="claude", target="codex", until=None, sid="a"):
+    return row(source, sid, at(-600), end=at(900), interactive=True,
+               launches=[(target, at(0))], until=until)
 
 
 class ClassifyTests(unittest.TestCase):
-    def origin(self, rows, key, scanned=BOTH):
-        return classify_all(rows, scanned)[key]
+    def origin(self, rows, key):
+        return classify_all(rows)[key]
 
-    def test_spawned_header_marks_launched(self):
-        rows = [CLAUDE_SPAN,
-                row("codex", "c1", at(0), multi_turn=True,
-                    launch_source="subagent")]
-        self.assertEqual(self.origin(rows, "codex:c1"), "launched")
+    # -- direct needs positive evidence ---------------------------------
 
-    def test_non_interactive_header_alone_is_unknown_never_direct(self):
-        # A one-shot exec run with no launching call in sight: nobody sat
-        # in it, but who started it cannot be told — even though Claude's
-        # transcripts span the moment and it would otherwise be "direct".
-        rows = [CLAUDE_SPAN,
-                row("codex", "c1", at(0), launch_source="Exec"),
-                row("codex", "c2", at(0), launch_source="exec", multi_turn=True),
-                row("codex", "c3", at(0), launch_source="mcp")]
-        got = classify_all(rows, BOTH)
+    def test_recorded_interactive_session_is_direct_on_its_own(self):
+        got = classify_all([row("claude", "a", at(0), interactive=True),
+                            row("codex", "c", at(0), interactive=True)])
+        self.assertEqual(got, {"claude:a": "direct", "codex:c": "direct"})
+
+    def test_nothing_recorded_and_one_prompt_is_unknown(self):
+        # Other tools' transcripts span the moment and show no launch.
+        # That absence proves nothing: a script, a scheduler or a rotated
+        # transcript could have started it.
+        rows = [CLAUDE_SPAN, row("codex", "c1", at(0)),
+                row("claude", "old", at(0)), row("grok", "g1", at(0))]
+        got = classify_all(rows)
         self.assertEqual(
-            [got[f"codex:c{i}"] for i in (1, 2, 3)], ["unknown"] * 3)
+            [got["codex:c1"], got["claude:old"], got["grok:g1"]],
+            ["unknown"] * 3)
 
-    def test_non_interactive_header_with_a_matching_call_is_launched(self):
-        launcher = row("claude", "a", at(-600), end=at(600), multi_turn=True,
-                       launches=[("codex", at(0))])
-        rows = [launcher, row("codex", "c1", at(5), launch_source="exec")]
+    def test_nothing_recorded_but_a_real_back_and_forth_is_direct(self):
+        rows = [row("grok", "g1", at(0), multi_turn=True),
+                row("codex", "c1", at(0), multi_turn=True)]
+        self.assertEqual(set(classify_all(rows).values()), {"direct"})
+
+    def test_recorded_non_interactive_is_never_direct(self):
+        # Not even with several turns: a script can feed a run more than
+        # one prompt.
+        rows = [CLAUDE_SPAN,
+                row("codex", "c1", at(0), interactive=False),
+                row("codex", "c2", at(0), interactive=False, multi_turn=True),
+                row("claude", "s", at(0), interactive=False, multi_turn=True)]
+        got = classify_all(rows)
+        self.assertEqual(
+            [got["codex:c1"], got["codex:c2"], got["claude:s"]],
+            ["unknown"] * 3)
+
+    def test_only_true_and_false_count_as_a_record(self):
+        for junk in ("yes", 1, 0, "", [], {}):
+            r = row("codex", "c", at(0), interactive=junk)
+            self.assertEqual(self.origin([r], "codex:c"), "unknown", junk)
+        r = row("codex", "c", at(0), multi_turn="yes")
+        self.assertEqual(self.origin([r], "codex:c"), "unknown")
+
+    # -- launched -------------------------------------------------------
+
+    def test_spawned_header_marks_launched_over_everything(self):
+        rows = [row("codex", "c1", at(0), multi_turn=True, interactive=True,
+                    launch_source="subagent"),
+                row("codex", "c2", at(0), launch_source="SubAgent")]
+        self.assertEqual(set(classify_all(rows).values()), {"launched"})
+
+    def test_non_interactive_run_with_a_matching_call_is_launched(self):
+        rows = [launcher(), row("codex", "c1", at(5), interactive=False)]
         self.assertEqual(self.origin(rows, "codex:c1"), "launched")
 
-    def test_interactive_header_values_do_not_block_direct(self):
-        rows = [CLAUDE_SPAN,
-                row("codex", "c1", at(0), launch_source="cli"),
-                row("codex", "c2", at(0), launch_source="vscode")]
-        got = classify_all(rows, BOTH)
-        self.assertEqual((got["codex:c1"], got["codex:c2"]),
-                         ("direct", "direct"))
+    def test_time_match_beats_multi_turn_when_nothing_is_recorded(self):
+        rows = [launcher(), row("codex", "c1", at(5), multi_turn=True)]
+        self.assertEqual(self.origin(rows, "codex:c1"), "launched")
+
+    def test_the_transcripts_own_record_beats_a_time_match(self):
+        # The user opened the terminal UI while an unrelated call that
+        # mentions the tool happened to be running.
+        rows = [launcher(), row("codex", "c1", at(5), interactive=True)]
+        self.assertEqual(self.origin(rows, "codex:c1"), "direct")
 
     def test_window_runs_until_the_call_result_came_back(self):
         # The call sat behind a permission prompt for five minutes.
-        launcher = row("claude", "a", at(-600), end=at(900), multi_turn=True,
-                       launches=[("codex", at(0))], until=at(300))
-        got = classify_all_both([launcher, row("codex", "in", at(299)),
+        got = classify_all([launcher(until=at(300)),
+                            row("codex", "in", at(299)),
+                            row("codex", "edge", at(300)),
                             row("codex", "out", at(301))])
-        self.assertEqual(got["codex:in"], "launched")
-        self.assertEqual(got["codex:out"], "direct")
+        self.assertEqual(
+            [got["codex:in"], got["codex:edge"], got["codex:out"]],
+            ["launched", "launched", "unknown"])
 
     def test_result_sooner_than_the_minimum_window_keeps_the_minimum(self):
         # A backgrounded call returns at once; the run still starts later.
-        launcher = row("claude", "a", at(-600), end=at(600), multi_turn=True,
-                       launches=[("codex", at(0))], until=at(1))
-        rows = [launcher, row("codex", "c1", at(30))]
-        self.assertEqual(self.origin(rows, "codex:c1"), "launched")
-
-    def test_time_match_marks_launched_even_when_multi_turn(self):
-        launcher = row("claude", "a", at(-600), end=at(600), multi_turn=True,
-                       launches=[("codex", at(0))])
-        rows = [launcher, row("codex", "c1", at(5), multi_turn=True)]
+        rows = [launcher(until=at(1)), row("codex", "c1", at(30))]
         self.assertEqual(self.origin(rows, "codex:c1"), "launched")
 
     def test_window_boundary(self):
-        launcher = row("claude", "a", at(-600), end=at(600), multi_turn=True,
-                       launches=[("codex", at(0))])
-        inside = row("codex", "in", at(LAUNCH_WINDOW_SECONDS))
-        outside = row("codex", "out", at(LAUNCH_WINDOW_SECONDS + 1))
-        before = row("codex", "pre", at(-1))
-        got = classify_all_both([launcher, inside, outside, before])
+        got = classify_all([
+            launcher(),
+            row("codex", "in", at(LAUNCH_WINDOW_SECONDS)),
+            row("codex", "out", at(LAUNCH_WINDOW_SECONDS + 1)),
+            row("codex", "same", at(0)),
+            row("codex", "pre", at(-1))])
         self.assertEqual(got["codex:in"], "launched")
-        self.assertEqual(got["codex:out"], "direct")
-        self.assertEqual(got["codex:pre"], "direct")
+        # A session cannot be started by a call made at or after its own
+        # first record.
+        for sid in ("out", "same", "pre"):
+            self.assertEqual(got[f"codex:{sid}"], "unknown", sid)
+
+    def test_an_earlier_long_call_still_covers_after_a_later_short_one(self):
+        long_call = row("claude", "a", at(-600), end=at(900), interactive=True,
+                        launches=[("codex", at(0))], until=at(500))
+        short_call = row("claude", "b", at(-600), end=at(900), interactive=True,
+                         launches=[("codex", at(100))], until=at(101))
+        rows = [long_call, short_call, row("codex", "c1", at(400)),
+                row("codex", "c2", at(501))]
+        got = classify_all(rows)
+        self.assertEqual((got["codex:c1"], got["codex:c2"]),
+                         ("launched", "unknown"))
 
     def test_launch_of_a_different_tool_does_not_match(self):
-        launcher = row("claude", "a", at(-600), end=at(600), multi_turn=True,
-                       launches=[("grok", at(0))])
-        rows = [launcher, row("codex", "c1", at(5))]
-        self.assertEqual(self.origin(rows, "codex:c1"), "direct")
+        rows = [launcher(target="grok"), row("codex", "c1", at(5))]
+        self.assertEqual(self.origin(rows, "codex:c1"), "unknown")
 
     def test_reverse_direction_codex_launches_claude(self):
-        launcher = row("codex", "d", at(-600), end=at(600), multi_turn=True,
-                       launches=[("claude", at(0))])
-        rows = [launcher, row("claude", "e", at(4))]
+        rows = [launcher(source="codex", target="claude", sid="d"),
+                row("claude", "e", at(4), interactive=False)]
         self.assertEqual(self.origin(rows, "claude:e"), "launched")
 
-    def test_multi_turn_is_what_makes_an_uncovered_session_direct(self):
-        # No launcher tool was scanned at all, so coverage can vouch for
-        # nothing: the verdict rests on multi_turn alone.
-        for multi, want in ((True, "direct"), (False, "unknown")):
-            rows = [row("grok", "g1", at(0), multi_turn=multi)]
-            self.assertEqual(self.origin(rows, "grok:g1", scanned=set()), want)
-
-    def test_single_turn_outside_launcher_coverage_is_unknown(self):
-        # Claude transcripts exist, but none span this moment (rotated).
-        late_claude = row("claude", "a", at(86400), end=at(90000), multi_turn=True)
-        rows = [late_claude, row("codex", "c1", at(0))]
-        self.assertEqual(self.origin(rows, "codex:c1"), "unknown")
-
-    def test_single_turn_inside_launcher_coverage_is_direct(self):
-        rows = [CLAUDE_SPAN, row("codex", "c1", at(0))]
-        self.assertEqual(self.origin(rows, "codex:c1"), "direct")
-
-    def test_launcher_rows_without_scanned_shell_calls_give_no_coverage(self):
-        # Session-meta rows carry no cli_launches list: they cannot show
-        # that nothing was launched.
-        unscanned = row("claude", "a", at(-3600), end=at(7200),
-                        multi_turn=True, scanned=False)
-        rows = [unscanned, row("codex", "c1", at(0))]
-        self.assertEqual(self.origin(rows, "codex:c1"), "unknown")
-
-    def test_scanned_launcher_with_no_sessions_does_not_block(self):
-        # The Codex adapter ran and found nothing: only Claude could launch.
-        rows = [CLAUDE_SPAN, row("grok", "g1", at(0))]
-        self.assertEqual(self.origin(rows, "grok:g1"), "direct")
-
-    def test_launcher_that_was_not_scanned_blocks(self):
-        # Same rows, but the Codex adapter never ran: "no Codex rows" is
-        # then "not looked", and a Codex launch cannot be ruled out.
-        rows = [CLAUDE_SPAN, row("grok", "g1", at(0))]
-        self.assertEqual(self.origin(rows, "grok:g1", scanned={"claude"}),
-                         "unknown")
-        # Default (scanned_sources not given): only tools with scanned
-        # rows count, so the answer is the same.
-        self.assertEqual(classify_all(rows)["grok:g1"], "unknown")
-
-    def test_lone_session_meta_row_is_not_direct(self):
-        # One Claude row with a time and nothing else, cross-tool adapters
-        # not run: nothing shows who started it.
-        r = row("claude", "a", at(0), scanned=False)
-        self.assertEqual(classify_all([r], set())["claude:a"], "unknown")
-        self.assertEqual(classify_all([r])["claude:a"], "unknown")
-
-    def test_old_straggler_does_not_vouch_for_the_gap_after_it(self):
-        # Rotation left one old Claude transcript and the recent run. A
-        # single-prompt Codex session in the weeks between is not covered.
-        gap = (COVERAGE_GAP_DAYS + 3) * DAY
-        old = row("claude", "old", at(-gap - 3600), end=at(-gap), multi_turn=True)
-        recent = row("claude", "new", at(0), end=at(3600), multi_turn=True)
-        rows = [old, recent,
-                row("codex", "mid", at(-gap // 2)),
-                row("codex", "now", at(60))]
-        got = classify_all(rows, BOTH)
-        self.assertEqual(got["codex:mid"], "unknown")
-        self.assertEqual(got["codex:now"], "direct")
-
-    def test_sessions_closer_than_the_gap_form_one_retained_run(self):
-        near = (COVERAGE_GAP_DAYS - 1) * DAY
-        rows = [row("claude", "a", at(-near - 60), end=at(-near), multi_turn=True),
-                row("claude", "b", at(0), end=at(3600), multi_turn=True),
-                row("codex", "mid", at(-near // 2))]
-        self.assertEqual(self.origin(rows, "codex:mid"), "direct")
-
-    def test_unscanned_session_at_that_moment_hides_a_launch(self):
-        # Claude's retained run spans the moment, but one Claude session
-        # active right then is known only from session-meta.
-        blind = row("claude", "meta", at(-120), scanned=False,
-                    duration_minutes=10)
-        blind["segments"] = None
-        rows = [CLAUDE_SPAN, blind, row("codex", "c1", at(0)),
-                row("codex", "c2", at(3000))]
-        got = classify_all(rows, BOTH)
-        self.assertEqual(got["codex:c1"], "unknown")
-        self.assertEqual(got["codex:c2"], "direct")
-
     def test_same_tool_launch_marks_the_child_not_the_parent(self):
-        parent = row("claude", "p", at(-600), end=at(600), multi_turn=True,
+        # The parent's first record and its own call share a timestamp:
+        # the parent must not match itself.
+        parent = row("claude", "p", at(0), end=at(600), interactive=True,
                      launches=[("claude", at(0))], until=at(20))
-        rows = [parent, row("claude", "child", at(3)),
-                row("claude", "later", at(45), multi_turn=True)]
-        got = classify_all(rows, {"claude"})
-        self.assertEqual(got["claude:p"], "direct")
-        self.assertEqual(got["claude:child"], "launched")
-        # Same-tool calls keep their real duration (no 60 s padding), so a
-        # session opened by hand 25 s after the call ended is not swept in.
-        self.assertEqual(got["claude:later"], "direct")
+        headless_parent = row("claude", "hp", at(0), end=at(600),
+                              interactive=False,
+                              launches=[("claude", at(0))], until=at(20))
+        rows = [parent, row("claude", "child", at(3), interactive=False)]
+        got = classify_all(rows)
+        self.assertEqual(got, {"claude:p": "direct", "claude:child": "launched"})
+        self.assertEqual(
+            classify_all([headless_parent])["claude:hp"], "unknown")
+
+    # -- robustness -----------------------------------------------------
 
     def test_malformed_launch_events_are_skipped_not_fatal(self):
-        bad = row("claude", "a", at(-600), end=at(600), multi_turn=True)
-        bad["cli_launches"] = [None, "x", {"target": "codex"},
-                               {"target": "codex", "ts": at(0), "until": None}]
-        rows = [bad, row("codex", "c1", at(5))]
-        self.assertEqual(self.origin(rows, "codex:c1"), "launched")
+        bad = row("claude", "a", at(-600), end=at(600), interactive=True)
+        bad["cli_launches"] = [
+            None, "x", {"target": "codex"}, {"target": ["codex"], "ts": at(0)},
+            {"target": {"a": 1}, "ts": at(0)}, {"target": "emacs", "ts": at(0)},
+            {"target": "codex", "ts": "junk"},
+            {"target": "codex", "ts": at(0), "until": "junk"}]
+        worse = row("claude", "b", at(-600), interactive=True)
+        worse["cli_launches"] = "codex"
+        rows = [bad, worse, row("codex", "c1", at(5)),
+                row("codex", "c2", at(LAUNCH_WINDOW_SECONDS + 5))]
+        got = classify_all(rows)
+        self.assertEqual((got["codex:c1"], got["codex:c2"]),
+                         ("launched", "unknown"))
 
-    def test_no_usable_start_is_unknown(self):
-        r = row("codex", "c1", "not a time")
+    def test_no_usable_start_cannot_be_time_matched(self):
+        r = row("codex", "c1", "not a time", interactive=False)
         r["segments"] = None
-        self.assertEqual(self.origin([CLAUDE_SPAN, r], "codex:c1"), "unknown")
+        self.assertEqual(self.origin([launcher(), r], "codex:c1"), "unknown")
 
     def test_malformed_segments_fall_back_to_start_time(self):
-        r = row("codex", "c1", at(0))
+        r = row("codex", "c1", at(5))
         r["segments"] = [["garbage"], [at(50), at(10)], "x"]
-        self.assertEqual(self.origin([CLAUDE_SPAN, r], "codex:c1"), "direct")
+        self.assertEqual(self.origin([launcher(), r], "codex:c1"), "launched")
 
-    def test_grok_rows_never_count_as_launcher_coverage(self):
-        g = row("grok", "g", at(-3600), end=at(7200), multi_turn=True)
-        self.assertEqual(launcher_coverage([g], BOTH), {})
+    def test_earliest_segment_is_the_start(self):
+        # start_time says later than the first segment (a resumed file).
+        r = row("codex", "c1", at(4000))
+        r["segments"] = [[at(3000), at(3100)], [at(5), at(40)]]
+        self.assertEqual(self.origin([launcher(), r], "codex:c1"), "launched")
 
     def test_naive_timestamps_do_not_raise(self):
-        launcher = row("claude", "a", "2026-04-01T09:00:00",
-                       end="2026-04-01T11:00:00", multi_turn=True,
-                       launches=[("codex", "2026-04-01T10:00:00")])
-        rows = [launcher, row("codex", "c1", "2026-04-01T10:00:05")]
+        a = row("claude", "a", "2026-04-01T09:00:00",
+                end="2026-04-01T11:00:00", interactive=True,
+                launches=[("codex", "2026-04-01T10:00:00")])
+        rows = [a, row("codex", "c1", "2026-04-01T10:00:05")]
         self.assertEqual(self.origin(rows, "codex:c1"), "launched")
 
     def test_rows_without_source_are_claude(self):
-        r = row("claude", "a", at(0), multi_turn=True)
+        r = row("claude", "a", at(0), interactive=True)
         del r["source"]
-        self.assertEqual(classify_all_both([r]), {"claude:a": "direct"})
+        self.assertEqual(classify_all([r]), {"claude:a": "direct"})
 
-    def test_orphan_fragment_launch_still_counts_but_gives_no_coverage(self):
-        # The fragment's own activity spans c2's start: were fragments ever
-        # counted as coverage, c2 would wrongly come out "direct".
+    def test_duplicate_session_keys_keep_the_more_cautious_verdict(self):
+        direct = row("codex", "dup", at(5000), interactive=True)
+        unknown = row("codex", "dup", at(5000))
+        launched = row("codex", "dup", at(5), interactive=False)
+        for rows, want in (([direct, unknown], "unknown"),
+                           ([unknown, direct], "unknown"),
+                           ([direct, launched, unknown], "launched"),
+                           ([launched, direct], "launched")):
+            self.assertEqual(
+                classify_all([launcher()] + rows)["codex:dup"], want)
+
+    def test_orphan_fragment_launch_still_counts(self):
         orphan = row("claude", "o", at(-10), end=at(7200),
                      launches=[("codex", at(0))], orphan_subagent_only=True)
-        got = classify_all_both([orphan, row("codex", "c1", at(5)),
+        got = classify_all([orphan, row("codex", "c1", at(5)),
                             row("codex", "c2", at(600))])
-        self.assertEqual(got["codex:c1"], "launched")
-        # No Claude transcript proper spans c2, so nothing shows it was
-        # NOT launched.
-        self.assertEqual(got["codex:c2"], "unknown")
-        self.assertNotIn("claude:o", got)
+        self.assertEqual(got, {"codex:c1": "launched", "codex:c2": "unknown"})
 
-    def test_presence_only_and_orphan_rows_are_skipped(self):
+    def test_presence_only_orphan_and_idless_rows_are_skipped(self):
         anti = {"source": "antigravity", "session_id": "x",
                 "start_time": at(0), "coverage": "presence_only"}
         orphan = row("claude", "o", at(0), orphan_subagent_only=True)
-        self.assertEqual(classify_all_both([anti, orphan]), {})
+        noid = row("codex", None, at(0), interactive=True)
+        self.assertEqual(classify_all([anti, orphan, noid]), {})
 
 
 class CountTests(unittest.TestCase):
     def test_counts_per_source(self):
-        launcher = row("claude", "a", at(-600), end=at(600), multi_turn=True,
-                       launches=[("codex", at(0))])
-        rows = [launcher, row("codex", "c1", at(5)),
-                row("codex", "c2", at(300), multi_turn=True)]
-        counts = count_by_source(classify_all(rows, BOTH))
+        rows = [launcher(), row("codex", "c1", at(5)),
+                row("codex", "c2", at(300), multi_turn=True),
+                row("codex", "c3", at(300))]
+        counts = count_by_source(classify_all(rows))
         self.assertEqual(counts["codex"],
-                         {"direct": 1, "launched": 1, "unknown": 0})
+                         {"direct": 1, "launched": 1, "unknown": 1})
         self.assertEqual(counts["claude"],
                          {"direct": 1, "launched": 0, "unknown": 0})
 

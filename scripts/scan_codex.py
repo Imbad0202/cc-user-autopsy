@@ -40,6 +40,32 @@ def _launch_source(payload):
     return None
 
 
+# Header launch sources that are an interactive client (the terminal UI,
+# the editor extension) and those that are a non-interactive run.
+INTERACTIVE_SOURCES = frozenset({"cli", "vscode"})
+NON_INTERACTIVE_SOURCES = frozenset({"exec", "mcp"})
+
+
+def _interactive(launch_source):
+    """True / False when the header names how the session was run, None
+    when it does not say (or names something this scanner does not know)."""
+    if launch_source in INTERACTIVE_SOURCES:
+        return True
+    if launch_source in NON_INTERACTIVE_SOURCES:
+        return False
+    return None
+
+
+def _is_shell_tool(name):
+    """Whether a tool name is one that runs a command line. Codex has
+    renamed its shell tool across versions (shell, local_shell,
+    exec_command, ...), so this matches the family, and leaves out tools
+    whose arguments are file content (apply_patch) where a CLI's name is
+    only a word."""
+    low = name.lower() if isinstance(name, str) else ""
+    return any(part in low for part in ("shell", "exec", "bash", "command"))
+
+
 def _strings(value):
     """Every string inside a decoded JSON value, depth-first."""
     if isinstance(value, str):
@@ -127,7 +153,8 @@ def scan_one(path: Path, turns_out=None):
                     if stripped:
                         if turns and replied_since_turn:
                             multi_turn = True
-                        turns.append((ts, stripped, last_assistant))
+                        turns.append((ts, text, last_assistant))
+                        last_assistant = None
                         replied_since_turn = False
                     if first_prompt is None:
                         if stripped:
@@ -138,10 +165,11 @@ def scan_one(path: Path, turns_out=None):
                             first_prompt = stripped[:500]
                 elif ptype == "agent_message":
                     asst_msgs += 1
-                    replied_since_turn = True
                     reply = payload.get("message")
                     if isinstance(reply, str) and reply.strip():
+                        # An empty agent message is not an answer.
                         last_assistant = reply
+                        replied_since_turn = True
                     # Attribute to whichever model is currently active (the
                     # most recent turn_context seen so far), not the LAST
                     # turn_context in the whole file — sessions can switch
@@ -156,7 +184,7 @@ def scan_one(path: Path, turns_out=None):
                 if payload.get("type") == "function_call":
                     name = payload.get("name") or "(unknown)"
                     tool_counts[name] = tool_counts.get(name, 0) + 1
-                    if ts:
+                    if ts and _is_shell_tool(name):
                         for target in cli_launch_targets(_call_text(payload)):
                             ev = make_cli_launch(target, to_local_iso(ts))
                             cli_launches.append(ev)
@@ -194,6 +222,7 @@ def scan_one(path: Path, turns_out=None):
         "coverage": "full",
         # Origin evidence (findings-first Phase 1, read by origin.py).
         "launch_source": launch_source,
+        "interactive": _interactive(launch_source),
         "multi_turn": multi_turn,
         "cli_launches": cli_launches,
     }

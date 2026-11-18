@@ -865,19 +865,30 @@ DEMO_LATER_TURN_MARKERS = {"claude": "CLAUDE_LATER_TURN_MARKER",
                            "grok": "GROK_LATER_TURN_MARKER"}
 
 
+# Prompts that no person typed (a scheduled SDK run) and prompts whose
+# transcript does not say who typed them: neither may reach a turns file.
+DEMO_AUTOMATED_TURN_MARKER = "AUTOMATED_TURN_MARKER"
+DEMO_UNLABELLED_TURN_MARKER = "UNLABELLED_TURN_MARKER"
+
+
 def gen_origin_fixtures(now):
     """Hand-built sessions that exercise each origin verdict (see
     scripts/origin.py). Fully deterministic — fixed ids and offsets, no
     `random` calls — and run after every other generator so the seeded
     sequence the rest of the demo depends on is untouched.
 
-      claude A   hand-driven, two turns; its Bash calls start codex twice
-      codex  B   launched: header says exec AND starts 5s after A's first call
+      claude A   direct: prompts labelled as typed; its Bash calls start
+                 codex twice
+      codex  B   launched: header says exec, starts 5s after A's first call
       codex  C   launched: no header hint, starts 5s after A's second call
-      codex  D   hand-driven, two turns; its shell call starts claude
-      claude E   launched: single prompt, starts 4s after D's call
-      grok   F   unknown: one prompt, older than every codex transcript
-      grok   G   hand-driven, two typed prompts
+      codex  D   direct: header names the terminal client; its shell call
+                 starts claude
+      claude E   launched: programmatic entrypoint, starts 4s after D's call
+      grok   F   unknown: one prompt, nothing else recorded
+      grok   G   direct: two typed prompts
+      claude H   unknown: programmatic entrypoint, two turns, and no call
+                 anywhere that could have started it (a scheduled job)
+      claude I   unknown: no labels at all (an older transcript format)
     """
     def sid(n):
         return str(uuid.UUID(int=0xC0FFEE00000000000000000000000000 + n))
@@ -895,6 +906,12 @@ def gen_origin_fixtures(now):
         return {"type": "user", "timestamp": z(dt),
                 "message": {"role": "user", "content": text}, **extra}
 
+    # The labels Claude Code writes on a prompt a person typed, and on
+    # one a program sent through the SDK entrypoint.
+    typed = {"entrypoint": "cli", "promptSource": "typed",
+             "turnOrigin": "human", "origin": {"kind": "human"}}
+    sdk = {"entrypoint": "sdk-cli", "promptSource": "sdk", "turnOrigin": "sdk"}
+
     def asst(content, dt):
         return {"type": "assistant", "timestamp": z(dt),
                 "message": {"role": "assistant", "model": "claude-sonnet-4-5",
@@ -910,15 +927,20 @@ def gen_origin_fixtures(now):
     call_1 = base + timedelta(minutes=2)
     call_2 = base + timedelta(minutes=10)
     a = [
-        user(f"{DEMO_TURN_MARKER} review the parser change", base),
-        user("<system-reminder>injected, not typed</system-reminder>",
-             base + timedelta(seconds=1)),
-        user("<command-name>/model</command-name>", base + timedelta(seconds=2)),
+        user(f"{DEMO_TURN_MARKER} review the parser change", base, **typed),
+        # Sent by the harness in the user's slot: labelled as such.
+        user("background task finished: injected, not typed",
+             base + timedelta(seconds=1), entrypoint="cli",
+             promptSource="system", turnOrigin="task_notification",
+             origin={"kind": "task-notification"}),
+        # A slash command the user did type: recorded as its echo.
+        user("<command-name>/model</command-name>",
+             base + timedelta(seconds=2), **typed),
         asst(bash('codex exec -m demo "review the diff"'), call_1),
         asst([{"type": "text", "text": "Review is back. Apply both fixes?"}],
              base + timedelta(minutes=5)),
         user(f"{DEMO_LATER_TURN_MARKERS['claude']} yes, apply both",
-             base + timedelta(minutes=6)),
+             base + timedelta(minutes=6), **typed),
         asst(bash("cd /tmp && timeout 600 codex review"), call_2),
         asst([{"type": "text", "text": "Done."}], base + timedelta(minutes=14)),
     ]
@@ -959,11 +981,31 @@ def gen_origin_fixtures(now):
                   shell_args={"command": ["bash", "-lc", "claude -p 'second opinion'"]})
     # D's shell call lands 1s + 1min after its start (first turn).
     e_start = d_start + timedelta(seconds=1, minutes=1) + timedelta(seconds=4)
-    e = [user("second opinion", e_start),
+    e = [user("second opinion", e_start, **sdk),
          asst([{"type": "text", "text": "Looks fine."}],
               e_start + timedelta(seconds=20))]
     (proj_dir / f"{sid(5)}.jsonl").write_text(
         "\n".join(json.dumps(r) for r in e) + "\n", encoding="utf-8")
+
+    h_start = base + timedelta(hours=6)
+    h = [user(f"{DEMO_AUTOMATED_TURN_MARKER} nightly summary", h_start, **sdk),
+         asst([{"type": "text", "text": "Summary written."}],
+              h_start + timedelta(seconds=30)),
+         user(f"{DEMO_AUTOMATED_TURN_MARKER} now post it",
+              h_start + timedelta(seconds=31), **sdk),
+         asst([{"type": "text", "text": "Posted."}],
+              h_start + timedelta(seconds=50))]
+    i_start = base + timedelta(hours=8)
+    i = [user(f"{DEMO_UNLABELLED_TURN_MARKER} first", i_start),
+         asst([{"type": "text", "text": "Which one?"}],
+              i_start + timedelta(seconds=30)),
+         user(f"{DEMO_UNLABELLED_TURN_MARKER} second",
+              i_start + timedelta(minutes=1)),
+         asst([{"type": "text", "text": "Done."}],
+              i_start + timedelta(minutes=2))]
+    for n, records in ((8, h), (9, i)):
+        (proj_dir / f"{sid(n)}.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
 
     from urllib.parse import quote
     grok_dir = GROK_DIR / quote(cwd, safe="")

@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -161,10 +162,18 @@ def check_distinct_outputs(parser, *paths):
     for p in paths:
         if not p:
             continue
-        resolved = Path(p).expanduser().resolve()
-        if resolved in seen:
+        path = Path(p).expanduser()
+        resolved = path.resolve()
+        try:
+            st = path.stat()
+            identity = (st.st_dev, st.st_ino)   # catches hard links too
+        except OSError:
+            identity = None
+        if resolved in seen or (identity is not None and identity in seen):
             parser.error(f"two output flags point at the same file: {p}")
         seen.add(resolved)
+        if identity is not None:
+            seen.add(identity)
 
 
 def cli_launch_targets(command):
@@ -194,12 +203,14 @@ def clip_turn_text(text):
 
 
 def make_user_turn(source, session_id, project_path, ts, turn_index, text,
-                   after_interrupt=False, prev_assistant=None):
-    """One user-turns row. Long text is clipped in the middle (text_len
-    keeps the original length); prev_assistant_tail is the end of the
-    reply the user was answering, or None when the source records no
-    assistant text."""
-    text = text.strip()
+                   after_interrupt=False, prev_assistant=None,
+                   prompt_source=None):
+    """One user-turns row. `text` is kept as typed, leading and trailing
+    whitespace included; text longer than the cap is clipped in the middle
+    and text_len keeps the original length. prev_assistant_tail is the end
+    of the reply the user was answering, or None when there was none (or
+    the source records no assistant text). prompt_source is the
+    transcript's own label for how the prompt arrived, where it has one."""
     tail = None
     if isinstance(prev_assistant, str) and prev_assistant.strip():
         tail = prev_assistant.strip()[-ASSISTANT_TAIL_CAP:]
@@ -213,20 +224,31 @@ def make_user_turn(source, session_id, project_path, ts, turn_index, text,
         "text_len": len(text),
         "after_interrupt": bool(after_interrupt),
         "prev_assistant_tail": tail,
+        "prompt_source": prompt_source,
     }
 
 
 def write_private_text(text, output) -> None:
     """Write a working file that holds prompt text or session ids so that
-    only the current user can read it (0600), whatever the umask and
-    whatever mode an earlier file at that path had. The usual working
-    directory is under /tmp, which other local accounts can list."""
+    only the current user can ever read it. The content goes to a fresh
+    0600 file beside the target, which then replaces the target in one
+    step: an earlier file at that path — whatever its mode, whoever has
+    it open, symlink or hard link — is swapped out, never written into.
+    The usual working directory is under /tmp, which other local accounts
+    can list."""
     out = Path(output).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        os.chmod(out, 0o600)
-        fh.write(text)
+    fd, tmp = tempfile.mkstemp(prefix=f".{out.name}.", dir=out.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, out)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def write_user_turns(turns, output) -> None:
