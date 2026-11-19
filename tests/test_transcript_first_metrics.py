@@ -18,7 +18,7 @@ import aggregate  # noqa: E402
 from build_html import append_history_snapshot, read_history_snapshots  # noqa: E402
 import report_render  # noqa: E402
 from test_origin_evidence import _asst, _typed, _user  # noqa: E402
-from test_scan_transcripts import _run_single_row_session  # noqa: E402
+from test_scan_transcripts import _run_scanner, _run_single_row_session  # noqa: E402
 
 SID = "11111111-2222-3333-4444-555555555555"
 
@@ -82,6 +82,35 @@ class ActiveMinutesTests(unittest.TestCase):
         row = _run_single_row_session(rows, SID)
         self.assertEqual(row["duration_minutes"], 75)  # full span, unchanged
         self.assertEqual(row["active_minutes"], 15)
+
+
+class SubagentDelegationTests(unittest.TestCase):
+    def test_merged_subagent_run_counts_as_delegation(self):
+        # The parent never calls Agent/Task (e.g. a workflow started the
+        # subagent), and the subagent itself only reads a file.
+        with tempfile.TemporaryDirectory() as td:
+            pdir = Path(td) / "projects" / "-proj"
+            pdir.mkdir(parents=True)
+            parent = [
+                _user("start", "2026-11-01T01:00:00Z"),
+                _asst([{"type": "text", "text": "ok"}], "2026-11-01T01:01:00Z"),
+            ]
+            sub = [
+                dict(_user("go", "2026-11-01T01:02:00Z"), sessionId=SID),
+                dict(_asst([{"type": "tool_use", "id": "t1", "name": "Read",
+                             "input": {"file_path": "/x"}}],
+                           "2026-11-01T01:03:00Z"), sessionId=SID),
+            ]
+            (pdir / f"{SID}.jsonl").write_text(
+                "\n".join(json.dumps(r) for r in parent))
+            (pdir / "agent-sub1.jsonl").write_text(
+                "\n".join(json.dumps(r) for r in sub))
+            out = Path(td) / "out.jsonl"
+            _run_scanner(Path(td) / "projects", out)
+            rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+        self.assertEqual(len(rows), 1)
+        self.assertNotIn("Agent", rows[0]["tool_counts"])
+        self.assertTrue(rows[0]["uses_subagent"])
 
 
 class MergeTests(unittest.TestCase):

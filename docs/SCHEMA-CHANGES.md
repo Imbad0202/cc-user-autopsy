@@ -47,9 +47,9 @@ for dim, metrics in scores.items():
 
 ## 2026-11-19 — counting method 2: transcript-first session fields
 
-- **Additive:** `meta.method_version` (int): `2` when built with
-  `--transcript-rows`, `1` for a session-meta-only run (still counted the
-  old way). Files without it were built with method 1. Each `autopsy-history.jsonl` snapshot line gains the
+- **Additive:** `meta.method_version` (int): `2` when `--transcript-rows`
+  loaded at least one row, otherwise `1` (a session-meta-only run, still
+  counted the old way). `--extra-redacted` rows do not change it. Files without it were built with method 1. Each `autopsy-history.jsonl` snapshot line gains the
   same `method_version`; lines without it are method 1.
   `build_html.read_history_snapshots(path, method_version=N)` keeps only
   lines of method N, and the report passes the current file's method, so
@@ -60,7 +60,8 @@ for dim, metrics in scores.items():
   with idle gaps over 30 minutes removed.
 - **Meaning changed, no rename or removal:**
   - `_sessions[].uses_task_agent` now means "dispatched an `Agent`/`Task`
-    subagent" (the transcript row's `uses_subagent`). Task-list tools no
+    subagent", or has a subagent run merged into it (the transcript row's
+    `uses_subagent`). Task-list tools no
     longer count. Session-meta-only sessions keep session-meta's flag.
     Every aggregate derived from it (D1, `delegation` badge, weekly
     `uses_task_agent`, `sessions_using_task_agent`) follows.

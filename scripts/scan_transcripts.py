@@ -907,11 +907,11 @@ def main():
                     row["duration_minutes"] = active_min
             if row.pop("_merged_subagent_tools", False):
                 row.update(_derive_tool_flags(row["tool_counts"]))
-                # Orphan rows ARE subagent output by definition — the name
-                # predicate can't see the (rotated-away) parent's Agent/Task
-                # call, so keep the flag truthful.
-                if row.get("orphan_subagent_only"):
-                    row["uses_subagent"] = True
+                # A merged subagent run is delegation by definition, whether
+                # the parent is gone (orphan row) or the run was started by
+                # something other than an Agent/Task call (e.g. a workflow),
+                # which the name predicate cannot see.
+                row["uses_subagent"] = True
             if (not row.get("orphan_subagent_only")) and \
                     row["assistant_message_count"] < args.min_assistant_msgs:
                 n_filtered += 1

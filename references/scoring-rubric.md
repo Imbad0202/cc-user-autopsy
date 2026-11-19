@@ -10,7 +10,8 @@ Rationale: using `Task` subagents is the main mechanism for parallelizing work
 and protecting the main context. Usage rate and outcome quality both matter.
 
 A session counts as delegating when it dispatched a subagent: the `Agent` or
-`Task` tool appears in its full transcript (`uses_subagent`). Task-list tools
+`Task` tool appears in its full transcript, or a subagent run belongs to it
+(`uses_subagent`). Task-list tools
 (`TaskCreate`, `TaskUpdate`, `TodoWrite`, ...) do not count. Sessions with
 session-meta only fall back to its `uses_task_agent` flag. Same definition
 for the `delegation` badge below. (Counting method 2, 2026-11-19; see
