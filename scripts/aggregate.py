@@ -509,6 +509,54 @@ def load_redacted(path: Path):
     return metas, facets, source_by_sid
 
 
+# Bump when a change to how a session field is counted makes scores from
+# earlier runs not comparable. The trend ledger compares only snapshots of
+# the same version (build_html.read_history_snapshots). History lines and
+# analysis files without the field are version 1. What each version
+# counts: references/scoring-rubric.md, "Counting method".
+METHOD_VERSION = 2
+
+# Fields the transcript scanner does not count (it always emits 0), so the
+# session-meta value is the only one available.
+_META_ONLY_FIELDS = ("lines_added", "lines_removed", "files_modified")
+
+
+def merge_scoring_metas(meta_raw, activity_metas):
+    """Build the scoring pool from session-meta membership.
+
+    /insights session-meta now covers only the tail of a long session (its
+    message counts, duration and first_prompt describe that tail), so when
+    the full transcript row exists it wins on every field it counts.
+    Session-meta decides which sessions are in the pool and fills only
+    _META_ONLY_FIELDS. A meta-only session (transcript rotated away) is
+    kept as is. Transcripts without session-meta (quick one-shot sessions)
+    stay out of the pool; they still power the activity panel."""
+    scoring_metas = {}
+    for sid, m in meta_raw.items():
+        row = activity_metas.get(sid)
+        if row is None:
+            scoring_metas[sid] = m
+            continue
+        if row.get("orphan_subagent_only"):
+            # Only the subagent runs survived: the row says nothing about
+            # the parent session itself, so session-meta wins wherever it
+            # has a value and the row adds only what meta lacks (cache
+            # tokens, models, and uses_subagent=True: subagent runs exist,
+            # so the session did delegate even if the tail-only meta did
+            # not see the Agent call).
+            merged = dict(row)
+            merged.pop("active_minutes", None)
+            merged.update({k: v for k, v in m.items() if v is not None})
+            scoring_metas[sid] = merged
+            continue
+        merged = dict(row)
+        for k in _META_ONLY_FIELDS:
+            if m.get(k) is not None:
+                merged[k] = m[k]
+        scoring_metas[sid] = merged
+    return scoring_metas
+
+
 def build_sessions(metas, facets, tz):
     rows = []
     for sid, m in metas.items():
@@ -529,7 +577,9 @@ def build_sessions(metas, facets, tz):
             "week": week_key(local),
             "hour": local.hour,
             "weekday": local.weekday(),
-            "duration_min": m.get("duration_minutes", 0),
+            # Work time: idle gaps > 30 min removed when the transcript
+            # scanner supplied it, else the full span (session-meta rows).
+            "duration_min": m.get("active_minutes", m.get("duration_minutes", 0)),
             "user_msgs": m.get("user_message_count", 0),
             "input_tokens": m.get("input_tokens", 0),
             "output_tokens": m.get("output_tokens", 0),
@@ -539,7 +589,11 @@ def build_sessions(metas, facets, tz):
             "git_pushes": m.get("git_pushes", 0),
             "interrupts": m.get("user_interruptions", 0),
             "tool_errors": m.get("tool_errors", 0),
-            "uses_task_agent": m.get("uses_task_agent", False),
+            # Delegation = an Agent/Task subagent was dispatched. Transcript
+            # rows carry that as uses_subagent; their uses_task_agent also
+            # counts task-list tools. Session-meta rows only have
+            # uses_task_agent.
+            "uses_task_agent": m.get("uses_subagent", m.get("uses_task_agent", False)),
             "uses_mcp": m.get("uses_mcp", False),
             "uses_web_search": m.get("uses_web_search", False),
             "uses_web_fetch": m.get("uses_web_fetch", False),
@@ -3258,38 +3312,21 @@ def main():
             tz = timezone.utc
 
     # Two universes:
-    #  - scoring_metas: the rich, LLM-labeled subset used for 9-dimension scores
+    #  - scoring_metas: the LLM-labeled subset used for 9-dimension scores
     #  - activity_metas: the full session universe (transcript-scan output)
     # When --transcript-rows is set, activity_metas uses it; scoring_metas
-    # prefers session-meta's richer data (uses_task_agent etc.) intersected
-    # with transcript rows.
+    # is the session-meta membership list, filled from transcript rows
+    # (see merge_scoring_metas).
     if args.transcript_rows:
         tr_path = Path(args.transcript_rows).expanduser()
         activity_metas, _ = load_transcript_rows(tr_path)
+        # Counting method of this run: transcript-first only when the scan
+        # supplied rows. Decided before --extra-redacted rows (always
+        # counted the old way) join activity_metas below.
+        method_version = METHOD_VERSION if activity_metas else 1
         _, facets = load_all(Path("/dev/null"), facets_dir)
         meta_raw, _ = load_all(meta_dir, Path("/dev/null"))
-        # Scoring pool = sessions with session-meta (which carries the LLM
-        # uses_task_agent flag plus accurate user_msg/tool counts). Transcripts
-        # without session-meta are quick one-shot sessions that would distort
-        # scores if included. They still power the full activity panel.
-        # Meta-only sessions (transcript cleaned up) are also kept.
-        scoring_metas = {}
-        for sid, m in meta_raw.items():
-            if sid in activity_metas:
-                # Merge: scanner provides extras (cache tokens, models),
-                # session-meta provides the definitional flags + accurate counts
-                merged = dict(activity_metas[sid])
-                for k in ("uses_task_agent", "uses_mcp", "uses_web_search",
-                          "uses_web_fetch", "user_interruptions", "tool_errors",
-                          "user_message_count", "assistant_message_count",
-                          "tool_counts", "duration_minutes",
-                          "lines_added", "lines_removed", "files_modified",
-                          "first_prompt"):
-                    if m.get(k) is not None:
-                        merged[k] = m[k]
-                scoring_metas[sid] = merged
-            else:
-                scoring_metas[sid] = m
+        scoring_metas = merge_scoring_metas(meta_raw, activity_metas)
         print(f"loaded {len(activity_metas)} transcript rows, {len(facets)} facets, "
               f"{len(meta_raw)} session-meta → {len(scoring_metas)} scoring pool",
               file=sys.stderr)
@@ -3297,6 +3334,7 @@ def main():
     else:
         metas, facets = load_all(meta_dir, facets_dir)
         activity_metas = None  # fall back to metas in compute_activity
+        method_version = 1
         print(f"loaded {len(metas)} session-meta, {len(facets)} facets", file=sys.stderr)
     source_by_sid = {sid: "local" for sid in metas}
 
@@ -3355,6 +3393,7 @@ def main():
         },
         "tz_offset_hours": tz.utcoffset(datetime.now()).total_seconds() / 3600,
         "data_thin_warning": len(rated) < 20,
+        "method_version": method_version,
     }
     aggregates = compute_aggregates(sessions, rated, facets_coverage)
     # When transcript-rows mode supplied a wider universe, recompute the

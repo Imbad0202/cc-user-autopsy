@@ -101,7 +101,7 @@ def append_history_snapshot(history_path, analysis, audience):
               file=sys.stderr)
 
 
-def read_history_snapshots(history_path):
+def read_history_snapshots(history_path, method_version=None):
     """Load trend snapshots for the trend ledger (Phase 3).
 
     Tolerates corrupt lines (spec §7: skip on read). Entries are deduped
@@ -115,10 +115,18 @@ def read_history_snapshots(history_path):
     downstream readers like report_render._entry_trend_values, which call
     `.get()` on `ledger`/`badges`/`scores` assuming their documented shapes
     (dict/list/dict respectively).
+
+    With `method_version`, keeps only entries recorded with that counting
+    method (a line without the field is version 1), so the trend ledger
+    never compares scores counted in different ways. Older lines stay in
+    the file.
     """
     p = Path(history_path).expanduser()
     if not p.exists():
         return []
+    if method_version is not None and report_render.method_version_of(
+            {"method_version": method_version}) == 0:
+        return []  # unknown method: nothing is comparable
     by_date = {}
     try:
         text = p.read_text(encoding="utf-8")
@@ -147,6 +155,9 @@ def read_history_snapshots(history_path):
         if "badges" in entry and not isinstance(entry["badges"], list):
             continue
         if "scores" in entry and not isinstance(entry["scores"], dict):
+            continue
+        if (method_version is not None
+                and report_render.method_version_of(entry) != method_version):
             continue
         by_date[d] = entry
     return [by_date[d] for d in sorted(by_date)]
@@ -273,7 +284,10 @@ def main():
 
     # Read before append_history_snapshot() runs below, so "last run" in the
     # report is genuinely the previous build, not this one.
-    history_entries = read_history_snapshots(Path(args.history_file))
+    # Only snapshots counted the same way as this run are comparable.
+    history_entries = read_history_snapshots(
+        Path(args.history_file),
+        method_version=report_render.analysis_method_version(data))
 
     html_out = report_render.render(
         analysis=data,

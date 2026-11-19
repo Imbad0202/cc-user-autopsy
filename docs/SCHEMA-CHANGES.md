@@ -45,6 +45,41 @@ for dim, metrics in scores.items():
 **Added:** 2026-07-14
 **Purpose:** Count of malformed/incomplete lines skipped from a given `--cross-llm-rows` input (missing `source` or `start_time`, or invalid JSON — bucketed under `"(unknown)"` when the source can't be guessed). 0 for `claude` (always internally derived, never file-loaded) and for any source with no parse failures.
 
+## 2026-11-19 — counting method 2: transcript-first session fields
+
+- **Additive:** `meta.method_version` (int): `2` when `--transcript-rows`
+  loaded at least one row, otherwise `1` (a session-meta-only run, still
+  counted the old way). `--extra-redacted` rows do not change it. Files without it were built with method 1. Each `autopsy-history.jsonl` snapshot line gains the
+  same `method_version`; lines without it are method 1.
+  `build_html.read_history_snapshots(path, method_version=N)` keeps only
+  lines of method N, and the report passes the current file's method, so
+  the trend ledger never compares scores counted differently. A
+  `method_version` that is present but not a positive integer is unknown
+  and matches nothing, not even another unknown one.
+- **Additive (transcript rows):** `active_minutes` (int): the session span
+  with idle gaps over 30 minutes removed.
+- **Meaning changed, no rename or removal:**
+  - `_sessions[].uses_task_agent` now means "dispatched an `Agent`/`Task`
+    subagent", or has a subagent run merged into it (the transcript row's
+    `uses_subagent`). Task-list tools no
+    longer count. Session-meta-only sessions keep session-meta's flag.
+    Every aggregate derived from it (D1, `delegation` badge, weekly
+    `uses_task_agent`, `sessions_using_task_agent`) follows.
+  - `_sessions[].duration_min` and every sum of it (projects, weekly,
+    usage hours) is active time when the transcript row has
+    `active_minutes`, else the full span as before.
+  - For scoring-pool sessions with a transcript row, message counts, tool
+    counts, interruptions, tool errors, MCP/web flags, `first_prompt` and
+    duration now come from the transcript instead of session-meta.
+    `lines_added`, `lines_removed`, `files_modified` still come from
+    session-meta (the scanner does not count them).
+  - Orphan subagent rows (`orphan_subagent_only`, parent transcript
+    rotated away) do not replace the parent's session-meta fields.
+  - `--extra-redacted` rows are still counted the old way: the redaction
+    key list does not carry `active_minutes` or `uses_subagent`.
+  - Transcript-row `first_prompt` skips injected text (see
+    `references/scoring-rubric.md`, "Counting method").
+
 ## 2026-11-18 — additive: `cross_llm.sources[].origin_counts` (findings-first Phase 1)
 
 - Each source card gains `origin_counts`: `{"direct": int, "launched": int,

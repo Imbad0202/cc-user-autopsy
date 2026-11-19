@@ -9,6 +9,14 @@ as complementary.
 Rationale: using `Task` subagents is the main mechanism for parallelizing work
 and protecting the main context. Usage rate and outcome quality both matter.
 
+A session counts as delegating when it dispatched a subagent: the `Agent` or
+`Task` tool appears in its full transcript, or a subagent run belongs to it
+(`uses_subagent`). Task-list tools
+(`TaskCreate`, `TaskUpdate`, `TodoWrite`, ...) do not count. Sessions with
+session-meta only fall back to its `uses_task_agent` flag. Same definition
+for the `delegation` badge below. (Counting method 2, 2026-11-19; see
+"Counting method" at the end.)
+
 | Score | Threshold |
 |-------|-----------|
 | 10 | task-agent rate ≥ 70% AND good-rate with TA ≥ 75% |
@@ -511,3 +519,21 @@ scheduled. Outcome:
   `token_efficiency` keeps ratio ≤ 1.1 (= D9 base band) plus the cache ≥ 80%
   prior; `shipping_cadence` and `cross_tool_orchestration` have no dimension
   analogue and their bars remain defensible minimums for sustained practice.
+
+## Counting method
+
+Scores are comparable only between runs counted the same way.
+`aggregate.METHOD_VERSION` names the method; each trend snapshot records it,
+and the trend ledger compares only snapshots of the current method.
+
+- **Method 1** (to 2026-11-18): for sessions in the scoring pool,
+  session-meta values replaced the transcript's counts, work time, first
+  prompt and delegation flag.
+- **Method 2** (2026-11-19): /insights session-meta now covers only the
+  tail of a long session, so the full transcript row wins on every field it
+  counts. Session-meta decides pool membership and supplies only line-change
+  counts. Work time (`duration_min`) excludes idle gaps over 30 minutes. The
+  first prompt skips text Claude Code injects (`/clear` caveats, skill
+  bodies, slash-command records) and records labelled as not typed by a
+  person. Delegation counts only `Agent`/`Task` dispatch. No threshold
+  changed.

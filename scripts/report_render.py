@@ -880,6 +880,22 @@ def _entry_leak_cost(entry):
     return round(sum(vals), 2) if vals else None
 
 
+def method_version_of(record):
+    """The counting method a history line or analysis `meta` dict records
+    (aggregate.METHOD_VERSION). Missing means 1, from before the field.
+    A value that is present but not a positive int is unknown: 0, which
+    read_history_snapshots never compares."""
+    if "method_version" not in record:
+        return 1
+    v = record["method_version"]
+    return v if type(v) is int and v >= 1 else 0
+
+
+def analysis_method_version(analysis):
+    """The counting method an analysis-data.json was built with."""
+    return method_version_of(analysis.get("meta") or {})
+
+
 def snapshot_entry(analysis):
     """Single source of truth for the trend-snapshot entry SHAPE, mapped
     from a live analysis dict. build_html.append_history_snapshot writes
@@ -912,6 +928,9 @@ def snapshot_entry(analysis):
               if isinstance(b, dict) and b.get("earned") and b.get("id")]
     overall_avg = ((analysis.get("scores") or {}).get("_overall") or {}).get("avg")
     return {
+        # additive: which counting method produced these numbers; the
+        # trend ledger compares only snapshots of the same method.
+        "method_version": analysis_method_version(analysis),
         "scores": scores,
         # additive since Phase 3: mean of scored dims at snapshot time —
         # older lines lack it; readers fall back to mean(scores.values()).
